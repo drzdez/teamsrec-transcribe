@@ -37,10 +37,15 @@ class VideoSettings:
 
 @dataclass(frozen=True)
 class SummarizeSettings:
-    enabled: bool = True  # part of `process`; failures (no API key) are logged, not fatal
-    provider: str = "anthropic"
-    model: str = "claude-opus-5"
+    enabled: bool = True  # part of `process`; failures (no model / no API key) are logged, not fatal
+    provider: str = "ollama"  # ollama (local GPU) | anthropic (Claude API)
+    model: str = "gemma4:31b"  # ollama tag, or a Claude model id such as claude-opus-5
     language: str = "cs"  # language of the minutes, independent of the meeting language
+    ollama_url: str = "http://localhost:11434"
+    ollama_think: bool = False  # let thinking models reason first (slower, sometimes better)
+    ollama_max_ctx: int = 65536  # cap for the context window we ask Ollama for
+    ollama_timeout_s: int = 1800
+    compare: tuple[str, ...] = ()  # extra "provider:model" runs written to <stem>.summary.<model>.md (POC comparison)
 
 
 @dataclass(frozen=True)
@@ -78,7 +83,7 @@ def _build(cls, values: dict[str, Any]):
     for k, v in values.items():
         if k not in known:
             continue
-        if k == "glossary":
+        if k in ("glossary", "compare"):
             v = tuple(str(x) for x in v)
         kwargs[k] = v
     return cls(**kwargs)
@@ -138,8 +143,10 @@ enabled = true
 fps = 2
 
 [summarize]
-enabled = true               # run as part of `process` (needs ANTHROPIC_API_KEY)
-provider = "anthropic"
-model = "claude-opus-5"
+enabled = true               # run as part of `process`
+provider = "ollama"          # ollama = local GPU (ollama pull <model>) | anthropic = Claude API (ANTHROPIC_API_KEY)
+model = "gemma4:31b"         # ollama tag, or e.g. "claude-opus-5" with provider = "anthropic"
 language = "cs"              # language of the minutes
+ollama_think = false         # thinking mode for local models: slower, sometimes better
+compare = []                 # e.g. ["anthropic:claude-opus-5"] -> extra <stem>.summary.claude-opus-5.md for comparison
 """

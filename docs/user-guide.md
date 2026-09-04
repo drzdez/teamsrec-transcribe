@@ -19,12 +19,15 @@ Jednorázově:
    - registrace na huggingface.co, na stránce https://huggingface.co/pyannote/speaker-diarization-community-1
      kliknout „Agree and access repository“,
    - přihlášení: `.venv\Scripts\hf.exe auth login` (kód do prohlížeče). Token se uloží do profilu, nic dalšího.
-4. **Claude API pro zápisy** (volitelné, bez něj vznikne jen přepis): klíč z https://console.anthropic.com/
-   uložte jako proměnnou prostředí, ne do konfigurace:
+4. **Model pro zápisy.** Výchozí je lokální model přes Ollamu, přepis tak nikdy neopustí počítač:
    ```
-   setx ANTHROPIC_API_KEY sk-ant-...
+   winget install Ollama.Ollama
+   ollama pull gemma4:31b        # 20 GB, vejde se do 24 GB VRAM
    ```
-   (nový terminál po `setx`). Zápis z 70minutové schůzky stojí řádově desítky korun (model Claude Opus 5).
+   Alternativa je Claude API (kvalitnější zápis, přepis odchází do cloudu Anthropic): v konfiguraci
+   `provider = "anthropic"`, `model = "claude-opus-5"` a klíč z https://console.anthropic.com/ jako proměnná
+   prostředí `setx ANTHROPIC_API_KEY sk-ant-...`. Max subskripce claude.ai se na API nevztahuje, v Console se
+   předplácí kredit; zápis ze 70minutové schůzky vyšel na 36 tis. vstupních a 7 tis. výstupních tokenů, tedy asi 0,35 USD.
 5. **Konfigurace:** `bin\teamsrec-transcribe.cmd config --init` založí `%APPDATA%\teamsrec\teamsrec.toml`.
    Upravte `out_dir` a `glossary` (viz kapitola 5).
 6. **Příkaz odkudkoli:** přidejte `D:\projects\teamsrec-transcribe\bin` do PATH (Nastavení → proměnné prostředí),
@@ -115,17 +118,23 @@ a přegenerují se `.txt` a `.srt`. Ruční jména mají vždy přednost.
 
 ## 4b. Zápis ze schůzky
 
-`process` vytvoří zápis automaticky, pokud je nastavený `ANTHROPIC_API_KEY`. Ručně nebo znovu:
+`process` vytvoří zápis automaticky (lokálně přes Ollamu, nebo přes Claude API podle konfigurace). Ručně nebo znovu:
 
 ```
 teamsrec-transcribe summarize <stem>                 # česky, model z konfigurace
 teamsrec-transcribe summarize <stem> --language en   # anglicky
 teamsrec-transcribe summarize <stem> --force         # přepsat existující
+teamsrec-transcribe summarize <stem> --provider anthropic --force   # jednorázově přes Claude
+teamsrec-transcribe summarize <stem> --compare                       # navíc zápisy z `compare` v konfiguraci
 ```
+
+Pro porovnání modelů nastavte v konfiguraci `compare = ["anthropic:claude-opus-5"]`: `process` pak vedle hlavního
+`<stem>.summary.md` (lokální model) uloží i `<stem>.summary.claude-opus-5.md`. Až se rozhodnete, seznam vyprázdněte.
 
 Zápis vychází z přepisu se jmény, takže se vyplatí nejdřív pojmenovat mluvčí (`label-speakers`) a pak
 teprve `summarize --force`. Úkoly v zápisu odkazují na čas v záznamu, dají se ověřit v `.txt` nebo `.srt`.
-Do cloudu Anthropic odchází text přepisu, nikdy zvuk ani video.
+S Ollamou zůstává vše na počítači. S Claude API odchází do cloudu text přepisu, nikdy zvuk ani video.
+Zápis z lokálního modelu trvá na RTX 5090 zhruba 2 až 3 minuty a GPU je po tu dobu obsazená.
 
 ## 5. Konfigurace
 
@@ -161,7 +170,8 @@ Každé nastavení jde jednorázově přepsat z příkazové řádky, např.
 |---|---|
 | `ffmpeg/ffprobe not found` | ffmpeg není v PATH. Použijte `bin\teamsrec-transcribe.cmd`, nebo nastavte `TEAMSREC_FFMPEG_DIR` na složku `bin` ffmpegu. |
 | `CUDA is not available to torch` | Starý NVIDIA driver (potřeba 570+), nebo se nainstaloval CPU torch. `uv sync --extra all` znovu; ověření `uv run python -c "import torch;print(torch.cuda.is_available())"`. |
-| `no valid Claude credentials` | Chybí `ANTHROPIC_API_KEY`. Krok 4 instalace; přepis a export fungují i bez něj. |
+| `ollama: cannot reach` / `model not found` | Ollama neběží nebo model není stažený: `ollama pull gemma4:31b`. Přepis a export fungují i bez zápisu. |
+| `no valid Claude credentials` | `provider = "anthropic"` bez `ANTHROPIC_API_KEY`. Krok 4 instalace. |
 | `GatedRepoError` / 403 u pyannote | Nepřijaté podmínky modelu nebo chybí přihlášení. Krok 3 instalace. |
 | Jména z videa jsou zkomolená | OCR nezná diakritiku. Zadejte `--participants` při importu; jména se dohledají podle podobnosti. `teamsrec-transcribe video <stem> --participants "..."` analýzu zopakuje. |
 | Video nedalo žádné mluvčí | Záznam nemá rozložení Teams se jmenovkami (jiný nástroj, jen sdílený obsah). Mluvčí dá diarizace, pojmenujte je ručně. |

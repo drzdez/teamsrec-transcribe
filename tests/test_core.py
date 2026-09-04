@@ -158,4 +158,20 @@ def test_summary_user_message_contains_transcript(tmp_path):
     msg = build_user_message(rec, segs, {"start": "2026-09-04T14:00:00", "language": "cs", "participants": None})
     assert msg.startswith("Meeting: Týdenní sync\nstart: 2026-09-04T14:00:00\nlanguage: cs\n")
     assert "[00:00:02] Petr Svoboda: Úkol vezmu já." in msg
-    assert "{language}" in SYSTEM_PROMPT and "Action items" in SYSTEM_PROMPT
+    assert "{language}" in SYSTEM_PROMPT and "{h3}" in SYSTEM_PROMPT
+
+
+def test_summarize_settings_defaults_and_unknown_provider():
+    from teamsrec_transcribe.config import SummarizeSettings
+    from teamsrec_transcribe.llm import LLMError, complete
+    s = SummarizeSettings()
+    assert s.provider == "ollama" and s.model.startswith("gemma4") and s.ollama_url.startswith("http")
+    from teamsrec_transcribe.config import load_config
+    cfgfile = Path(__file__).parent / "_cmp.toml"
+    cfgfile.write_text('[summarize]\ncompare = ["anthropic:claude-opus-5"]\n', encoding="utf-8")
+    try:
+        assert load_config(cfgfile).summarize.compare == ("anthropic:claude-opus-5",)
+    finally:
+        cfgfile.unlink()
+    with pytest.raises(LLMError):
+        complete("sys", "user", SummarizeSettings(provider="nope"))

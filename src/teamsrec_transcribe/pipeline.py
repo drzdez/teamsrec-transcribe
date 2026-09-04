@@ -156,11 +156,7 @@ def do_export(cfg: Config, rec: Recording, *, txt: bool = True, srt: bool = True
 
 # ---------------------------------------------------------------- summarize
 
-def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
-    from .summarize import summarize
-    if rec.summary_path.exists() and not force:
-        log.info("%s: summary exists, skipping (use --force)", rec.stem)
-        return rec.summary_path
+def _summary_input(rec: Recording):
     if not rec.transcript_path.exists():
         raise RecordingError(f"{rec.stem}: no transcript yet")
     data, segs = load_segments(rec)
@@ -169,9 +165,42 @@ def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
     header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
               "language": data.get("language"), "participants": ", ".join(rec.participants) or None,
               "speakers": ", ".join(speaker_list(segs))}
+    return segs, header
+
+
+def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
+    from .summarize import summarize
+    if rec.summary_path.exists() and not force:
+        log.info("%s: summary exists, skipping (use --force)", rec.stem)
+        return rec.summary_path
+    segs, header = _summary_input(rec)
     text = summarize(rec, segs, header, cfg.summarize)
     rec.summary_path.write_text(text, encoding="utf-8")
     return rec.summary_path
+
+
+def do_summarize_compare(cfg: Config, rec: Recording, *, force: bool = False) -> list[Path]:
+    """Extra summaries with other providers/models (config `compare`), each to <stem>.summary.<model>.md."""
+    from dataclasses import replace
+    from .recording import slugify
+    from .summarize import summarize
+    out = []
+    for spec in cfg.summarize.compare:
+        provider, _, model = spec.partition(":")
+        if not model:
+            log.error("%s: compare entry %r must be provider:model", rec.stem, spec)
+            continue
+        path = rec.file(f".summary.{slugify(model)}.md")
+        if path.exists() and not force:
+            continue
+        try:
+            segs, header = _summary_input(rec)
+            text = summarize(rec, segs, header, replace(cfg.summarize, provider=provider, model=model))
+            path.write_text(text, encoding="utf-8")
+            out.append(path)
+        except Exception as e:
+            log.error("%s: compare summary %s failed: %s", rec.stem, spec, e)
+    return out
 
 
 # ---------------------------------------------------------------- process
@@ -202,8 +231,9 @@ def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:
     if cfg.summarize.enabled:
         try:
             do_summarize(cfg, rec, force=force)
-        except Exception as e:  # summary is optional: no API key, network, refusal
+        except Exception as e:  # summary is optional: no model, no API key, network, refusal
             log.error("%s: summary failed: %s", rec.stem, e)
+        do_summarize_compare(cfg, rec, force=force)
 
 
 def pending_recordings(cfg: Config) -> list[Recording]:

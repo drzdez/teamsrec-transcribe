@@ -21,6 +21,7 @@ log = logging.getLogger("teamsrec_transcribe")
 def _errors(fn):
     """Turn expected failures into a one-line error and exit code 1 instead of a traceback."""
     import functools
+    from .llm import LLMError
     from .media import MediaError
     from .providers.base import ProviderError
     from .recording import RecordingError
@@ -29,7 +30,7 @@ def _errors(fn):
     def wrapper(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
-        except (RecordingError, MediaError, ProviderError, RuntimeError) as e:
+        except (RecordingError, MediaError, ProviderError, LLMError, RuntimeError) as e:
             typer.secho(f"error: {e}", fg=typer.colors.RED, err=True)
             raise typer.Exit(code=1)
     return wrapper
@@ -166,14 +167,21 @@ def label_speakers(ctx: typer.Context, target: str):
 @app.command()
 @_errors
 def summarize(ctx: typer.Context, target: str,
-              model: Optional[str] = typer.Option(None, help="Claude model id"),
+              provider: Optional[str] = typer.Option(None, help="ollama | anthropic"),
+              model: Optional[str] = typer.Option(None, help="ollama tag or Claude model id"),
               language: Optional[str] = typer.Option(None, help="language of the minutes, e.g. cs, en"),
+              compare: bool = typer.Option(False, "--compare", help="also run the `compare` providers from the config"),
               force: bool = typer.Option(False, help="overwrite an existing summary")):
-    """Write meeting minutes (summary, decisions, action items) to .summary.md via the Claude API."""
+    """Write meeting minutes (summary, decisions, action items) to .summary.md via a local (Ollama) or cloud (Claude) LLM."""
     from .pipeline import do_summarize, resolve_target
-    cfg = with_overrides(_cfg(ctx), **{"summarize.model": model, "summarize.language": language})
+    cfg = with_overrides(_cfg(ctx), **{"summarize.provider": provider, "summarize.model": model,
+                                       "summarize.language": language})
+    from .pipeline import do_summarize_compare
     rec = resolve_target(cfg, target, allow_import=False)
     typer.echo(do_summarize(cfg, rec, force=force))
+    if compare:
+        for p in do_summarize_compare(cfg, rec, force=force):
+            typer.echo(p)
 
 
 @app.command()

@@ -14,8 +14,8 @@ Working, early. Implemented and verified on a real 70-minute Teams recording:
 
 - `import` (any audio/video file, metadata from the Teams file name / container / file), Teams video analysis
   for active speakers, `transcribe` (WhisperX on CUDA: ASR + alignment + diarization, speaker names from the video),
-  `export` (txt/srt), `label-speakers`, `summarize` (minutes via the Claude API), `process` (inbox + all pending),
-  `list`, `config`.
+  `export` (txt/srt), `label-speakers`, `summarize` (minutes via a local Ollama model or the Claude API),
+  `process` (inbox + all pending), `list`, `config`.
 - Not yet: `purge-audio`, per-speaker language, the `me` track for live captures, CPU/cloud providers.
 
 User guide (Czech): [docs/user-guide.md](docs/user-guide.md). Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
@@ -36,7 +36,7 @@ teamsrec-transcribe import <file> [--title ...] [--start ...] [--participants "A
 teamsrec-transcribe transcribe <stem|file> [--provider whisperx] [--language auto|cs|sk|en] [--no-diarize]
 teamsrec-transcribe label-speakers <stem>       # interactive: SPEAKER_00 -> "Jana Nováková"
 teamsrec-transcribe export <stem> [--txt] [--srt]
-teamsrec-transcribe summarize <stem> [--language cs] [--model claude-opus-5]   # minutes via the Claude API
+teamsrec-transcribe summarize <stem> [--provider ollama|anthropic] [--model ...] [--language cs]
 teamsrec-transcribe purge-audio [--older-than 30d]   # later: delete WAVs, keep transcripts
 ```
 
@@ -76,16 +76,19 @@ enabled = true                   # analyse Teams video on import; ignored when t
 fps = 2
 
 [summarize]
-enabled = true                   # run as part of `process`; without credentials it logs an error and moves on
-provider = "anthropic"
-model = "claude-opus-5"          # any current Claude model
+enabled = true                   # run as part of `process`; a failure (no model, no key) is logged, not fatal
+provider = "ollama"              # ollama = local GPU, everything stays on the machine | anthropic = Claude API
+model = "gemma4:31b"             # ollama: `ollama pull gemma4:31b` (20 GB, fits 24 GB VRAM) | anthropic: claude-opus-5
 language = "cs"                  # language of the minutes, independent of the meeting language
+ollama_think = false             # thinking mode for local models: slower, sometimes better
+compare = ["anthropic:claude-opus-5"]   # optional: extra summaries for comparison -> <stem>.summary.claude-opus-5.md
 ```
 
 Secrets are never in the config file:
 
 - HuggingFace (pyannote models): `hf auth login` once; accept the terms of `pyannote/speaker-diarization-community-1`.
-- Claude API: `ANTHROPIC_API_KEY` environment variable.
+- Claude API (only with `provider = "anthropic"`): `ANTHROPIC_API_KEY` environment variable.
+- Ollama (default): install Ollama, `ollama pull gemma4:31b`; no keys, the transcript never leaves the machine.
 
 ## Installation
 
@@ -137,4 +140,5 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 - Providers behind one interface producing `<stem>.transcript.json`: `whisperx` (local); a CPU fallback and a
   cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
 - `video_speakers`: frame sampling + accent-colour label detection + easyocr
-- `summarize` via the Anthropic SDK: streaming, cached system prompt, minutes with summary / topics / decisions / action items / open questions / terms
+- `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms), two backends in
+  `llm.py`: Ollama REST (`/api/chat`, context sized to the transcript) and the Anthropic SDK (streaming, cached system prompt)

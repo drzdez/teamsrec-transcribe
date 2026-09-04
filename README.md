@@ -10,15 +10,16 @@ Input/output contract: [recording-format.md](https://github.com/drzdez/teamsrec-
 
 ## Status
 
-**No packaged code yet.** What exists:
+Working, early. Implemented and verified on a real 70-minute Teams recording:
 
-- `lab/` — working experiment scripts and a validated CUDA environment (see [Using the lab today](#using-the-lab-today)).
-- `lab/FINDINGS.md` — measured results on a real 70-minute recording and the decisions derived from them.
-- `docs/hardware-portability.md` — how this behaves on other GPUs, CPU-only machines, Macs and cloud.
+- `import` (any audio/video file, metadata from the Teams file name / container / file), Teams video analysis
+  for active speakers, `transcribe` (WhisperX on CUDA: ASR + alignment + diarization, speaker names from the video),
+  `export` (txt/srt), `label-speakers`, `process` (inbox + all pending), `list`, `config`.
+- Not yet: `summarize`, `purge-audio`, per-speaker language, the `me` track for live captures, CPU/cloud providers.
 
-The CLI described below is the target design; commands and options may still change while it is being written.
+Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
 
-## How it will be used
+## Usage
 
 Everything works on a recordings folder laid out as `<OUT_DIR>/YYYY/MM/<stem>.*`. A recording is a set of files
 sharing a stem: a `.json` sidecar plus audio (`_mix.wav`, and `_sys.wav`/`_mic.wav` for live captures).
@@ -81,19 +82,27 @@ Secrets are never in the config file:
 - HuggingFace (pyannote models): `hf auth login` once; accept the terms of `pyannote/speaker-diarization-community-1`.
 - Claude API: `ANTHROPIC_API_KEY` environment variable.
 
-## Installation (target)
+## Installation
+
+From source (until a release exists):
 
 ```
-uv tool install teamsrec-transcribe            # CPU-only torch
-# NVIDIA GPU: replace torch with the CUDA build matching the pinned version
-uv tool install teamsrec-transcribe --with "torch==2.8.0" --with "torchaudio==2.8.0" --index https://download.pytorch.org/whl/cu128
+git clone https://github.com/drzdez/teamsrec-transcribe
+cd teamsrec-transcribe
+uv sync --extra all            # venv with whisperx + CUDA 12.8 torch (Windows/Linux) + video analysis
+uv run teamsrec-transcribe config --init
 ```
 
-`ffmpeg` must be on PATH (`winget install Gyan.FFmpeg`). Models (~5 GB) download on first use into the HuggingFace cache.
+Requirements: Python 3.12 (uv fetches it), NVIDIA driver 570+ for the CUDA 12.8 wheels, `ffmpeg` on PATH
+(`winget install Gyan.FFmpeg`) or `TEAMSREC_FFMPEG_DIR` pointing at its `bin` folder, and a HuggingFace login
+(`hf auth login`) with the terms of `pyannote/speaker-diarization-community-1` accepted. Models (~5 GB) download
+on first use into the HuggingFace cache.
 
-## Using the lab today
+Tests: `uv run pytest`.
 
-Until the CLI exists, the same pipeline can be run by hand from `lab/`:
+## Lab scripts
+
+The experiments the CLI grew out of are kept in `lab/` and still run on their own:
 
 ```
 cd lab
@@ -115,10 +124,10 @@ ffmpeg -i "meeting.mp4" -vn -ac 1 -ar 16000 -c:a pcm_s16le samples/meeting_mix.w
 `run_whisperx.py --help` lists all knobs (model, compute type, batch, VAD, speaker count bounds). On Windows the
 WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 
-## Planned stack
+## Stack
 
-- Python 3.12, `uv`, CLI via `typer`, config via TOML
-- Providers behind one interface producing `<stem>.transcript.json`:
-  `whisperx` (local, first), later a CPU fallback and a cloud provider (Azure AI Speech or ElevenLabs Scribe)
-- `video_speakers` module ported from the lab script
-- `summarize` via the Anthropic SDK
+- Python 3.12, `uv`, CLI via `typer`, config via TOML (`src/teamsrec_transcribe/`)
+- Providers behind one interface producing `<stem>.transcript.json`: `whisperx` (local); a CPU fallback and a
+  cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
+- `video_speakers`: frame sampling + accent-colour label detection + easyocr
+- `summarize` via the Anthropic SDK (planned)

@@ -88,6 +88,8 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
         log.info("%s: transcript exists, skipping (use --force)", rec.stem)
         return rec.transcript_path
     audio = _ensure_mix(rec)
+    if audio.stat().st_size < 16000 * 2:  # under one second of 16 kHz PCM
+        raise RecordingError(f"{rec.stem}: audio is empty ({audio.name}, {audio.stat().st_size} bytes)")
     ts = cfg.transcribe
     lang = rec.sidecar.get("language") or ts.language
     language = None if lang in ("auto", "", None) else lang
@@ -152,6 +154,26 @@ def do_export(cfg: Config, rec: Recording, *, txt: bool = True, srt: bool = True
     return out
 
 
+# ---------------------------------------------------------------- summarize
+
+def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
+    from .summarize import summarize
+    if rec.summary_path.exists() and not force:
+        log.info("%s: summary exists, skipping (use --force)", rec.stem)
+        return rec.summary_path
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    data, segs = load_segments(rec)
+    if rec.speakers_path.exists():
+        apply_manual_names(segs, rec.read_json(rec.speakers_path))
+    header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
+              "language": data.get("language"), "participants": ", ".join(rec.participants) or None,
+              "speakers": ", ".join(speaker_list(segs))}
+    text = summarize(rec, segs, header, cfg.summarize)
+    rec.summary_path.write_text(text, encoding="utf-8")
+    return rec.summary_path
+
+
 # ---------------------------------------------------------------- process
 
 def do_process_inbox(cfg: Config) -> list[Recording]:
@@ -177,7 +199,17 @@ def do_process_inbox(cfg: Config) -> list[Recording]:
 def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:
     do_transcribe(cfg, rec, force=force)
     do_export(cfg, rec)
+    if cfg.summarize.enabled:
+        try:
+            do_summarize(cfg, rec, force=force)
+        except Exception as e:  # summary is optional: no API key, network, refusal
+            log.error("%s: summary failed: %s", rec.stem, e)
 
 
 def pending_recordings(cfg: Config) -> list[Recording]:
-    return [r for r in iter_recordings(cfg.out_dir) if not r.transcript_path.exists()]
+    """Recordings missing a transcript, or (when summaries are on) missing a summary."""
+    out = []
+    for r in iter_recordings(cfg.out_dir):
+        if not r.transcript_path.exists() or (cfg.summarize.enabled and not r.summary_path.exists()):
+            out.append(r)
+    return out

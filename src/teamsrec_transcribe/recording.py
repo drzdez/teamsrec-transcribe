@@ -1,4 +1,4 @@
-"""A recording = a stem in <OUT_DIR>/YYYY/MM plus its sidecar and derived files (contract format v1)."""
+"""A recording = a folder <OUT_DIR>/YYYY/MM/<stem>/ holding <stem>.* files (contract format v1)."""
 
 from __future__ import annotations
 
@@ -26,8 +26,9 @@ def make_stem(start: datetime, title: str) -> str:
     return f"{start:%Y-%m-%d_%H%M}_{slugify(title)}"
 
 
-def recording_dir(out_dir: Path, start: datetime) -> Path:
-    return out_dir / f"{start:%Y}" / f"{start:%m}"
+def recording_dir(out_dir: Path, start: datetime, stem: str) -> Path:
+    """<out_dir>/YYYY/MM/<stem>/ — one folder per recording."""
+    return out_dir / f"{start:%Y}" / f"{start:%m}" / stem
 
 
 class RecordingError(RuntimeError):
@@ -139,19 +140,21 @@ def resolve_recording(target: Path | str, out_dir: Path) -> Recording:
             return Recording.load(p.with_name(m.group(1) + ".json"))
         raise RecordingError(f"{p} is not a recording (no sidecar next to it)")
     stem = p.name
+    if p.is_dir() and (p / (stem + ".json")).exists():  # the recording folder itself
+        return Recording.load(p / (stem + ".json"))
     if p.parent != Path(".") and (p.parent / (stem + ".json")).exists():
         return Recording.load(p.parent / (stem + ".json"))
     if STEM_RE.match(stem):
         y, mth = stem[:4], stem[5:7]
-        cand = out_dir / y / mth / (stem + ".json")
+        cand = out_dir / y / mth / stem / (stem + ".json")
         if cand.exists():
             return Recording.load(cand)
     raise RecordingError(f"recording not found: {target}")
 
 
 def iter_recordings(out_dir: Path) -> Iterator[Recording]:
-    """All recordings under out_dir/YYYY/MM, oldest first."""
-    for sidecar in sorted(out_dir.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9]/*.json")):
+    """All recordings under out_dir/YYYY/MM/<stem>/, oldest first."""
+    for sidecar in sorted(out_dir.glob("[0-9][0-9][0-9][0-9]/[0-9][0-9]/*/*.json")):
         if is_sidecar(sidecar):
             try:
                 yield Recording.load(sidecar)

@@ -14,8 +14,25 @@ from .config import DEFAULT_TOML, Config, default_config_path, load_config, with
 from .media import ffmpeg_available
 
 app = typer.Typer(help="Transcription, speaker attribution and exports for teamsrec recordings.",
-                  no_args_is_help=True, add_completion=False)
+                  no_args_is_help=True, add_completion=False, pretty_exceptions_enable=False)
 log = logging.getLogger("teamsrec_transcribe")
+
+
+def _errors(fn):
+    """Turn expected failures into a one-line error and exit code 1 instead of a traceback."""
+    import functools
+    from .media import MediaError
+    from .providers.base import ProviderError
+    from .recording import RecordingError
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except (RecordingError, MediaError, ProviderError, RuntimeError) as e:
+            typer.secho(f"error: {e}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1)
+    return wrapper
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -55,6 +72,7 @@ def _names(value: Optional[str]) -> Optional[list[str]]:
 
 
 @app.command("import")
+@_errors
 def import_cmd(ctx: typer.Context, file: Path = typer.Argument(..., exists=True, dir_okay=False),
                title: Optional[str] = typer.Option(None, help="meeting title (default: from file name)"),
                start: Optional[str] = typer.Option(None, help="start time YYYY-MM-DD HH:MM (default: from file)"),
@@ -71,6 +89,7 @@ def import_cmd(ctx: typer.Context, file: Path = typer.Argument(..., exists=True,
 
 
 @app.command()
+@_errors
 def video(ctx: typer.Context, target: str = typer.Argument(..., help="stem or any file of the recording"),
           participants: Optional[str] = typer.Option(None, help="comma-separated names for OCR matching")):
     """(Re)run the Teams video analysis for an imported recording."""
@@ -85,6 +104,7 @@ def video(ctx: typer.Context, target: str = typer.Argument(..., help="stem or an
 
 
 @app.command()
+@_errors
 def transcribe(ctx: typer.Context, target: str = typer.Argument(..., help="stem, recording file, or an ad-hoc media file"),
                provider: Optional[str] = typer.Option(None),
                language: Optional[str] = typer.Option(None, help="auto | cs | sk | en"),
@@ -109,6 +129,7 @@ def transcribe(ctx: typer.Context, target: str = typer.Argument(..., help="stem,
 
 
 @app.command()
+@_errors
 def export(ctx: typer.Context, target: str, txt: bool = typer.Option(True), srt: bool = typer.Option(True)):
     """Regenerate .txt / .srt from the transcript (applies speakers.json names)."""
     from .pipeline import do_export, resolve_target
@@ -118,6 +139,7 @@ def export(ctx: typer.Context, target: str, txt: bool = typer.Option(True), srt:
 
 
 @app.command("label-speakers")
+@_errors
 def label_speakers(ctx: typer.Context, target: str):
     """Interactively map SPEAKER_XX labels to names (writes .speakers.json, regenerates exports)."""
     from .pipeline import do_export, load_segments, resolve_target
@@ -142,9 +164,23 @@ def label_speakers(ctx: typer.Context, target: str):
 
 
 @app.command()
+@_errors
+def summarize(ctx: typer.Context, target: str,
+              model: Optional[str] = typer.Option(None, help="Claude model id"),
+              language: Optional[str] = typer.Option(None, help="language of the minutes, e.g. cs, en"),
+              force: bool = typer.Option(False, help="overwrite an existing summary")):
+    """Write meeting minutes (summary, decisions, action items) to .summary.md via the Claude API."""
+    from .pipeline import do_summarize, resolve_target
+    cfg = with_overrides(_cfg(ctx), **{"summarize.model": model, "summarize.language": language})
+    rec = resolve_target(cfg, target, allow_import=False)
+    typer.echo(do_summarize(cfg, rec, force=force))
+
+
+@app.command()
+@_errors
 def process(ctx: typer.Context, target: Optional[str] = typer.Argument(None, help="stem or file; default: inbox + all pending"),
             force: bool = typer.Option(False)):
-    """Import the inbox, then transcribe + export every recording without a transcript (or just the target)."""
+    """Import the inbox, then transcribe + export + summarize every recording that is missing them (or just the target)."""
     from .pipeline import do_process, do_process_inbox, pending_recordings, resolve_target
     _require_ffmpeg()
     cfg = _cfg(ctx)

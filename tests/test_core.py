@@ -49,7 +49,7 @@ def test_container_then_file_fallback(tmp_path):
 # ---------------------------------------------------------------- recording / sidecar
 
 def _make_recording(out_dir: Path, stem="2026-09-04_1400_tydenni-sync", **extra) -> Path:
-    d = out_dir / "2026" / "09"
+    d = out_dir / "2026" / "09" / stem
     d.mkdir(parents=True)
     sidecar = {"format": 1, "app": "t", "app_version": "0", "title": "Týdenní sync", "slug": "tydenni-sync",
                "source": "import", "start": "2026-09-04T14:00:00", "end": "2026-09-04T14:30:00", "duration_s": 1800,
@@ -72,6 +72,7 @@ def test_resolve_by_stem_file_and_path(tmp_path):
     assert resolve_recording("2026-09-04_1400_tydenni-sync", tmp_path).stem == "2026-09-04_1400_tydenni-sync"
     assert resolve_recording(sc, tmp_path).title == "Týdenní sync"
     assert resolve_recording(sc.with_name("2026-09-04_1400_tydenni-sync_mix.wav"), tmp_path).stem_path == sc.with_suffix("")
+    assert resolve_recording(sc.parent, tmp_path).stem == "2026-09-04_1400_tydenni-sync"  # the folder itself
     rec = Recording.load(sc)
     assert rec.mix_path.name.endswith("_mix.wav")
     assert rec.participants == ["Jana Nováková", "Petr Svoboda"]
@@ -138,3 +139,15 @@ def test_config_load_and_overrides(tmp_path):
     assert cfg2.transcribe.language == "cs" and cfg2.transcribe.model == "large-v3" and cfg2.out_dir == Path("x")
     assert load_config(tmp_path / "missing.toml") == Config(source_path=None)
     assert TranscribeSettings().diarize_model.startswith("pyannote/")
+
+
+# ---------------------------------------------------------------- summarize input
+
+def test_summary_user_message_contains_transcript(tmp_path):
+    from teamsrec_transcribe.summarize import SYSTEM_PROMPT, build_user_message
+    rec = Recording.load(_make_recording(tmp_path))
+    segs = [Segment(0, 2, "Začneme.", "Jana Nováková"), Segment(2, 5, "Úkol vezmu já.", "Petr Svoboda")]
+    msg = build_user_message(rec, segs, {"start": "2026-09-04T14:00:00", "language": "cs", "participants": None})
+    assert msg.startswith("Meeting: Týdenní sync\nstart: 2026-09-04T14:00:00\nlanguage: cs\n")
+    assert "[00:00:02] Petr Svoboda: Úkol vezmu já." in msg
+    assert "{language}" in SYSTEM_PROMPT and "Action items" in SYSTEM_PROMPT

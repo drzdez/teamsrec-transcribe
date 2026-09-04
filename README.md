@@ -14,15 +14,17 @@ Working, early. Implemented and verified on a real 70-minute Teams recording:
 
 - `import` (any audio/video file, metadata from the Teams file name / container / file), Teams video analysis
   for active speakers, `transcribe` (WhisperX on CUDA: ASR + alignment + diarization, speaker names from the video),
-  `export` (txt/srt), `label-speakers`, `process` (inbox + all pending), `list`, `config`.
-- Not yet: `summarize`, `purge-audio`, per-speaker language, the `me` track for live captures, CPU/cloud providers.
+  `export` (txt/srt), `label-speakers`, `summarize` (minutes via the Claude API), `process` (inbox + all pending),
+  `list`, `config`.
+- Not yet: `purge-audio`, per-speaker language, the `me` track for live captures, CPU/cloud providers.
 
-Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
+User guide (Czech): [docs/user-guide.md](docs/user-guide.md). Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
 
 ## Usage
 
-Everything works on a recordings folder laid out as `<OUT_DIR>/YYYY/MM/<stem>.*`. A recording is a set of files
-sharing a stem: a `.json` sidecar plus audio (`_mix.wav`, and `_sys.wav`/`_mic.wav` for live captures).
+Everything works on a recordings folder laid out as `<OUT_DIR>/YYYY/MM/<stem>/<stem>.*`: one folder per recording,
+every file in it prefixed with the stem (`<date>_<time>_<title-slug>`). A recording is a `.json` sidecar plus audio
+(`_mix.wav`, and `_sys.wav`/`_mic.wav` for live captures); transcripts and minutes are written next to them.
 
 ```
 teamsrec-transcribe process                     # import everything in <OUT_DIR>/_inbox, then transcribe + export
@@ -32,13 +34,13 @@ teamsrec-transcribe import <file> [--title ...] [--start ...] [--participants "A
 teamsrec-transcribe transcribe <stem|file> [--provider whisperx] [--language auto|cs|sk|en] [--no-diarize]
 teamsrec-transcribe label-speakers <stem>       # interactive: SPEAKER_00 -> "Jana Nováková"
 teamsrec-transcribe export <stem> [--txt] [--srt]
-teamsrec-transcribe summarize <stem>            # transcript -> summary + action items (Claude API)
+teamsrec-transcribe summarize <stem> [--language cs] [--model claude-opus-5]   # minutes via the Claude API
 teamsrec-transcribe purge-audio [--older-than 30d]   # later: delete WAVs, keep transcripts
 ```
 
 Typical day:
 
-1. Live meeting: teamsrec-capture records it into `<OUT_DIR>/2026/09/2026-09-04_1400_tydenni-sync.*`.
+1. Live meeting: teamsrec-capture records it into `<OUT_DIR>/2026/09/2026-09-04_1400_tydenni-sync/`.
 2. Stored Teams recording: download the `…-Meeting Recording.mp4` and drop it into `<OUT_DIR>/_inbox/`.
 3. Run `teamsrec-transcribe process`. Both recordings get `.transcript.json`, `.txt`, `.srt` and `.summary.md`.
 4. If a speaker is still `SPEAKER_03` (audio-only recording), run `label-speakers` once; exports are regenerated.
@@ -72,9 +74,10 @@ enabled = true                   # analyse Teams video on import; ignored when t
 fps = 2
 
 [summarize]
+enabled = true                   # run as part of `process`; without credentials it logs an error and moves on
 provider = "anthropic"
-model = "claude-sonnet-5"        # any current Claude model
-language = "cs"                  # language of the summary, independent of the meeting language
+model = "claude-opus-5"          # any current Claude model
+language = "cs"                  # language of the minutes, independent of the meeting language
 ```
 
 Secrets are never in the config file:
@@ -97,6 +100,8 @@ Requirements: Python 3.12 (uv fetches it), NVIDIA driver 570+ for the CUDA 12.8 
 (`winget install Gyan.FFmpeg`) or `TEAMSREC_FFMPEG_DIR` pointing at its `bin` folder, and a HuggingFace login
 (`hf auth login`) with the terms of `pyannote/speaker-diarization-community-1` accepted. Models (~5 GB) download
 on first use into the HuggingFace cache.
+
+`bin	eamsrec-transcribe.cmd` runs the checkout's venv and finds the WinGet ffmpeg by itself; add `bin` to PATH to use the command from anywhere.
 
 Tests: `uv run pytest`.
 
@@ -130,4 +135,4 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 - Providers behind one interface producing `<stem>.transcript.json`: `whisperx` (local); a CPU fallback and a
   cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
 - `video_speakers`: frame sampling + accent-colour label detection + easyocr
-- `summarize` via the Anthropic SDK (planned)
+- `summarize` via the Anthropic SDK: streaming, cached system prompt, minutes with summary / topics / decisions / action items / open questions / terms

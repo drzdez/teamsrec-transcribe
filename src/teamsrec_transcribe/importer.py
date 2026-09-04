@@ -49,7 +49,7 @@ def import_file(
     participants: list[str] | None = None,
     force: bool = False,
 ) -> Recording:
-    """Create <out_dir>/YYYY/MM/<stem>{_mix.wav,.json} for the file. Returns the existing recording when
+    """Create <out_dir>/YYYY/MM/<stem>/<stem>{_mix.wav,.json} for the file. Returns the existing recording when
     it was imported before (same origin_path) unless force=True."""
     src = src.resolve()
     if not src.exists():
@@ -63,7 +63,7 @@ def import_file(
         meta = ImportMeta(title=title or meta.title, start=start or meta.start, source="user")
 
     stem = make_stem(meta.start, meta.title)
-    dest_dir = recording_dir(out_dir, meta.start)
+    dest_dir = recording_dir(out_dir, meta.start, stem)
     stem_path = dest_dir / stem
     sidecar_path = stem_path.with_name(stem + ".json")
     if sidecar_path.exists() and not force:

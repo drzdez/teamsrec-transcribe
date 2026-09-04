@@ -37,9 +37,10 @@ class VideoSettings:
 
 @dataclass(frozen=True)
 class SummarizeSettings:
+    enabled: bool = True  # part of `process`; failures (no API key) are logged, not fatal
     provider: str = "anthropic"
-    model: str = "claude-sonnet-5"
-    language: str = "cs"
+    model: str = "claude-opus-5"
+    language: str = "cs"  # language of the minutes, independent of the meeting language
 
 
 @dataclass(frozen=True)
@@ -137,7 +138,8 @@ enabled = true
 fps = 2
 
 [summarize]
+enabled = true               # run as part of `process` (needs ANTHROPIC_API_KEY)
 provider = "anthropic"
-model = "claude-sonnet-5"
-language = "cs"
+model = "claude-opus-5"
+language = "cs"              # language of the minutes
 """

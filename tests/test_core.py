@@ -79,6 +79,14 @@ def test_resolve_by_stem_file_and_path(tmp_path):
     assert rec.transcript_path.name == "2026-09-04_1400_tydenni-sync.transcript.json"
 
 
+def test_latest_keyword(tmp_path):
+    _make_recording(tmp_path, stem="2026-09-04_1400_tydenni-sync")
+    _make_recording(tmp_path, stem="2026-09-04_1630_pozdejsi")
+    assert resolve_recording("latest", tmp_path).stem == "2026-09-04_1630_pozdejsi"
+    with pytest.raises(Exception):
+        resolve_recording("latest", tmp_path / "empty")
+
+
 def test_unsupported_format_rejected(tmp_path):
     sc = _make_recording(tmp_path, format=2)
     with pytest.raises(Exception):

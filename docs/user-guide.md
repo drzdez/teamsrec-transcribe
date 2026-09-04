@@ -50,6 +50,15 @@ První běh je tedy o několik minut delší.
 
 70 minut záznamu trvá zhruba 2 minuty (video) + 3,5 minuty (přepis) na RTX 5090. Na slabší kartě úměrně déle.
 
+### Nejnovější nahrávka jedním kliknutím
+
+Zástupce **teamsrec – zpracovat poslední** na ploše (nebo `bin\teamsrec-process-latest.cmd`) importuje, co je
+ve schránce `_inbox`, a pak zpracuje jen nejnovější nahrávku: přepis, export a zápis. Okno zůstane otevřené, aby šel
+přečíst výsledek. Totéž z příkazové řádky: `teamsrec-transcribe process --latest`.
+
+Slovo `latest` funguje místo stemu ve všech příkazech, např. `teamsrec-transcribe label-speakers latest`
+nebo `teamsrec-transcribe summarize latest --force`.
+
 ### Jeden konkrétní soubor
 
 ```

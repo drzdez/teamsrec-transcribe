@@ -128,8 +128,19 @@ def is_media_file(path: Path) -> bool:
     return path.suffix.lower() in MEDIA_SUFFIXES
 
 
+def latest_recording(out_dir: Path) -> Recording:
+    """The newest recording by stem (stems sort chronologically)."""
+    recs = list(iter_recordings(out_dir))
+    if not recs:
+        raise RecordingError(f"no recordings under {out_dir}")
+    return max(recs, key=lambda r: r.stem)
+
+
 def resolve_recording(target: Path | str, out_dir: Path) -> Recording:
-    """Accepts a sidecar path, a stem path (with or without suffix), or a bare stem searched under out_dir."""
+    """Accepts a sidecar path, a stem path (with or without suffix), a bare stem searched under out_dir,
+    or the keyword `latest` (newest recording by stem)."""
+    if str(target).strip().lower() == "latest":
+        return latest_recording(out_dir)
     p = Path(target)
     if p.exists() and p.is_file():
         if is_sidecar(p):

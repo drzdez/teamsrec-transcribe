@@ -178,12 +178,19 @@ def summarize(ctx: typer.Context, target: str,
 
 @app.command()
 @_errors
-def process(ctx: typer.Context, target: Optional[str] = typer.Argument(None, help="stem or file; default: inbox + all pending"),
+def process(ctx: typer.Context, target: Optional[str] = typer.Argument(None, help="stem, file, or `latest`; default: inbox + all pending"),
+            latest: bool = typer.Option(False, "--latest", help="import the inbox, then process only the newest recording"),
             force: bool = typer.Option(False)):
     """Import the inbox, then transcribe + export + summarize every recording that is missing them (or just the target)."""
     from .pipeline import do_process, do_process_inbox, pending_recordings, resolve_target
+    from .recording import latest_recording
     _require_ffmpeg()
     cfg = _cfg(ctx)
+    if latest and not target:
+        for r in do_process_inbox(cfg):
+            typer.echo(f"imported {r.stem}")
+        target = latest_recording(cfg.out_dir).stem
+        typer.echo(f"latest: {target}")
     if target:
         rec = resolve_target(cfg, target)
         do_process(cfg, rec, force=force)

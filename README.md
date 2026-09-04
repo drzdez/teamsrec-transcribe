@@ -30,6 +30,8 @@ every file in it prefixed with the stem (`<date>_<time>_<title-slug>`). A record
 teamsrec-transcribe process                     # import everything in <OUT_DIR>/_inbox, then transcribe + export
                                                 #   + summarize every recording that has no transcript yet
 teamsrec-transcribe process <stem|file>         # the same for one recording or one ad-hoc media file
+teamsrec-transcribe process --latest            # import the inbox, then only the newest recording
+                                                # (`latest` also works as <stem> in every command)
 teamsrec-transcribe import <file> [--title ...] [--start ...] [--participants "A,B"] [--video]
 teamsrec-transcribe transcribe <stem|file> [--provider whisperx] [--language auto|cs|sk|en] [--no-diarize]
 teamsrec-transcribe label-speakers <stem>       # interactive: SPEAKER_00 -> "Jana Nováková"

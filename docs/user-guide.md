@@ -30,8 +30,10 @@ Jednorázově:
    by našly i jiné nástroje Anthropic, třeba Claude Code, a nabízely by účtování přes ni; tuhle čte jen teamsrec).
    Max subskripce claude.ai se na API nevztahuje, v Console se
    předplácí kredit; zápis ze 70minutové schůzky vyšel na 36 tis. vstupních a 7 tis. výstupních tokenů, tedy asi 0,35 USD.
-5. **Konfigurace:** `bin\teamsrec-transcribe.cmd config --init` založí `%APPDATA%\teamsrec\teamsrec.toml`.
-   Upravte `out_dir` a `glossary` (viz kapitola 5).
+5. **Konfigurace:** `bin\teamsrec-transcribe.cmd config --init` založí `%APPDATA%\teamsrec\teamsrec.toml`
+   a zeptá se na vaše jméno. To se uloží jako `[user] name` a používá se u živých nahrávek: mikrofonní stopa
+   je jen váš hlas, takže vaše repliky dostanou jméno automaticky, bez hádání. Prázdné jméno = vypnuto.
+   Dále upravte `out_dir` a `glossary` (viz kapitola 5).
 6. **Příkaz odkudkoli:** přidejte `D:\projects\teamsrec-transcribe\bin` do PATH (Nastavení → proměnné prostředí),
    nebo volejte `bin\teamsrec-transcribe.cmd` plnou cestou. Spouštěč sám najde ffmpeg z WinGetu.
 
@@ -84,6 +86,13 @@ Seznam účastníků zlepší přepis jmen a pomůže OCR při čtení jmenovek 
 
 ### Živé nahrávky z teamsrec-capture
 
+U živých nahrávek (stopy `sys` + `mic`) dostane váš hlas jméno z `[user] name` v konfiguraci: ta část
+diarizace, která se kryje s aktivitou mikrofonu, jste vy. Ostatní účastníci zůstávají `SPEAKER_XX`, dokud je
+nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikrofonní stopa není, jméno se nepoužije.
+
+V plánu jsou hlasové otisky: koho jednou pojmenujete, toho další nahrávky poznají po hlase samy. Do té doby
+se vyplatí po každé schůzce s novým kolegou spustit `label-speakers`, jména se pak uplatní i v zápisu.
+
 Nahrávky pořízené prototypem `teamsrec-capture/legacy/teamsrec.py` (živý hovor, *Record now*, *Record playback*)
 leží už ve správném adresáři. `teamsrec-transcribe process` je zpracuje spolu s ostatními. Označení „já“ podle mikrofonní stopy zatím není hotové, mluvčí dá diarizace.
 
@@ -133,9 +142,10 @@ teamsrec-transcribe summarize <stem> --compare                       # navíc z�
 Pro porovnání modelů nastavte v konfiguraci `compare = ["anthropic:claude-opus-5"]`: `process` pak vedle hlavního
 `<stem>.summary.md` (lokální model) uloží i `<stem>.summary.claude-opus-5.md`. Až se rozhodnete, seznam vyprázdněte.
 
-Zápis používá jména všude, kde je přepis zná (z videa Teams nebo z `label-speakers`); neznámé lidi nechává jako
-`SPEAKER_XX`, nikdy nehádá, kdo to je. Poslední sekce **Mluvčí** je tabulka označení / jméno / poznámka: u neznámých
-mluvčích model popíše jejich roli na schůzce („vedl schůzku, představil build“), aby šli dodatečně pojmenovat.
+Zápis používá jména všude, kde je přepis zná (z videa Teams, z mikrofonní stopy nebo z `label-speakers`); neznámé
+lidi nechává v textu jako `SPEAKER_XX`. Poslední sekce **Mluvčí** je tabulka označení / jméno / poznámka: u neznámých
+mluvčích model popíše jejich roli na schůzce („vedl schůzku, představil build“) a smí tam dát i tip na jméno, vždy
+s důkazem z přepisu („pravděpodobně Zdeněk: osloven v 00:20:06 a odpověděl“). Bez důkazu tip nedává.
 Vyplatí se tedy nejdřív `label-speakers` a pak `summarize --force`, nebo zápis přečíst, podle sekce Mluvčí přiřadit
 jména a `summarize --force` spustit znovu. Úkoly v zápisu odkazují na čas v záznamu, dají se ověřit v `.txt` nebo `.srt`.
 S Ollamou zůstává vše na počítači. S Claude API odchází do cloudu text přepisu, nikdy zvuk ani video.

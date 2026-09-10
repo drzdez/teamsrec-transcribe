@@ -51,6 +51,7 @@ class SummarizeSettings:
 @dataclass(frozen=True)
 class Config:
     out_dir: Path = field(default_factory=lambda: Path.home() / "meetings")
+    user_name: str = ""  # [user] name: the person behind the microphone in live recordings
     transcribe: TranscribeSettings = field(default_factory=TranscribeSettings)
     video: VideoSettings = field(default_factory=VideoSettings)
     summarize: SummarizeSettings = field(default_factory=SummarizeSettings)
@@ -99,6 +100,7 @@ def load_config(path: Path | None = None) -> Config:
     out_dir = Path(rec["out_dir"]).expanduser() if "out_dir" in rec else Config().out_dir
     return Config(
         out_dir=out_dir,
+        user_name=str(_section(data, "user").get("name", "")).strip(),
         transcribe=_build(TranscribeSettings, _section(data, "transcribe")),
         video=_build(VideoSettings, _section(data, "video")),
         summarize=_build(SummarizeSettings, _section(data, "summarize")),
@@ -124,6 +126,9 @@ def with_overrides(cfg: Config, **overrides: Any) -> Config:
 
 
 DEFAULT_TOML = """\
+[user]
+name = "{user_name}"         # you: live recordings name your microphone track after this (empty = off)
+
 [recordings]
 out_dir = "{out_dir}"
 

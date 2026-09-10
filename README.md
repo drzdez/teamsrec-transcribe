@@ -57,6 +57,9 @@ elsewhere). Every value can be overridden by a CLI flag; the `TEAMSREC_CONFIG` e
 different file.
 
 ```toml
+[user]
+name = "Zdeněk"          # live recordings: the diarization label that matches the mic track gets this name
+
 [recordings]
 out_dir = "D:/meetings"          # the recordings folder; _inbox lives inside it
 
@@ -142,5 +145,8 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 - Providers behind one interface producing `<stem>.transcript.json`: `whisperx` (local); a CPU fallback and a
   cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
 - `video_speakers`: frame sampling + accent-colour label detection + easyocr
+- `mic_speakers`: the diarization label that coincides with microphone activity becomes the user (`[user] name`)
+- planned (2026-09-10): voice prints – a speaker named once via `label-speakers` gets a local pyannote embedding
+  and is recognised automatically in later recordings (any source); then live Teams-window capture on the capture side
 - `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms / speakers), two backends in
   `llm.py`: Ollama REST (`/api/chat`, context sized to the transcript) and the Anthropic SDK (streaming, cached system prompt)

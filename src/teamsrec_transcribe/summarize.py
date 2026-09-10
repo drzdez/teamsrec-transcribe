@@ -31,8 +31,8 @@ The transcript comes from automatic speech recognition with speaker attribution.
 mixed Czech/Slovak/English, filler words and cross-talk; reconstruct the intended meaning, never invent facts.
 
 Speakers: when the transcript gives a real name, always use that name. Labels like SPEAKER_01 are people whose
-name is not known; refer to them by that exact label, consistently, and never guess who they are. The header may
-list which label belongs to which name.
+name is not known; in the minutes refer to them by that exact label, consistently, and never replace a label with
+a guessed name. The header may list which label belongs to which name.
 
 Write the minutes {language}, regardless of the language(s) spoken in the transcript; quote names and terms as
 they are. Use Markdown with exactly these seven level-2 headings, verbatim and nothing else on the heading line,
@@ -57,6 +57,8 @@ Content of the sections:
 7. {h6}: a table with the columns {speaker_cols}, one row per speaker: label as used in the transcript (or "–" when
    the transcript already gives the name), the name (or "?" when unknown), and for unknown speakers a short note
    on their role in the meeting so they can be identified later (e.g. "led the meeting, presented the build").
+   The note is the one place for a likely identity, always with the evidence: e.g. "probably Zdeněk: addressed by
+   that name at 00:20:06 and answered". No evidence in the transcript, no guess.
 
 Do not add a document title, date line or participant line above the first heading, no preamble, no closing
 remarks. Keep names, product names and acronyms exactly as spelled in the transcript. Be concrete: prefer the

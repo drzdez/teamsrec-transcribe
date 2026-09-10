@@ -11,6 +11,7 @@ from .config import Config
 from .export import write_exports
 from .importer import import_file
 from .media import mix_tracks, probe, utc_now_iso
+from .mic_speakers import apply_mic_track
 from .prompt import build_prompt
 from .providers import get_provider
 from .providers.base import Segment, Word
@@ -108,6 +109,14 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
 
     if timeline:
         apply_video_timeline(res.segments, timeline)
+    mic = rec.track_path("mic")
+    speaker_sources = ["video"] if timeline else []
+    if cfg.user_name and mic and mic.exists():
+        if apply_mic_track(res.segments, mic, cfg.user_name):
+            speaker_sources.append("mic")
+    elif mic and mic.exists():
+        log.info("%s: mic track present but [user] name is not set, your voice stays SPEAKER_xx", rec.stem)
+    speaker_sources.append("diarization")
 
     transcript = {
         "format": 1,
@@ -118,6 +127,7 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
         "created": utc_now_iso(),
         "prompt": prompt,
         "timings": res.timings,
+        "speaker_sources": speaker_sources,
         "speakers": speaker_list(res.segments),
         "segments": [s.to_json() for s in res.segments],
     }

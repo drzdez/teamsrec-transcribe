@@ -236,12 +236,18 @@ def config_cmd(ctx: typer.Context, init: bool = typer.Option(False, help="write 
     if init:
         if path.exists():
             typer.echo(f"exists: {path}")
+            if not cfg.user_name:
+                typer.echo("hint: set [user] name = \"Your Name\" so live recordings name your own voice")
         else:
+            name = typer.prompt("Your name (names your microphone track in live recordings; empty = off)",
+                                default="", show_default=False).strip()
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(DEFAULT_TOML.format(out_dir=str(cfg.out_dir).replace("\\", "/")), encoding="utf-8")
+            path.write_text(DEFAULT_TOML.format(out_dir=str(cfg.out_dir).replace("\\", "/"),
+                                                user_name=name.replace('"', "'")), encoding="utf-8")
             typer.echo(f"written: {path}")
         return
     typer.echo(f"config file: {cfg.source_path or f'(none, defaults; would read {path})'}")
+    typer.echo(f"user name:   {cfg.user_name or '(not set: live recordings keep SPEAKER_xx for you)'}")
     typer.echo(f"out_dir:     {cfg.out_dir}")
     typer.echo(f"transcribe:  {cfg.transcribe}")
     typer.echo(f"video:       {cfg.video}")

@@ -161,6 +161,37 @@ def test_summary_user_message_contains_transcript(tmp_path):
     assert "{language}" in SYSTEM_PROMPT and "{h3}" in SYSTEM_PROMPT and "{h6}" in SYSTEM_PROMPT
 
 
+def test_mic_track_names_the_user(tmp_path):
+    import wave
+    import numpy as np
+    from teamsrec_transcribe.mic_speakers import apply_mic_track
+    sr = 16000
+    t = np.arange(sr * 40) / sr
+    sig = np.zeros_like(t)
+    hot = [(0, 5), (10, 15), (20, 22), (30, 40)]  # the user talks here
+    for a, b in hot:
+        sig[int(a * sr):int(b * sr)] = 0.3 * np.sin(2 * np.pi * 220 * t[int(a * sr):int(b * sr)])
+    sig += np.random.default_rng(0).normal(0, 0.002, len(t))  # room noise
+    wav = tmp_path / "mic.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+        w.writeframes((sig * 32767).astype(np.int16).tobytes())
+    segs = [Segment(0, 5, "a", "SPEAKER_00"), Segment(5, 10, "b", "SPEAKER_01"), Segment(10, 15, "c", "SPEAKER_00"),
+            Segment(15, 20, "d", "SPEAKER_01"), Segment(20, 22, "e", "SPEAKER_02"), Segment(25, 28, "f", "Jana"),
+            Segment(30, 40, "g", "SPEAKER_00")]
+    mapping = apply_mic_track(segs, wav, "Zdeněk")
+    assert mapping == {"SPEAKER_00": "Zdeněk"}
+    # SPEAKER_02's single 2 s segment sits fully inside mic activity -> the user too; Jana untouched
+    assert [s.speaker for s in segs] == ["Zdeněk", "SPEAKER_01", "Zdeněk", "SPEAKER_01", "Zdeněk", "Jana", "Zdeněk"]
+
+
+def test_config_user_name(tmp_path):
+    p = tmp_path / "t.toml"
+    p.write_text('[user]\nname = " Zdeněk Zdražil "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
+    assert load_config(p).user_name == "Zdeněk Zdražil"
+    assert Config().user_name == ""
+
+
 def test_clean_headings_strips_copied_instructions():
     from teamsrec_transcribe.summarize import HEADINGS, clean_headings
     raw = ("## Shrnutí — 5 to 10 sentences: purpose of the meeting.\nText.\n"

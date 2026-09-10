@@ -158,7 +158,18 @@ def test_summary_user_message_contains_transcript(tmp_path):
     msg = build_user_message(rec, segs, {"start": "2026-09-04T14:00:00", "language": "cs", "participants": None})
     assert msg.startswith("Meeting: Týdenní sync\nstart: 2026-09-04T14:00:00\nlanguage: cs\n")
     assert "[00:00:02] Petr Svoboda: Úkol vezmu já." in msg
-    assert "{language}" in SYSTEM_PROMPT and "{h3}" in SYSTEM_PROMPT
+    assert "{language}" in SYSTEM_PROMPT and "{h3}" in SYSTEM_PROMPT and "{h6}" in SYSTEM_PROMPT
+
+
+def test_clean_headings_strips_copied_instructions():
+    from teamsrec_transcribe.summarize import HEADINGS, clean_headings
+    raw = ("## Shrnutí — 5 to 10 sentences: purpose of the meeting.\nText.\n"
+           "## Témata: one bullet per topic\n* a\n## Úkoly — a table\n| Kdo | Úkol |\n## Pojmy\n* WFMS\n## Mluvčí\n| x |")
+    got = clean_headings(raw, HEADINGS["cs"])
+    assert got.splitlines()[0] == "## Shrnutí"
+    assert "## Témata\n" in got and "## Úkoly\n" in got and "## Pojmy\n" in got and "## Mluvčí\n" in got
+    assert "5 to 10" not in got and "| Kdo | Úkol |" in got
+    assert len(HEADINGS["cs"]) == len(HEADINGS["en"]) == 7
 
 
 def test_summarize_settings_defaults_and_unknown_provider():
@@ -175,3 +186,24 @@ def test_summarize_settings_defaults_and_unknown_provider():
         cfgfile.unlink()
     with pytest.raises(LLMError):
         complete("sys", "user", SummarizeSettings(provider="nope"))
+
+
+def test_anthropic_key_comes_from_teamsrec_variable(monkeypatch):
+    from teamsrec_transcribe import llm
+    from teamsrec_transcribe.config import SummarizeSettings
+    from teamsrec_transcribe.llm import LLMError, complete
+    assert llm.API_KEY_ENV == "TEAMSREC_ANTHROPIC_API_KEY"
+    monkeypatch.delenv("TEAMSREC_ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-bogus")  # ours must win over the generic one
+    monkeypatch.setenv("TEAMSREC_ANTHROPIC_API_KEY", "sk-ant-ours")
+    import anthropic
+    seen = {}
+    def fake(api_key=None, **kw):
+        seen["key"] = api_key
+        raise TypeError("stop here")
+    monkeypatch.setattr(anthropic, "Anthropic", fake)
+    with pytest.raises(LLMError):
+        complete("sys", "user", SummarizeSettings(provider="anthropic", model="claude-opus-5"))
+    assert seen["key"] == "sk-ant-ours"

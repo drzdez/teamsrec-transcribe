@@ -144,7 +144,7 @@ fps = 2
 
 [summarize]
 enabled = true               # run as part of `process`
-provider = "ollama"          # ollama = local GPU (ollama pull <model>) | anthropic = Claude API (ANTHROPIC_API_KEY)
+provider = "ollama"          # ollama = local GPU (ollama pull <model>) | anthropic = Claude API (TEAMSREC_ANTHROPIC_API_KEY)
 model = "gemma4:31b"         # ollama tag, or e.g. "claude-opus-5" with provider = "anthropic"
 language = "cs"              # language of the minutes
 ollama_think = false         # thinking mode for local models: slower, sometimes better

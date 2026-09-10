@@ -26,7 +26,9 @@ Jednorázově:
    ```
    Alternativa je Claude API (kvalitnější zápis, přepis odchází do cloudu Anthropic): v konfiguraci
    `provider = "anthropic"`, `model = "claude-opus-5"` a klíč z https://console.anthropic.com/ jako proměnná
-   prostředí `setx ANTHROPIC_API_KEY sk-ant-...`. Max subskripce claude.ai se na API nevztahuje, v Console se
+   prostředí `setx TEAMSREC_ANTHROPIC_API_KEY sk-ant-...` (vlastní jméno schválně: obecnou `ANTHROPIC_API_KEY`
+   by našly i jiné nástroje Anthropic, třeba Claude Code, a nabízely by účtování přes ni; tuhle čte jen teamsrec).
+   Max subskripce claude.ai se na API nevztahuje, v Console se
    předplácí kredit; zápis ze 70minutové schůzky vyšel na 36 tis. vstupních a 7 tis. výstupních tokenů, tedy asi 0,35 USD.
 5. **Konfigurace:** `bin\teamsrec-transcribe.cmd config --init` založí `%APPDATA%\teamsrec\teamsrec.toml`.
    Upravte `out_dir` a `glossary` (viz kapitola 5).
@@ -93,7 +95,7 @@ přeposlání. Ve složce vznikne:
 
 | Soubor | Obsah |
 |---|---|
-| `<stem>.summary.md` | zápis ze schůzky: shrnutí, témata, rozhodnutí, úkoly (kdo / co / termín / čas v záznamu), otevřené otázky, pojmy |
+| `<stem>.summary.md` | zápis ze schůzky: shrnutí, témata, rozhodnutí, úkoly (kdo / co / termín / čas v záznamu), otevřené otázky, pojmy, mluvčí |
 | `<stem>.txt` | čitelný přepis: hlavička (název, začátek, délka, jazyk, mluvčí) a řádky `[hh:mm:ss] Jméno: text` |
 | `<stem>.srt` | titulky, lze pustit vedle videa |
 | `<stem>.transcript.json` | úplný přepis se slovy a časy, vstup pro další zpracování |
@@ -131,8 +133,11 @@ teamsrec-transcribe summarize <stem> --compare                       # navíc z�
 Pro porovnání modelů nastavte v konfiguraci `compare = ["anthropic:claude-opus-5"]`: `process` pak vedle hlavního
 `<stem>.summary.md` (lokální model) uloží i `<stem>.summary.claude-opus-5.md`. Až se rozhodnete, seznam vyprázdněte.
 
-Zápis vychází z přepisu se jmény, takže se vyplatí nejdřív pojmenovat mluvčí (`label-speakers`) a pak
-teprve `summarize --force`. Úkoly v zápisu odkazují na čas v záznamu, dají se ověřit v `.txt` nebo `.srt`.
+Zápis používá jména všude, kde je přepis zná (z videa Teams nebo z `label-speakers`); neznámé lidi nechává jako
+`SPEAKER_XX`, nikdy nehádá, kdo to je. Poslední sekce **Mluvčí** je tabulka označení / jméno / poznámka: u neznámých
+mluvčích model popíše jejich roli na schůzce („vedl schůzku, představil build“), aby šli dodatečně pojmenovat.
+Vyplatí se tedy nejdřív `label-speakers` a pak `summarize --force`, nebo zápis přečíst, podle sekce Mluvčí přiřadit
+jména a `summarize --force` spustit znovu. Úkoly v zápisu odkazují na čas v záznamu, dají se ověřit v `.txt` nebo `.srt`.
 S Ollamou zůstává vše na počítači. S Claude API odchází do cloudu text přepisu, nikdy zvuk ani video.
 Zápis z lokálního modelu trvá na RTX 5090 zhruba 2 až 3 minuty a GPU je po tu dobu obsazená.
 
@@ -171,7 +176,7 @@ Každé nastavení jde jednorázově přepsat z příkazové řádky, např.
 | `ffmpeg/ffprobe not found` | ffmpeg není v PATH. Použijte `bin\teamsrec-transcribe.cmd`, nebo nastavte `TEAMSREC_FFMPEG_DIR` na složku `bin` ffmpegu. |
 | `CUDA is not available to torch` | Starý NVIDIA driver (potřeba 570+), nebo se nainstaloval CPU torch. `uv sync --extra all` znovu; ověření `uv run python -c "import torch;print(torch.cuda.is_available())"`. |
 | `ollama: cannot reach` / `model not found` | Ollama neběží nebo model není stažený: `ollama pull gemma4:31b`. Přepis a export fungují i bez zápisu. |
-| `no valid Claude credentials` | `provider = "anthropic"` bez `ANTHROPIC_API_KEY`. Krok 4 instalace. |
+| `no valid Claude credentials` | `provider = "anthropic"` bez `TEAMSREC_ANTHROPIC_API_KEY`. Krok 4 instalace. |
 | `GatedRepoError` / 403 u pyannote | Nepřijaté podmínky modelu nebo chybí přihlášení. Krok 3 instalace. |
 | Jména z videa jsou zkomolená | OCR nezná diakritiku. Zadejte `--participants` při importu; jména se dohledají podle podobnosti. `teamsrec-transcribe video <stem> --participants "..."` analýzu zopakuje. |
 | Video nedalo žádné mluvčí | Záznam nemá rozložení Teams se jmenovkami (jiný nástroj, jen sdílený obsah). Mluvčí dá diarizace, pojmenujte je ručně. |

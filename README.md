@@ -87,7 +87,9 @@ compare = ["anthropic:claude-opus-5"]   # optional: extra summaries for comparis
 Secrets are never in the config file:
 
 - HuggingFace (pyannote models): `hf auth login` once; accept the terms of `pyannote/speaker-diarization-community-1`.
-- Claude API (only with `provider = "anthropic"`): `ANTHROPIC_API_KEY` environment variable.
+- Claude API (only with `provider = "anthropic"`): `TEAMSREC_ANTHROPIC_API_KEY` environment variable. The
+  tool-specific name keeps the key away from other Anthropic software on the machine (Claude Code would otherwise
+  offer to bill against a plain `ANTHROPIC_API_KEY`); without it the SDK defaults apply.
 - Ollama (default): install Ollama, `ollama pull gemma4:31b`; no keys, the transcript never leaves the machine.
 
 ## Installation
@@ -140,5 +142,5 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 - Providers behind one interface producing `<stem>.transcript.json`: `whisperx` (local); a CPU fallback and a
   cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
 - `video_speakers`: frame sampling + accent-colour label detection + easyocr
-- `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms), two backends in
+- `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms / speakers), two backends in
   `llm.py`: Ollama REST (`/api/chat`, context sized to the transcript) and the Anthropic SDK (streaming, cached system prompt)

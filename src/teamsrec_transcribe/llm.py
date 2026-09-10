@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -11,6 +12,10 @@ from dataclasses import dataclass
 from .config import SummarizeSettings
 
 log = logging.getLogger(__name__)
+
+# Our own variable name on purpose: a plain ANTHROPIC_API_KEY is picked up by every Anthropic tool on the
+# machine (Claude Code asks whether to bill against it), this one is seen by teamsrec only.
+API_KEY_ENV = "TEAMSREC_ANTHROPIC_API_KEY"
 
 
 @dataclass
@@ -87,7 +92,8 @@ def _anthropic(system: str, user: str, settings: SummarizeSettings) -> LLMResult
     except ImportError as e:  # pragma: no cover
         raise LLMError("the anthropic package is not installed") from e
     try:
-        client = anthropic.Anthropic()  # ANTHROPIC_API_KEY / ANTHROPIC_AUTH_TOKEN / `ant auth login` profile
+        key = os.environ.get(API_KEY_ENV) or None
+        client = anthropic.Anthropic(api_key=key)  # None -> SDK defaults (ANTHROPIC_API_KEY, `ant auth login`)
         with client.messages.stream(
             model=settings.model,
             max_tokens=16000,
@@ -96,7 +102,7 @@ def _anthropic(system: str, user: str, settings: SummarizeSettings) -> LLMResult
         ) as stream:
             response = stream.get_final_message()
     except (anthropic.AuthenticationError, TypeError) as e:  # TypeError: SDK found no credentials at all
-        raise LLMError("no valid Claude credentials: set ANTHROPIC_API_KEY (or run `ant auth login`)") from e
+        raise LLMError(f"no valid Claude credentials: set {API_KEY_ENV} (or run `ant auth login`)") from e
     except anthropic.NotFoundError as e:
         raise LLMError(f"model {settings.model!r} not found for this account") from e
     except anthropic.RateLimitError as e:

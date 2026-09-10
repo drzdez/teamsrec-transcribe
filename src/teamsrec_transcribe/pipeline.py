@@ -160,11 +160,13 @@ def _summary_input(rec: Recording):
     if not rec.transcript_path.exists():
         raise RecordingError(f"{rec.stem}: no transcript yet")
     data, segs = load_segments(rec)
-    if rec.speakers_path.exists():
-        apply_manual_names(segs, rec.read_json(rec.speakers_path))
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    if names:
+        apply_manual_names(segs, names)
     header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
               "language": data.get("language"), "participants": ", ".join(rec.participants) or None,
-              "speakers": ", ".join(speaker_list(segs))}
+              "speakers": ", ".join(speaker_list(segs)),
+              "speaker labels": ", ".join(f"{k} = {v}" for k, v in names.items()) or None}
     return segs, header
 
 

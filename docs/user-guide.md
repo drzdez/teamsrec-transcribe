@@ -127,6 +127,25 @@ teamsrec-transcribe label-speakers 2026-09-04_0900_schuzka-s-dodavatelem
 Ke každému mluvčímu se ukáže délka mluvení a ukázka věty, zadáte jméno. Uloží se do `<stem>.speakers.json`
 a přegenerují se `.txt` a `.srt`. Ruční jména mají vždy přednost.
 
+## 4a. Kontrola mluvčích ve stránce (doporučený způsob)
+
+Zástupce **teamsrec – zkontrolovat mluvčí** na ploše (nebo `bin\teamsrec-review-latest.cmd`, příkaz
+`teamsrec-transcribe review latest`) otevře v prohlížeči lokální stránku. Běží jen na vašem počítači
+(adresa 127.0.0.1), nic neodesílá. Zástupce „zpracovat poslední“ ji po zpracování otevře sám, když v nahrávce
+zůstal někdo nepojmenovaný.
+
+Na stránce je pro každého mluvčího: označení nebo jméno, kolik mluvil, tlačítka ▶ se třemi ukázkami hlasu,
+dvě nejdelší repliky a nápověda ze zápisu (role na schůzce, případný tip na jméno s důkazem). Vpravo napíšete
+jméno; našeptávač nabízí lidi z předchozích nahrávek a účastníky. Volba „stejná osoba jako…“ sloučí dvě označení
+téhož člověka. Nahoře lze přepnout na jinou nahrávku.
+
+- **Uložit** zapíše `<stem>.speakers.json` a přegeneruje `.txt` a `.srt`.
+- **Uložit a přegenerovat zápis** navíc znovu vytvoří `.summary.md` se jmény (lokální model, 1 až 3 minuty).
+- **Zavřít** ukončí server; okno příkazové řádky se zavře samo.
+
+Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jméno znamená nechat označení.
+`label-speakers` v terminálu dělá totéž bez zvuku.
+
 ## 4b. Zápis ze schůzky
 
 `process` vytvoří zápis automaticky (lokálně přes Ollamu, nebo přes Claude API podle konfigurace). Ručně nebo znovu:

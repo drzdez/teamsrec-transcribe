@@ -12,6 +12,7 @@ import typer
 from . import __version__
 from .config import DEFAULT_TOML, Config, default_config_path, load_config, with_overrides
 from .media import ffmpeg_available
+from .recording import RecordingError
 
 app = typer.Typer(help="Transcription, speaker attribution and exports for teamsrec recordings.",
                   no_args_is_help=True, add_completion=False, pretty_exceptions_enable=False)
@@ -162,6 +163,26 @@ def label_speakers(ctx: typer.Context, target: str):
     rec.write_json(rec.speakers_path, existing)
     for p in do_export(cfg, rec):
         typer.echo(p)
+
+
+@app.command()
+@_errors
+def review(ctx: typer.Context, target: str = typer.Argument("latest", help="stem, recording file, or `latest`"),
+           port: int = typer.Option(0, help="port on 127.0.0.1 (0 = random)"),
+           browser: bool = typer.Option(True, "--browser/--no-browser", help="open the page in the default browser"),
+           only_unresolved: bool = typer.Option(False, "--only-unresolved",
+                                                help="do nothing when every speaker already has a name")):
+    """Open the local review page: listen to each speaker, type the name, save, regenerate exports and summary."""
+    from .pipeline import resolve_target
+    from .web.review import serve, unresolved_labels
+    cfg = _cfg(ctx)
+    rec = resolve_target(cfg, target, allow_import=False)
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet (run `process` first)")
+    if only_unresolved and not unresolved_labels(rec):
+        typer.echo(f"{rec.stem}: all speakers have names")
+        return
+    serve(cfg, rec, port=port, open_browser=browser)
 
 
 @app.command()

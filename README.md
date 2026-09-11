@@ -15,8 +15,8 @@ Working, early. Implemented and verified on a real 70-minute Teams recording:
 
 - `import` (any audio/video file, metadata from the Teams file name / container / file), Teams video analysis
   for active speakers, `transcribe` (WhisperX on CUDA: ASR + alignment + diarization, speaker names from the video),
-  `export` (txt/srt), `label-speakers`, `summarize` (minutes via a local Ollama model or the Claude API),
-  `process` (inbox + all pending), `list`, `config`.
+  `export` (txt/srt), `label-speakers`, `review` (local page to name speakers by ear), `summarize` (minutes via
+  a local Ollama model or the Claude API), `process` (inbox + all pending), `list`, `config`.
 - Not yet: `purge-audio`, per-speaker language, the `me` track for live captures, CPU/cloud providers.
 
 User guide (Czech): [docs/user-guide.md](docs/user-guide.md). Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
@@ -38,6 +38,7 @@ teamsrec-transcribe transcribe <stem|file> [--provider whisperx] [--language aut
 teamsrec-transcribe label-speakers <stem>       # interactive: SPEAKER_00 -> "Jana Nováková"
 teamsrec-transcribe export <stem> [--txt] [--srt]
 teamsrec-transcribe summarize <stem> [--provider ollama|anthropic] [--model ...] [--language cs]
+teamsrec-transcribe review [latest|<stem>]              # local page: listen to each speaker, type names, save
 teamsrec-transcribe purge-audio [--older-than 30d]   # later: delete WAVs, keep transcripts
 ```
 
@@ -147,6 +148,9 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
   cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
 - `video_speakers`: frame sampling + accent-colour label detection + easyocr
 - `mic_speakers`: the diarization label that coincides with microphone activity becomes the user (`[user] name`)
+- `web/`: the review page. `review.py` = data functions + a stdlib HTTP server on 127.0.0.1 with a small JSON API
+  (documented in the module docstring); `index.html` = one page of vanilla JS (`@ts-check` + JSDoc types), no build
+  step, no framework. Writes only `<stem>.speakers.json`, then regenerates exports and (on request) the summary.
 - planned (2026-09-10): voice prints – a speaker named once via `label-speakers` gets a local pyannote embedding
   and is recognised automatically in later recordings (any source); then live Teams-window capture on the capture side
 - `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms / speakers), two backends in

@@ -1,4 +1,5 @@
 import json
+import urllib.error
 from datetime import datetime
 from pathlib import Path
 
@@ -190,6 +191,88 @@ def test_config_user_name(tmp_path):
     p.write_text('[user]\nname = " Jan Novák "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
     assert load_config(p).user_name == "Jan Novák"
     assert Config().user_name == ""
+
+
+def _make_transcribed(tmp_path, stem="2026-09-04_1400_tydenni-sync"):
+    import wave
+    import numpy as np
+    sc = _make_recording(tmp_path, stem=stem)
+    rec = Recording.load(sc)
+    sr = 16000
+    t = np.arange(sr * 30) / sr
+    sig = (0.3 * np.sin(2 * np.pi * 330 * t) * 32767).astype(np.int16)
+    with wave.open(str(rec.mix_path), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr); w.writeframes(sig.tobytes())
+    segs = [{"start": 0, "end": 4, "text": "Dobrý den, začneme s programem.", "speaker": "SPEAKER_00"},
+            {"start": 4, "end": 5, "text": "Ano.", "speaker": "SPEAKER_01"},
+            {"start": 5, "end": 12, "text": "Já bych rád probral rozpočet na příští kvartál.", "speaker": "SPEAKER_01"},
+            {"start": 12, "end": 20, "text": "Rozpočet je hotový, pošlu ho zítra.", "speaker": "Jana Nováková"},
+            {"start": 20, "end": 28, "text": "Ještě k termínům.", "speaker": "SPEAKER_00"}]
+    rec.write_json(rec.transcript_path, {"format": 1, "language": "cs", "speaker_sources": ["mic", "diarization"],
+                                         "speakers": ["SPEAKER_00", "SPEAKER_01", "Jana Nováková"], "segments": segs})
+    rec.summary_path.write_text("# T\n\n## Mluvčí\n| Označení | Jméno | Poznámka |\n|---|---|---|\n"
+                                "| SPEAKER_00 | ? | vedl schůzku |\n| SPEAKER_01 | ? | pravděpodobně Petr: osloven |\n",
+                                encoding="utf-8")
+    return rec
+
+
+def test_review_data_clip_and_save(tmp_path):
+    from teamsrec_transcribe.web.review import build_review, clip_wav, list_recordings, save_names, unresolved_labels
+    cfg = Config(out_dir=tmp_path, user_name="Já")
+    rec = _make_transcribed(tmp_path)
+    assert unresolved_labels(rec) == ["SPEAKER_00", "SPEAKER_01"]
+    rv = build_review(cfg, rec)
+    assert [s["label"] for s in rv["speakers"]] == ["SPEAKER_00", "SPEAKER_01", "Jana Nováková"]  # by time
+    s0 = rv["speakers"][0]
+    assert s0["unresolved"] and s0["name"] == "" and s0["hint"] == "vedl schůzku" and s0["seconds"] == 12
+    assert rv["speakers"][1]["hint"].startswith("pravděpodobně Petr")
+    assert 1 <= len(s0["samples"]) <= 3 and s0["samples"][0]["end"] - s0["samples"][0]["start"] <= 8
+    assert rv["speakers"][2]["name"] == "Jana Nováková" and not rv["speakers"][2]["unresolved"]
+    assert "Já" in rv["known_names"] and "Petr Svoboda" in rv["known_names"]  # user + participants
+    assert rv["has_mix"] and rv["speaker_sources"] == ["mic", "diarization"]
+    clip = clip_wav(rec.mix_path, 1.0, 3.0)
+    assert clip[:4] == b"RIFF" and 2 * 16000 * 2 - 100 < len(clip) < 2 * 16000 * 2 + 100
+    rows = list_recordings(cfg)
+    assert rows[0]["stem"] == rec.stem and rows[0]["unresolved"] == 2
+    written = save_names(cfg, rec, {"SPEAKER_00": " Petr Svoboda ", "SPEAKER_01": "", "Jana Nováková": "Jana Nováková"})
+    assert written == {"SPEAKER_00": "Petr Svoboda"}
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "Petr Svoboda"}
+    assert "Petr Svoboda: Dobrý den" in rec.file(".txt").read_text(encoding="utf-8")
+    assert unresolved_labels(rec) == ["SPEAKER_01"]
+    assert list_recordings(cfg)[0]["unresolved"] == 1
+
+
+def test_review_http_roundtrip(tmp_path):
+    import json as _json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from teamsrec_transcribe.web.review import ReviewState, _handler
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    ref = {}
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _handler(ReviewState(cfg), ref))
+    ref["server"] = srv
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        page = urllib.request.urlopen(base + "/").read().decode("utf-8")
+        assert "teamsrec" in page and "@ts-check" in page
+        rows = _json.loads(urllib.request.urlopen(base + "/api/recordings").read())
+        assert rows[0]["stem"] == rec.stem
+        rv = _json.loads(urllib.request.urlopen(base + f"/api/recording?stem={rec.stem}").read())
+        assert len(rv["speakers"]) == 3
+        wav = urllib.request.urlopen(base + f"/api/clip?stem={rec.stem}&start=0&end=2").read()
+        assert wav[:4] == b"RIFF"
+        body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_01": "Petr"}, "summary": False}).encode()
+        req = urllib.request.Request(base + "/api/save", data=body, headers={"Content-Type": "application/json"})
+        res = _json.loads(urllib.request.urlopen(req).read())
+        assert res["ok"] and res["written"] == {"SPEAKER_01": "Petr"}
+        bad = urllib.request.Request(base + "/api/recording?stem=nope")
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(bad)
+    finally:
+        srv.shutdown(); srv.server_close()
 
 
 def test_clean_headings_strips_copied_instructions():

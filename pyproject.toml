@@ -5,7 +5,7 @@ description = "Transcription, speaker attribution, exports and summaries for tea
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "MIT"
-authors = [{ name = "Zdeněk Zdražil", email = "zdrazilz@seznam.cz" }]
+authors = [{ name = "drzdez" }]
 dependencies = [
     "typer>=0.15",
     "numpy>=1.26",

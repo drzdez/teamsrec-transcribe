@@ -179,16 +179,16 @@ def test_mic_track_names_the_user(tmp_path):
     segs = [Segment(0, 5, "a", "SPEAKER_00"), Segment(5, 10, "b", "SPEAKER_01"), Segment(10, 15, "c", "SPEAKER_00"),
             Segment(15, 20, "d", "SPEAKER_01"), Segment(20, 22, "e", "SPEAKER_02"), Segment(25, 28, "f", "Jana"),
             Segment(30, 40, "g", "SPEAKER_00")]
-    mapping = apply_mic_track(segs, wav, "Zdeněk")
-    assert mapping == {"SPEAKER_00": "Zdeněk"}
+    mapping = apply_mic_track(segs, wav, "Jan Novák")
+    assert mapping == {"SPEAKER_00": "Jan Novák"}
     # SPEAKER_02's single 2 s segment sits fully inside mic activity -> the user too; Jana untouched
-    assert [s.speaker for s in segs] == ["Zdeněk", "SPEAKER_01", "Zdeněk", "SPEAKER_01", "Zdeněk", "Jana", "Zdeněk"]
+    assert [s.speaker for s in segs] == ["Jan Novák", "SPEAKER_01", "Jan Novák", "SPEAKER_01", "Jan Novák", "Jana", "Jan Novák"]
 
 
 def test_config_user_name(tmp_path):
     p = tmp_path / "t.toml"
-    p.write_text('[user]\nname = " Zdeněk Zdražil "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
-    assert load_config(p).user_name == "Zdeněk Zdražil"
+    p.write_text('[user]\nname = " Jan Novák "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
+    assert load_config(p).user_name == "Jan Novák"
     assert Config().user_name == ""
 
 

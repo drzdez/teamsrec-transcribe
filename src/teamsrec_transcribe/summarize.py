@@ -57,7 +57,7 @@ Content of the sections:
 7. {h6}: a table with the columns {speaker_cols}, one row per speaker: label as used in the transcript (or "–" when
    the transcript already gives the name), the name (or "?" when unknown), and for unknown speakers a short note
    on their role in the meeting so they can be identified later (e.g. "led the meeting, presented the build").
-   The note is the one place for a likely identity, always with the evidence: e.g. "probably Zdeněk: addressed by
+   The note is the one place for a likely identity, always with the evidence: e.g. "probably Jan: addressed by
    that name at 00:20:06 and answered". No evidence in the transcript, no guess.
 
 Do not add a document title, date line or participant line above the first heading, no preamble, no closing

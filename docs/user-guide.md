@@ -145,7 +145,7 @@ Pro porovnání modelů nastavte v konfiguraci `compare = ["anthropic:claude-opu
 Zápis používá jména všude, kde je přepis zná (z videa Teams, z mikrofonní stopy nebo z `label-speakers`); neznámé
 lidi nechává v textu jako `SPEAKER_XX`. Poslední sekce **Mluvčí** je tabulka označení / jméno / poznámka: u neznámých
 mluvčích model popíše jejich roli na schůzce („vedl schůzku, představil build“) a smí tam dát i tip na jméno, vždy
-s důkazem z přepisu („pravděpodobně Zdeněk: osloven v 00:20:06 a odpověděl“). Bez důkazu tip nedává.
+s důkazem z přepisu („pravděpodobně Jan: osloven v 00:20:06 a odpověděl“). Bez důkazu tip nedává.
 Vyplatí se tedy nejdřív `label-speakers` a pak `summarize --force`, nebo zápis přečíst, podle sekce Mluvčí přiřadit
 jména a `summarize --force` spustit znovu. Úkoly v zápisu odkazují na čas v záznamu, dají se ověřit v `.txt` nebo `.srt`.
 S Ollamou zůstává vše na počítači. S Claude API odchází do cloudu text přepisu, nikdy zvuk ani video.

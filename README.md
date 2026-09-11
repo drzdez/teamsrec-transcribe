@@ -58,7 +58,7 @@ different file.
 
 ```toml
 [user]
-name = "Zdeněk"          # live recordings: the diarization label that matches the mic track gets this name
+name = "Jan Novák"          # live recordings: the diarization label that matches the mic track gets this name
 
 [recordings]
 out_dir = "D:/meetings"          # the recordings folder; _inbox lives inside it

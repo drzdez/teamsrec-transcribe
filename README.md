@@ -6,6 +6,7 @@ Command-line post-processing for meeting recordings made by
 exports (txt/srt) and meeting summaries. Runs locally on an NVIDIA GPU (WhisperX); other backends later.
 
 Input/output contract: [recording-format.md](https://github.com/drzdez/teamsrec-capture/blob/main/docs/recording-format.md)
+Plan of both repos: [roadmap.md](https://github.com/drzdez/teamsrec-capture/blob/main/docs/roadmap.md)
 (owned by the capture project; this project reads `format: 1`).
 
 ## Status

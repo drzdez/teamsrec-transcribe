@@ -90,8 +90,19 @@ U živých nahrávek (stopy `sys` + `mic`) dostane váš hlas jméno z `[user] n
 diarizace, která se kryje s aktivitou mikrofonu, jste vy. Ostatní účastníci zůstávají `SPEAKER_XX`, dokud je
 nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikrofonní stopa není, jméno se nepoužije.
 
-V plánu jsou hlasové otisky: koho jednou pojmenujete, toho další nahrávky poznají po hlase samy. Do té doby
-se vyplatí po každé schůzce s novým kolegou spustit `label-speakers`, jména se pak uplatní i v zápisu.
+### Hlasové otisky
+
+Koho jednou pojmenujete (na stránce nebo přes `label-speakers`), toho další nahrávky poznají po hlase samy:
+při pojmenování se uloží hlasový otisk z diarizace do `_speakers\voiceprints.json` (jen na tomto počítači,
+nejvýš 10 otisků na osobu), váš vlastní otisk vzniká automaticky z mikrofonní stopy. U nové nahrávky se každý
+dosud neznámý řečník porovná s otisky a když je shoda dost vysoká a jasně nejlepší, dostane jméno rovnou.
+Na stránce to uvidíte zeleně jako „poznáno po hlase: Pavel Orosz (shoda 0.72) – zkontrolujte a uložte“;
+špatné rozpoznání opravíte přepsáním jména. Nastavení `[voiceprints]`: `enabled`, `threshold` (potřebná shoda),
+`margin` (odstup od druhého nejlepšího). Otisky jednoho člověka smažete příkazem
+`teamsrec-transcribe people forget-voice <id>`, celý soubor `voiceprints.json` lze kdykoli smazat.
+
+Otisk je biometrický údaj kolegy. Zůstává lokálně a slouží jen k tomu, aby se zápis nemusel pokaždé
+pojmenovávat ručně; informujte tým stejně, jako o nahrávání samotném.
 
 Nahrávky pořízené prototypem `teamsrec-capture/legacy/teamsrec.py` (živý hovor, *Record now*, *Record playback*)
 leží už ve správném adresáři. `teamsrec-transcribe process` je zpracuje spolu s ostatními. Označení „já“ podle mikrofonní stopy zatím není hotové, mluvčí dá diarizace.
@@ -135,20 +146,33 @@ Zástupce **teamsrec – zkontrolovat mluvčí** na ploše (nebo `bin\teamsrec-r
 zůstal někdo nepojmenovaný.
 
 Na stránce je pro každého mluvčího: označení nebo jméno, kolik mluvil, tlačítka ▶ se třemi ukázkami hlasu,
-dvě nejdelší repliky a nápověda ze zápisu (role na schůzce, případný tip na jméno s důkazem). Vpravo napíšete
-jméno; našeptávač nabízí lidi z předchozích nahrávek a účastníky. Volba „stejná osoba jako…“ sloučí dvě označení
-téhož člověka. Nahoře lze přepnout na jinou nahrávku.
+dvě nejdelší repliky a nápověda ze zápisu (role na schůzce, případný tip na jméno s důkazem). Vpravo jsou pole
+jméno, příjmení, přezdívka a volba „v zápisu“; pod nimi náhled, jak bude člověk v přepisu a zápisu uveden.
+„Vybrat známou osobu…“ vyplní pole z registru, „stejná osoba jako…“ zkopíruje je od jiného označení v téže
+nahrávce. Nahoře lze přepnout na jinou nahrávku.
 
-Jméno napište celé („Petr Svoboda“); tím vznikne osoba v registru (`_speakers\people.json`, záložka **Lidé**
-nahoře). U každé osoby lze doplnit přezdívku a zvolit, co se má psát do přepisu a zápisu: jméno, jméno a
-příjmení, nebo přezdívka. Výchozí volba je v konfiguraci `[people] display` (výchozí `nick` = přezdívka, a kdo ji
+Uložením vznikne osoba v registru (`_speakers\people.json`, záložka **Lidé** nahoře), nebo se u známé osoby
+doplní přezdívka a volba. Co se píše do přepisu a zápisu: jméno, jméno a příjmení, nebo přezdívka. Výchozí volba je v konfiguraci `[people] display` (výchozí `nick` = přezdívka, a kdo ji
 nemá, tomu se píše jméno). Přiřazení u nahrávky odkazuje na osobu, takže změna přezdívky nebo volby se projeví
 při dalším exportu bez nového přiřazování.
 
 - **Uložit** zapíše `<stem>.speakers.json` a přegeneruje `.txt` a `.srt`.
 - **Uložit a přegenerovat zápis** navíc znovu vytvoří `.summary.md` se jmény (lokální model, 1 až 3 minuty).
+  Po tu dobu stránku ani okno konzole nezavírejte, tlačítko Zavřít je zablokované a prohlížeč se před zavřením
+  záložky zeptá.
+- **Název schůzky** je v hlavičce editovatelný: capture ho bere z titulku okna Teams, které se často jmenuje
+  „Připojení ke schůzce“ nebo „Kompaktní zobrazení schůzky“. Přepište ho a uložte: přejmenuje se složka
+  nahrávky i všechny její soubory (nový stem `datum_čas_novy-nazev`), sidecar, hlavička přepisu, nadpisy zápisů
+  a odkazy v hlasových otiscích. V terminálu totéž: `teamsrec-transcribe rename <stem> "Nový název"`.
 - **Zavřít** ukončí server; okno příkazové řádky se zavře samo. Stačí i zavřít záložku prohlížeče, server se do
   dvou minut ukončí sám. Opakované spuštění zástupce novou stránku nezakládá, jen otevře tu běžící.
+
+Záložka **Lidé**: klik na „N · detail“ ve sloupci Hlas (nebo dvojklik na řádek) otevře detail osoby: v jakých
+nahrávkách je přiřazena a tabulku uložených otisků – z které nahrávky a označení, jak dlouho mluvil, kdy uloženo,
+▶ ukázka hlasu z té nahrávky a ✕ smazání jednotlivého otisku nebo všech. Dále sloupec „sloučit do…“: když stejný člověk vznikl dvakrát
+(třeba jednou jen s křestním jménem z mikrofonu a podruhé s příjmením), sloučení přepíše přiřazení ve všech
+nahrávkách a přenese přezdívku, aliasy i otisky. Totéž v terminálu: `teamsrec-transcribe people list` a
+`people merge <ponechat> <sloučit>`.
 
 Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jméno znamená nechat označení.
 `label-speakers` v terminálu dělá totéž bez zvuku.

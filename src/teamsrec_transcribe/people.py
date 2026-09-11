@@ -16,6 +16,7 @@ import re
 import unicodedata
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Iterable
 
 from .providers.base import Segment
 
@@ -101,26 +102,58 @@ class People:
         return next((p for p in self.people if p.id == pid), None)
 
     def find(self, text: str) -> Person | None:
-        """By id, full name, nickname or alias; a bare first name only when it is unique."""
+        """By id, full name, nickname or alias; a bare first name only when it is unique; a full name also
+        matches the single person who has that first name and no last name yet (created from a mic/video
+        first name before the user typed the surname)."""
         if not text:
             return None
         hit = [p for p in self.people if p.matches(text)]
         if len(hit) == 1:
             return hit[0]
         if not hit:
-            t = _norm(text)
-            by_first = [p for p in self.people if _norm(p.first) == t]
+            parts = text.split()
+            t = _norm(parts[0]) if parts else ""
+            if len(parts) == 1:
+                by_first = [p for p in self.people if _norm(p.first) == t]
+            else:
+                by_first = [p for p in self.people if _norm(p.first) == t and not p.last]
             if len(by_first) == 1:
                 return by_first[0]
         return None
 
     def ensure(self, text: str) -> Person:
-        """The person for a typed name, created from the text when unknown."""
+        """The person for a typed name, created from the text when unknown; a first-name-only person gets the
+        surname from the typed full name instead of a duplicate."""
         p = self.find(text)
         if p is None:
             p = Person.from_text(text, {q.id for q in self.people})
             self.people.append(p)
+        elif not p.last and len(text.split()) > 1 and _norm(p.first) == _norm(text.split()[0]):
+            p.last = " ".join(text.split()[1:])
         return p
+
+    def merge(self, keep_id: str, drop_id: str, recordings: Iterable = ()) -> list:
+        """Fold `drop` into `keep`: nickname/aliases carried over, every speakers.json that points at `drop`
+        rewritten. Returns the recordings that were rewritten (caller re-exports them)."""
+        keep, drop = self.get(keep_id), self.get(drop_id)
+        if keep is None or drop is None or keep is drop:
+            raise ValueError("merge needs two different known people")
+        if not keep.nick and drop.nick:
+            keep.nick = drop.nick
+        if not keep.last and drop.last:
+            keep.last = drop.last
+        for alias in [drop.full, drop.nick, *drop.aliases]:
+            if alias and not keep.matches(alias) and alias not in keep.aliases:
+                keep.aliases.append(alias)
+        self.people = [p for p in self.people if p.id != drop_id]
+        changed = []
+        for rec in recordings:
+            if rec.speakers_path.exists():
+                names = rec.read_json(rec.speakers_path)
+                if drop_id in names.values():
+                    rec.write_json(rec.speakers_path, {k: (keep_id if v == drop_id else v) for k, v in names.items()})
+                    changed.append(rec)
+        return changed
 
     # ---- display
     def display(self, speaker: str | None) -> str | None:

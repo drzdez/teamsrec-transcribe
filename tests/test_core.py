@@ -190,7 +190,10 @@ def test_config_user_name(tmp_path):
     p = tmp_path / "t.toml"
     p.write_text('[user]\nname = " Jan Novák "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
     assert load_config(p).user_name == "Jan Novák"
-    assert Config().user_name == ""
+    assert Config().user_name == "" and Config().voiceprints.enabled and 0 < Config().voiceprints.threshold < 1
+    p.write_text('[voiceprints]\nenabled = false\nthreshold = 0.7\n', encoding="utf-8")
+    v = load_config(p).voiceprints
+    assert (v.enabled, v.threshold, v.margin, v.min_seconds) == (False, 0.7, 0.1, 30)
 
 
 def _make_transcribed(tmp_path, stem="2026-09-04_1400_tydenni-sync"):
@@ -247,6 +250,69 @@ def test_people_display_and_matching(tmp_path):
     assert Person.from_text("Petr Svoboda", {"petr-svoboda"}).id == "petr-svoboda-2"
 
 
+def test_people_dedup_and_merge(tmp_path):
+    from teamsrec_transcribe.people import People
+    ppl = People.load(tmp_path, "nick")
+    z = ppl.ensure("Zdeněk")                      # from the mic track: first name only
+    assert (z.id, z.first, z.last) == ("zdenek", "Zdeněk", "")
+    z2 = ppl.ensure("Zdeněk Zdražil")             # the typed full name completes the same person
+    assert z2 is z and z.last == "Zdražil" and len(ppl.people) == 1
+    assert ppl.find("Zdeněk Zdražil") is z and ppl.find("Zdeněk") is z
+    other = ppl.ensure("Zdeněk Novák")            # a different Zdeněk now has to be a new person
+    assert other is not z and len(ppl.people) == 2
+    # merge: aliases/nick carried over, speakers.json rewritten, voice prints moved
+    dup = ppl.ensure("Z. Zdražil"); dup.nick = "Zdenda"
+    rec = _make_transcribed(tmp_path)
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": dup.id, "SPEAKER_01": other.id})
+    changed = ppl.merge(z.id, dup.id, [rec])
+    assert [r.stem for r in changed] == [rec.stem] and ppl.get(dup.id) is None
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": z.id, "SPEAKER_01": other.id}
+    assert z.nick == "Zdenda" and "Z. Zdražil" in z.aliases and ppl.find("Z. Zdražil") is z
+    with pytest.raises(ValueError):
+        ppl.merge(z.id, "nobody")
+
+
+def test_voiceprints_registry_and_recognition(tmp_path):
+    from teamsrec_transcribe.voiceprints import Voiceprints, enroll_from_recording, remap_embeddings
+    a, b = [1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]
+    near_a = [0.95, 0.3, 0.0, 0.0]
+    vp = Voiceprints.load(tmp_path)
+    assert vp.enroll("petr", a, "rec1", "SPEAKER_00", "m") and not vp.enroll("petr", a, "rec1", "SPEAKER_00")
+    assert vp.enroll("jana", b, "rec1", "SPEAKER_01")
+    vp.save()
+    vp = Voiceprints.load(tmp_path)
+    assert vp.model == "m" and vp.count("petr") == 1 and vp.people["petr"][0]["v"] == [1.0, 0.0, 0.0, 0.0]
+    got = vp.recognize({"SPEAKER_03": near_a, "SPEAKER_04": [0.7, 0.7, 0.0, 0.0], "SPEAKER_05": [0.0, 0.0, 1.0, 0.0],
+                        "SPEAKER_06": near_a},
+                       threshold=0.55, margin=0.1, durations={"SPEAKER_03": 60, "SPEAKER_04": 60, "SPEAKER_05": 60, "SPEAKER_06": 5},
+                       min_seconds=30)
+    assert got["SPEAKER_03"][0] == "petr" and got["SPEAKER_03"][1] > 0.9
+    assert "SPEAKER_04" not in got  # tie between petr and jana: no margin
+    assert "SPEAKER_05" not in got  # nobody similar
+    assert "SPEAKER_06" not in got  # spoke too little for a reliable embedding
+    vp.rename("jana", "jana-novakova")
+    assert vp.count("jana") == 0 and vp.count("jana-novakova") == 1
+    vp.forget("petr")
+    assert vp.count("petr") == 0
+    # cap per person
+    for i in range(15):
+        vp.enroll("x", [1.0, float(i) / 10, 0.0, 0.0], f"r{i}", "S")
+    assert vp.count("x") == 10
+    # remap: two labels renamed to the same name are averaged, untouched labels keep their key
+    emb = {"SPEAKER_00": a, "SPEAKER_01": [0.0, 0.0, 1.0, 0.0], "SPEAKER_02": b}
+    before = ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00", "SPEAKER_02"]
+    after = ["Zdeněk", "Zdeněk", "Zdeněk", "SPEAKER_02"]
+    out = remap_embeddings(emb, before, after)
+    assert set(out) == {"Zdeněk", "SPEAKER_02"} and abs(out["Zdeněk"][0] - out["Zdeněk"][2]) < 1e-6
+    assert abs(sum(x * x for x in out["Zdeněk"]) - 1) < 1e-6
+    # enrol from a transcript after naming
+    vp2 = Voiceprints.load(tmp_path / "v2")
+    segs = [{"start": 0, "end": 40, "speaker": "Zdeněk"}, {"start": 40, "end": 45, "speaker": "SPEAKER_02"}]
+    n = enroll_from_recording(vp2, {"speaker_embeddings": out, "diarize_model": "m", "segments": segs},
+                              {"Zdeněk": "zdenek", "SPEAKER_02": "petr", "SPEAKER_09": "nobody"}, "rec9", min_seconds=30)
+    assert n == 1 and vp2.count("zdenek") == 1 and vp2.count("petr") == 0  # 5 s of speech is not enrolled
+
+
 def test_review_data_clip_and_save(tmp_path):
     from teamsrec_transcribe.web.review import build_review, clip_wav, list_recordings, save_names, unresolved_labels
     cfg = Config(out_dir=tmp_path, user_name="Já")
@@ -277,6 +343,14 @@ def test_review_data_clip_and_save(tmp_path):
     from teamsrec_transcribe.web.review import save_people
     save_people(cfg, [{"id": "petr-svoboda", "first": "Petr", "last": "Svoboda", "nick": "Péťa"}], rec.stem)
     assert "Péťa: Dobrý den" in rec.file(".txt").read_text(encoding="utf-8")
+    assert build_review(cfg, rec)["speakers"][0]["fields"] == {"first": "Petr", "last": "Svoboda", "nick": "Péťa", "display": ""}
+    # structured save: fields update a known person (display override) and create a new one from nick only
+    written = save_names(cfg, rec, {"SPEAKER_00": {"first": "Petr", "last": "Svoboda", "nick": "Péťa", "display": "full"},
+                                    "SPEAKER_01": {"first": "", "last": "", "nick": "Šéf", "display": ""}})
+    assert written == {"SPEAKER_00": "petr-svoboda", "SPEAKER_01": "sef"}
+    txt = rec.file(".txt").read_text(encoding="utf-8")
+    assert "Petr Svoboda: Dobrý den" in txt and "Šéf: Já bych rád" in txt
+    assert build_review(cfg, rec)["speakers"][1]["fields"]["nick"] == "Šéf"
 
 
 def test_review_http_roundtrip(tmp_path):
@@ -301,17 +375,89 @@ def test_review_http_roundtrip(tmp_path):
         assert len(rv["speakers"]) == 3
         wav = urllib.request.urlopen(base + f"/api/clip?stem={rec.stem}&start=0&end=2").read()
         assert wav[:4] == b"RIFF"
-        body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_01": "Petr"}, "summary": False}).encode()
+        body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_01": "Petr"}, "summary": False, "title": "Nový název"}).encode()
         req = urllib.request.Request(base + "/api/save", data=body, headers={"Content-Type": "application/json"})
         res = _json.loads(urllib.request.urlopen(req).read())
         assert res["ok"] and res["written"] == {"SPEAKER_01": "petr"}
+        assert res["stem"] == "2026-09-04_1400_novy-nazev" and res["title"] == "Nový název"
+        moved = resolve_recording(res["stem"], tmp_path)
+        assert moved.title == "Nový název" and not rec.dir.exists()
+        assert "# Nový název" in moved.file(".txt").read_text(encoding="utf-8")
+        rec = moved  # the rest of the test works with the renamed recording
         ppl = _json.loads(urllib.request.urlopen(base + "/api/people").read())
         assert ppl["people"][0]["first"] == "Petr" and ppl["modes"] == ["first", "full", "nick"]
+        assert ppl["people"][0]["prints"] == 0
+        body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_00": "Peter Svoboda"}, "summary": False}).encode()
+        urllib.request.urlopen(urllib.request.Request(base + "/api/save", data=body, headers={"Content-Type": "application/json"})).read()
+        body = _json.dumps({"keep": "petr", "drop": "peter-svoboda", "stem": rec.stem}).encode()
+        res = _json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/people/merge", data=body,
+                                                                        headers={"Content-Type": "application/json"})).read())
+        assert [p["id"] for p in res["people"]] == ["petr"] and "Peter Svoboda" in res["people"][0]["aliases"]
+        det = _json.loads(urllib.request.urlopen(base + "/api/person?id=petr").read())
+        assert det["id"] == "petr" and det["recordings"] == [rec.stem] and det["prints"] == []
+        with pytest.raises(urllib.error.HTTPError):
+            urllib.request.urlopen(base + "/api/person?id=nobody")
+        assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "petr"}  # the page always sends the full mapping
         bad = urllib.request.Request(base + "/api/recording?stem=nope")
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(bad)
     finally:
         srv.shutdown(); srv.server_close()
+
+
+def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
+    from teamsrec_transcribe.pipeline import rename_recording
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import build_review, save_title
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    old_stem, old_dir = rec.stem, rec.dir
+    (old_dir / f"{old_stem}.summary.md").write_text("<!-- x -->\n# Týdenní sync\n\n## Shrnutí\n", encoding="utf-8")
+    (old_dir / f"{old_stem}.summary.claude-opus-5.md").write_text("<!-- x -->\n# Týdenní sync\n", encoding="utf-8")
+    vp = Voiceprints.load(tmp_path); vp.enroll("jana", [1.0, 0.0], old_stem, "Jana Nováková"); vp.save()
+    assert save_title(cfg, rec, "  Týdenní   sync ") is rec  # unchanged after whitespace normalisation
+    new = rename_recording(cfg, rec, "Plánování Q4 / rozpočet")
+    assert new.stem == "2026-09-04_1400_planovani-q4-rozpocet" and not old_dir.exists() and new.dir.exists()
+    names = sorted(p.name for p in new.dir.iterdir())
+    assert names == sorted([f"{new.stem}.json", f"{new.stem}_mix.wav", f"{new.stem}.transcript.json",
+                            f"{new.stem}.summary.md", f"{new.stem}.summary.claude-opus-5.md"])
+    again = Recording.load(new.sidecar_path)
+    assert again.title == "Plánování Q4 / rozpočet" and again.sidecar["slug"] == "planovani-q4-rozpocet"
+    assert again.mix_path.name == f"{new.stem}_mix.wav" and again.mix_path.exists()
+    assert again.summary_path.read_text(encoding="utf-8").splitlines()[1] == "# Plánování Q4 / rozpočet"
+    assert Voiceprints.load(tmp_path).people["jana"][0]["stem"] == new.stem
+    assert build_review(cfg, again)["title"] == "Plánování Q4 / rozpočet"
+    assert resolve_recording("latest", tmp_path).stem == new.stem
+    # same slug, different wording: only the title text changes, nothing moves
+    same = rename_recording(cfg, again, "Plánování Q4, rozpočet")
+    assert same.stem == new.stem and Recording.load(new.sidecar_path).title == "Plánování Q4, rozpočet"
+    # a collision is refused
+    _make_recording(tmp_path, stem="2026-09-04_1400_jina")
+    with pytest.raises(Exception):
+        rename_recording(cfg, again, "Jiná")
+
+
+def test_person_detail_lists_prints_with_samples(tmp_path):
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import forget_print, person_detail
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.save()
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll("petr-svoboda", [1.0, 0.0, 0.0], rec.stem, "SPEAKER_01", "m")
+    vp.enroll("petr-svoboda", [0.0, 1.0, 0.0], "2020-01-01_0000_gone", "SPEAKER_00", "m")
+    vp.save()
+    d = person_detail(cfg, "petr-svoboda")
+    assert d["shown"] == "Petr" and d["model"] == "m" and len(d["prints"]) == 2
+    p0 = d["prints"][0]
+    assert p0["title"] == "Týdenní sync" and p0["seconds"] == 8 and p0["has_mix"]
+    assert [s["text"][:7] for s in p0["samples"]] == ["Já bych"]  # the 1 s "Ano." is too short for a sample
+    assert d["prints"][1]["title"] is None and d["prints"][1]["samples"] == []  # recording no longer there
+    assert forget_print(cfg, "petr-svoboda", rec.stem, "SPEAKER_01") == 1
+    assert len(person_detail(cfg, "petr-svoboda")["prints"]) == 1
+    assert forget_print(cfg, "petr-svoboda", None, None) == 1
+    assert person_detail(cfg, "petr-svoboda")["prints"] == []
 
 
 def test_review_single_instance_and_idle_exit(tmp_path):

@@ -36,6 +36,14 @@ class VideoSettings:
 
 
 @dataclass(frozen=True)
+class VoiceprintSettings:
+    enabled: bool = True  # store prints when labels get names, recognise unnamed labels on new recordings
+    threshold: float = 0.60  # cosine similarity needed to name a label by voice (calibrated 2026-09-11, lab/FINDINGS.md)
+    margin: float = 0.10  # ... and how far ahead of the runner-up person it must be
+    min_seconds: float = 30.0  # labels with less speech are neither recognised nor enrolled
+
+
+@dataclass(frozen=True)
 class SummarizeSettings:
     enabled: bool = True  # part of `process`; failures (no model / no API key) are logged, not fatal
     provider: str = "ollama"  # ollama (local GPU) | anthropic (Claude API)
@@ -55,6 +63,7 @@ class Config:
     people_display: str = "nick"  # [people] display: first | full | nick (nick falls back to first)
     transcribe: TranscribeSettings = field(default_factory=TranscribeSettings)
     video: VideoSettings = field(default_factory=VideoSettings)
+    voiceprints: VoiceprintSettings = field(default_factory=VoiceprintSettings)
     summarize: SummarizeSettings = field(default_factory=SummarizeSettings)
     source_path: Path | None = None  # where the config was loaded from, None = defaults
 
@@ -105,6 +114,7 @@ def load_config(path: Path | None = None) -> Config:
         people_display=str(_section(data, "people").get("display", "nick")).strip() or "nick",
         transcribe=_build(TranscribeSettings, _section(data, "transcribe")),
         video=_build(VideoSettings, _section(data, "video")),
+        voiceprints=_build(VoiceprintSettings, _section(data, "voiceprints")),
         summarize=_build(SummarizeSettings, _section(data, "summarize")),
         source_path=path,
     )
@@ -151,6 +161,12 @@ glossary = []                # domain terms added to the ASR prompt
 [video]
 enabled = true
 fps = 2
+
+[voiceprints]
+enabled = true               # recognise people by voice from earlier named recordings (local file _speakers/voiceprints.json)
+threshold = 0.60             # cosine similarity needed; margin = lead over the runner-up
+margin = 0.10
+min_seconds = 30             # a speaker must talk this long before their voice is compared or stored
 
 [summarize]
 enabled = true               # run as part of `process`

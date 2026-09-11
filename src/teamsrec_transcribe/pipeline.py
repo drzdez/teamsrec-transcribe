@@ -16,9 +16,11 @@ from .people import People
 from .prompt import build_prompt
 from .providers import get_provider
 from .providers.base import Segment, Word
-from .recording import Recording, RecordingError, is_media_file, is_sidecar, iter_recordings, resolve_recording
+from .recording import (Recording, RecordingError, is_media_file, is_sidecar, iter_recordings, make_stem,
+                        resolve_recording, slugify)
 from .speakers import apply_manual_names, apply_video_timeline, speaker_list
 from .video_speakers import VideoTimeline, analyze_video
+from .voiceprints import Voiceprints, enroll_from_recording, remap_embeddings, speech_seconds
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +70,70 @@ def resolve_target(cfg: Config, target: str, *, allow_import: bool = True) -> Re
     return resolve_recording(target, cfg.out_dir)
 
 
+# ---------------------------------------------------------------- rename
+
+def _fix_heading(path: Path, title: str) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    for i, line in enumerate(lines[:3]):
+        if line.startswith("# "):
+            lines[i] = f"# {title}"
+            break
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def rename_recording(cfg: Config, rec: Recording, title: str) -> Recording:
+    """Give the recording a new title: the folder and every `<stem>.*` file are renamed to the new stem
+    (same date/time part, new slug), the sidecar, voice prints and summary headings follow. Returns the
+    renamed recording (same object when only the title text changed)."""
+    from .voiceprints import Voiceprints
+    title = " ".join(title.split())
+    if not title:
+        raise RecordingError("empty title")
+    start = datetime.fromisoformat(rec.sidecar["start"]) if rec.sidecar.get("start") else None
+    new_stem = make_stem(start, title) if start else f"{rec.stem[:16]}_{slugify(title)}"
+    old_stem, old_dir = rec.stem, rec.dir
+    if new_stem == old_stem:
+        if title != rec.title:
+            rec.sidecar["title"] = title
+            rec.save_sidecar()
+            for md in [rec.summary_path, *old_dir.glob(f"{old_stem}.summary.*.md")]:
+                if md.exists():
+                    _fix_heading(md, title)
+        return rec
+    new_dir = old_dir.with_name(new_stem)
+    if new_dir.exists():
+        raise RecordingError(f"{new_dir.name}: a recording with this name already exists")
+    old_dir.rename(new_dir)
+    for f in sorted(new_dir.iterdir()):
+        if f.name.startswith(old_stem):
+            f.rename(f.with_name(new_stem + f.name[len(old_stem):]))
+    sc = rec.sidecar
+    sc["title"], sc["slug"] = title, new_stem.split("_", 2)[2]
+    for t in (sc.get("tracks") or {}).values():
+        if isinstance(t, dict) and str(t.get("file", "")).startswith(old_stem):
+            t["file"] = new_stem + t["file"][len(old_stem):]
+    if isinstance(sc.get("mix"), dict) and str(sc["mix"].get("file", "")).startswith(old_stem):
+        sc["mix"]["file"] = new_stem + sc["mix"]["file"][len(old_stem):]
+    if str(sc.get("origin_path", "")).replace("\\", "/").startswith(str(old_dir).replace("\\", "/")):
+        sc["origin_path"] = str(new_dir / (new_stem + Path(sc["origin_path"]).name[len(old_stem):]))
+    new = Recording(stem_path=new_dir / new_stem, sidecar=sc)
+    new.save_sidecar()
+    for md in [new.summary_path, *new_dir.glob(f"{new_stem}.summary.*.md")]:
+        if md.exists():
+            _fix_heading(md, title)
+    vp = Voiceprints.load(cfg.out_dir)
+    touched = False
+    for prints in vp.people.values():
+        for pr in prints:
+            if pr.get("stem") == old_stem:
+                pr["stem"] = new_stem
+                touched = True
+    if touched:
+        vp.save()
+    log.info("renamed %s -> %s", old_stem, new_stem)
+    return new
+
+
 # ---------------------------------------------------------------- transcribe
 
 def _ensure_mix(rec: Recording) -> Path:
@@ -108,15 +174,23 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     res = provider.transcribe(audio, language=language, prompt=prompt, settings=ts, diarize=want_diarize)
     log.info("%s: %d segments, language %s, timings %s", rec.stem, len(res.segments), res.language, res.timings)
 
+    labels_before = [s.speaker for s in res.segments]
     if timeline:
         apply_video_timeline(res.segments, timeline)
     mic = rec.track_path("mic")
     speaker_sources = ["video"] if timeline else []
+    mic_mapping: dict[str, str] = {}
     if cfg.user_name and mic and mic.exists():
-        if apply_mic_track(res.segments, mic, cfg.user_name):
+        mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)
+        if mic_mapping:
             speaker_sources.append("mic")
     elif mic and mic.exists():
         log.info("%s: mic track present but [user] name is not set, your voice stays SPEAKER_xx", rec.stem)
+    embeddings = remap_embeddings(res.speaker_embeddings or {}, labels_before, [s.speaker for s in res.segments])
+    durations = speech_seconds([{"start": s.start, "end": s.end, "speaker": s.speaker} for s in res.segments])
+    voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
+    if voice_matches:
+        speaker_sources.append("voiceprint")
     speaker_sources.append("diarization")
 
     transcript = {
@@ -130,10 +204,62 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
         "timings": res.timings,
         "speaker_sources": speaker_sources,
         "speakers": speaker_list(res.segments),
+        "diarize_model": res.diarize_model,
+        "speaker_embeddings": embeddings,  # keyed by the final speaker names, unit vectors
+        "voice_matches": voice_matches,
         "segments": [s.to_json() for s in res.segments],
     }
     rec.write_json(rec.transcript_path, transcript)
     return rec.transcript_path
+
+
+def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[float]], durations: dict[str, float],
+                      mic_mapping: dict[str, str], model: str) -> dict:
+    """Name still-unknown labels by voice (writes speakers.json like a manual assignment) and store the user's
+    own print from the mic track. Returns {label: {"person", "score"}} for the transcript / review page."""
+    if not cfg.voiceprints.enabled or not embeddings:
+        return {}
+    vp = Voiceprints.load(cfg.out_dir)
+    people = People.load(cfg.out_dir, cfg.people_display)
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    matches: dict = {}
+    unknown = {lab: v for lab, v in embeddings.items() if lab.startswith("SPEAKER_") and not names.get(lab)}
+    vs = cfg.voiceprints
+    for label, (pid, score) in vp.recognize(unknown, vs.threshold, vs.margin, durations, vs.min_seconds).items():
+        person = people.get(pid)
+        if person is None:  # print of a person that was deleted from the registry
+            continue
+        names[label] = pid
+        matches[label] = {"person": pid, "score": score}
+        log.info("%s: %s recognised by voice as %s (%.2f)", rec.stem, label, person.full, score)
+    if matches:
+        rec.write_json(rec.speakers_path, names)
+    changed = 0
+    if mic_mapping and cfg.user_name:
+        me = people.find(cfg.user_name)
+        vec = embeddings.get(cfg.user_name)
+        if me and vec and durations.get(cfg.user_name, 0.0) >= cfg.voiceprints.min_seconds:
+            changed += vp.enroll(me.id, vec, rec.stem, cfg.user_name, model)
+    # names assigned by hand before a re-transcription (or by voice just now) are worth a print too
+    manual = {lab: pid for lab, pid in names.items() if lab not in matches and people.get(pid)}
+    changed += enroll_from_recording(vp, {"speaker_embeddings": embeddings, "diarize_model": model,
+                                          "segments": [{"start": 0, "end": durations.get(lab, 0.0), "speaker": lab}
+                                                       for lab in embeddings]},
+                                     manual, rec.stem, cfg.voiceprints.min_seconds)
+    if changed:
+        vp.save()
+    return matches
+
+
+def enroll_names(cfg: Config, rec: Recording, names: dict[str, str]) -> int:
+    """Store voice prints for labels that just got a person (review page, label-speakers)."""
+    if not cfg.voiceprints.enabled or not rec.transcript_path.exists():
+        return 0
+    vp = Voiceprints.load(cfg.out_dir)
+    added = enroll_from_recording(vp, rec.read_json(rec.transcript_path), names, rec.stem, cfg.voiceprints.min_seconds)
+    if added:
+        vp.save()
+    return added
 
 
 # ---------------------------------------------------------------- export

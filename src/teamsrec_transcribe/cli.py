@@ -163,6 +163,63 @@ def label_speakers(ctx: typer.Context, target: str):
     rec.write_json(rec.speakers_path, existing)
     for p in do_export(cfg, rec):
         typer.echo(p)
+    from .pipeline import enroll_names
+    n = enroll_names(cfg, rec, existing)
+    if n:
+        typer.echo(f"{n} voice print(s) stored")
+
+
+@app.command()
+@_errors
+def rename(ctx: typer.Context, target: str = typer.Argument(..., help="stem, recording file, or `latest`"),
+           title: str = typer.Argument(..., help="new meeting title")):
+    """Give a recording a new title: folder and files get the new stem, exports and summary headings follow."""
+    from .pipeline import do_export, rename_recording, resolve_target
+    cfg = _cfg(ctx)
+    rec = resolve_target(cfg, target, allow_import=False)
+    rec = rename_recording(cfg, rec, title)
+    if rec.transcript_path.exists():
+        do_export(cfg, rec)
+    typer.echo(rec.stem_path)
+
+
+people_app = typer.Typer(help="The people registry (_speakers/people.json) and voice prints.", no_args_is_help=True)
+app.add_typer(people_app, name="people")
+
+
+@people_app.command("list")
+def people_list(ctx: typer.Context):
+    """People known to the registry, how they print, how many voice prints each has."""
+    from .people import People
+    from .voiceprints import Voiceprints
+    cfg = _cfg(ctx)
+    ppl = People.load(cfg.out_dir, cfg.people_display)
+    vp = Voiceprints.load(cfg.out_dir)
+    for p in ppl.people:
+        typer.echo(f"{p.id:28s} {p.full:28s} nick={p.nick or '-':12s} shown={p.name(ppl.default_mode):16s} prints={vp.count(p.id)}")
+    if not ppl.people:
+        typer.echo("(nobody yet)")
+
+
+@people_app.command("merge")
+@_errors
+def people_merge(ctx: typer.Context, keep: str = typer.Argument(..., help="person id to keep"),
+                 drop: str = typer.Argument(..., help="person id to fold into it")):
+    """Merge two entries of the same person; rewrites their assignments in every recording."""
+    from .web.review import merge_people
+    cfg = _cfg(ctx)
+    merge_people(cfg, keep, drop)
+    typer.echo(f"merged {drop} into {keep}")
+
+
+@people_app.command("forget-voice")
+def people_forget_voice(ctx: typer.Context, person: str = typer.Argument(..., help="person id")):
+    """Delete the stored voice prints of one person (the registry entry stays)."""
+    from .voiceprints import Voiceprints
+    vp = Voiceprints.load(_cfg(ctx).out_dir)
+    vp.forget(person)
+    vp.save()
+    typer.echo(f"voice prints of {person} deleted")
 
 
 @app.command()

@@ -10,10 +10,14 @@ API
   GET  /api/recordings           recent recordings with their unresolved-speaker count
   GET  /api/recording?stem=      everything the page needs for one recording
   GET  /api/clip?stem=&start=&end=   a WAV clip cut from the 16 kHz mix (max CLIP_MAX_S seconds)
-  POST /api/save                 {"stem", "names": {label: typed name}, "summary": bool} -> speakers.json holds
-                                 person ids (people are created from unknown names), exports regenerated
-  GET  /api/people               the people registry (_speakers/people.json)
+  POST /api/save                 {"stem", "names": {label: name}, "summary": bool, "title"?}; a name is either a string
+                                 ("Petr Svoboda") or {"first", "last", "nick", "display"}. speakers.json holds
+                                 person ids (people are created or updated from the fields), exports regenerated
+  GET  /api/people               the people registry (_speakers/people.json) with voice-print counts
   POST /api/people               {"people": [...], "stem"?} -> replace the registry, re-export that recording
+  POST /api/people/merge         {"keep", "drop", "stem"?} -> fold one person into another everywhere
+  GET  /api/person?id=           one person with their voice prints (recording, label, when, sample to play)
+  POST /api/person/forget        {"id", "stem"?, "label"?} -> drop one print (stem+label) or all prints of the person
   GET  /api/status               background job (summary) state
   POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
   POST /api/quit                 stop the server
@@ -42,8 +46,9 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..config import Config
-from ..people import DISPLAY_MODES, People
-from ..pipeline import do_export, do_summarize, load_segments
+from ..people import DISPLAY_MODES, People, Person
+from ..pipeline import do_export, do_summarize, enroll_names, load_segments, rename_recording
+from ..voiceprints import Voiceprints
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
 from ..speakers import speaker_list
@@ -116,7 +121,8 @@ def _person_info(people: People, value: str) -> dict | None:
     p = people.get(value) or people.find(value)
     if not p:
         return None
-    return {"id": p.id, "full": p.full, "nick": p.nick, "shown": p.name(people.default_mode)}
+    return {"id": p.id, "first": p.first, "last": p.last, "nick": p.nick, "display": p.display,
+            "full": p.full, "shown": p.name(people.default_mode)}
 
 
 def _fmt_hms(t: float) -> str:
@@ -131,6 +137,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     people = People.load(cfg.out_dir, cfg.people_display)
     hints = summary_hints(rec)
+    voice = data.get("voice_matches") or {}
     by: dict[str, list[Segment]] = {}
     for s in segs:
         by.setdefault(s.speaker or "UNKNOWN", []).append(s)
@@ -140,11 +147,22 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         excerpts = sorted(ss, key=lambda s: -len(s.text))[:EXCERPTS_PER_SPEAKER]
         value = manual.get(label, "" if is_label(label) else label)
         person = _person_info(people, value) if value else None
+        if person:
+            fields = {k: person[k] for k in ("first", "last", "nick", "display")}
+        elif value:  # a literal name (video OCR, mic config) that is not registered yet
+            parts = value.split()
+            fields = {"first": parts[0], "last": " ".join(parts[1:]), "nick": "", "display": ""}
+        else:
+            fields = {"first": "", "last": "", "nick": "", "display": ""}
         speakers.append({
             "label": label,
             "unresolved": is_label(label),
-            "name": person["full"] if person else value,  # what the input shows
+            "name": person["full"] if person else value,
+            "fields": fields,  # what the inputs show
             "person": person,  # None for literal names (video / mic) that are not registered
+            "voice": ({"person": voice[label]["person"], "score": voice[label]["score"],
+                       "name": (people.get(voice[label]["person"]) or Person(voice[label]["person"])).full}
+                      if label in voice else None),
             "seconds": round(secs, 1),
             "count": len(ss),
             "hint": hints.get(label, ""),
@@ -200,24 +218,129 @@ def clip_wav(mix: Path, start: float, end: float) -> bytes:
 
 # ---------------------------------------------------------------- saving
 
-def save_names(cfg: Config, rec: Recording, names: dict[str, str]) -> dict[str, str]:
-    """Write speakers.json with person ids (people created from unknown names), regenerate txt/srt.
+def _person_from_fields(people: People, fields: dict) -> "Person | None":
+    """Find or create the person for {first, last, nick, display}; updates nick/display of a known person."""
+    first, last, nick = (str(fields.get(k) or "").strip() for k in ("first", "last", "nick"))
+    display = str(fields.get("display") or "")
+    if not (first or last or nick):
+        return None
+    full = f"{first} {last}".strip()
+    p = (people.find(full) if full else None) or (people.find(nick) if nick and not full else None)
+    if p is None:
+        p = Person.from_text(full or nick, {q.id for q in people.people})
+        if not full:
+            p.first = ""
+        people.people.append(p)
+    if nick:
+        p.nick = nick
+    if display in DISPLAY_MODES or display == "":
+        p.display = display
+    return p
+
+
+def save_title(cfg: Config, rec: Recording, title: str) -> Recording:
+    """New meeting title: folder, files, sidecar, voice prints and summary headings are renamed along
+    (see pipeline.rename_recording). Returns the (possibly moved) recording."""
+    title = " ".join(title.split())
+    if not title or title == rec.title:
+        return rec
+    return rename_recording(cfg, rec, title)
+
+
+def save_names(cfg: Config, rec: Recording, names: dict) -> dict[str, str]:
+    """Write speakers.json with person ids (people created/updated from the fields), regenerate txt/srt.
     Returns {label: person id} of what was written."""
     people = People.load(cfg.out_dir, cfg.people_display)
-    before = len(people.people)
+    snapshot = json.dumps(people.to_json(), sort_keys=True)
     clean: dict[str, str] = {}
     for label, name in names.items():
-        name = (name or "").strip()
-        if not name or name == label:
+        if isinstance(name, dict):
+            p = _person_from_fields(people, name)
+            if p is not None:
+                clean[label] = p.id
             continue
-        clean[label] = label if is_label(name) else people.ensure(name).id
-        if clean[label] == label:
-            del clean[label]
-    if len(people.people) != before:
+        name = (name or "").strip()
+        if not name or name == label or is_label(name):
+            continue
+        clean[label] = people.ensure(name).id
+    if json.dumps(people.to_json(), sort_keys=True) != snapshot:
         people.save()
     rec.write_json(rec.speakers_path, clean)
     do_export(cfg, rec)
+    enroll_names(cfg, rec, clean)
     return clean
+
+
+def merge_people(cfg: Config, keep: str, drop: str, stem: str | None = None) -> list[dict]:
+    people = People.load(cfg.out_dir, cfg.people_display)
+    changed = people.merge(keep, drop, iter_recordings(cfg.out_dir))
+    people.save()
+    vp = Voiceprints.load(cfg.out_dir)
+    vp.rename(drop, keep)
+    vp.save()
+    for r in changed:
+        if r.transcript_path.exists():
+            do_export(cfg, r)
+    if stem and stem not in {r.stem for r in changed}:
+        r = resolve_recording(stem, cfg.out_dir)
+        if r.transcript_path.exists():
+            do_export(cfg, r)
+    return people.to_json()
+
+
+def person_detail(cfg: Config, pid: str) -> dict:
+    people = People.load(cfg.out_dir, cfg.people_display)
+    p = people.get(pid)
+    if p is None:
+        raise RecordingError(f"unknown person {pid!r}")
+    vp = Voiceprints.load(cfg.out_dir)
+    recs = {r.stem: r for r in iter_recordings(cfg.out_dir)}
+    prints = []
+    for pr in vp.people.get(pid, []):
+        row = {"stem": pr.get("stem"), "label": pr.get("label"), "added": pr.get("added"), "dims": len(pr.get("v", [])),
+               "title": None, "start": None, "seconds": None, "samples": [], "has_mix": False}
+        rec = recs.get(pr.get("stem") or "")
+        if rec is not None:
+            row["title"], row["start"] = rec.title, rec.sidecar.get("start")
+            row["has_mix"] = bool(rec.mix_path and rec.mix_path.exists())
+            if rec.transcript_path.exists():
+                try:
+                    _, segs = load_segments(rec)
+                    mine = [s for s in segs if s.speaker == pr.get("label")]
+                    row["seconds"] = round(sum(s.end - s.start for s in mine), 1)
+                    row["samples"] = [{"start": round(s.start, 2), "end": round(min(s.end, s.start + CLIP_MAX_S), 2),
+                                       "at": _fmt_hms(s.start), "text": s.text[:140]} for s in pick_samples(mine)]
+                except Exception:
+                    pass
+        prints.append(row)
+    d = {"id": p.id, "first": p.first, "last": p.last, "nick": p.nick, "display": p.display, "aliases": p.aliases,
+         "shown": p.name(people.default_mode), "model": vp.model, "prints": prints,
+         "recordings": sorted({r.stem for r in recs.values() if r.speakers_path.exists()
+                               and pid in r.read_json(r.speakers_path).values()}, reverse=True)}
+    return d
+
+
+def forget_print(cfg: Config, pid: str, stem: str | None, label: str | None) -> int:
+    vp = Voiceprints.load(cfg.out_dir)
+    before = vp.count(pid)
+    if stem and label:
+        vp.people[pid] = [pr for pr in vp.people.get(pid, []) if not (pr.get("stem") == stem and pr.get("label") == label)]
+        if not vp.people[pid]:
+            del vp.people[pid]
+    else:
+        vp.forget(pid)
+    vp.save()
+    return before - vp.count(pid)
+
+
+def people_rows(cfg: Config) -> dict:
+    people = People.load(cfg.out_dir, cfg.people_display)
+    vp = Voiceprints.load(cfg.out_dir)
+    rows = people.to_json()
+    for r in rows:
+        r["prints"] = vp.count(r["id"])
+    return {"people": rows, "display_default": people.default_mode, "modes": list(DISPLAY_MODES),
+            "path": str(people.path)}
 
 
 def save_people(cfg: Config, rows: list[dict], stem: str | None = None) -> list[dict]:
@@ -319,9 +442,9 @@ def _handler(state: ReviewState, server_ref: dict):
                     end = min(float(q.get("end", ["0"])[0]), start + CLIP_MAX_S)
                     self._bytes(clip_wav(rec.mix_path, start, end), "audio/wav")
                 elif u.path == "/api/people":
-                    people = People.load(state.cfg.out_dir, state.cfg.people_display)
-                    self._json({"people": people.to_json(), "display_default": people.default_mode,
-                                "modes": list(DISPLAY_MODES)})
+                    self._json(people_rows(state.cfg))
+                elif u.path == "/api/person":
+                    self._json(person_detail(state.cfg, (q.get("id") or [""])[0]))
                 elif u.path == "/api/status":
                     self._json(state.status())
                 else:
@@ -340,14 +463,28 @@ def _handler(state: ReviewState, server_ref: dict):
                     return
                 if u.path == "/api/save":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    if body.get("title") is not None:
+                        rec = save_title(state.cfg, rec, str(body.get("title")))
                     written = save_names(state.cfg, rec, body.get("names") or {})
                     if body.get("summary"):
                         state.run_summary(rec)
-                    self._json({"ok": True, "written": written, "status": state.status()})
+                    self._json({"ok": True, "written": written, "stem": rec.stem, "title": rec.title,
+                                "status": state.status()})
                 elif u.path == "/api/people":
                     rows = save_people(state.cfg, body.get("people") or [], body.get("stem") or None)
                     self._json({"ok": True, "people": rows})
+                elif u.path == "/api/person/forget":
+                    n = forget_print(state.cfg, str(body.get("id") or ""), body.get("stem"), body.get("label"))
+                    self._json({"ok": True, "removed": n})
+                elif u.path == "/api/people/merge":
+                    rows = merge_people(state.cfg, str(body.get("keep") or ""), str(body.get("drop") or ""),
+                                        body.get("stem") or None)
+                    self._json({"ok": True, "people": rows})
                 elif u.path == "/api/quit":
+                    if state.status()["busy"]:
+                        self._json({"error": "the summary is still being generated, wait for it to finish"},
+                                   HTTPStatus.CONFLICT)
+                        return
                     self._json({"ok": True})
                     threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
                 else:

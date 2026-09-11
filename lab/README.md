@@ -13,3 +13,11 @@ uv pip install --python .venv/Scripts/python.exe --reinstall torch==2.8.0 torcha
 
 `requirements-lab.txt` is the resulting freeze. `samples/` and `out/` are git-ignored.
 Diarization needs `HF_TOKEN` and accepted terms for `pyannote/speaker-diarization-3.1` and `pyannote/segmentation-3.0`.
+
+## voiceprints_calib.py
+
+Diarizes every recording in OUT_DIR with speaker embeddings, names the labels via the existing transcripts and prints the cosine similarity of every (recording, speaker) pair: the basis for `[voiceprints] threshold / margin / min_seconds` (results in FINDINGS.md).
+
+```
+.venv/Scripts/python lab/voiceprints_calib.py [OUT_DIR]
+```

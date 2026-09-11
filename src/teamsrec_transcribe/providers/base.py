@@ -46,6 +46,8 @@ class ProviderResult:
     provider_version: str
     model: str
     timings: dict[str, float] = field(default_factory=dict)
+    speaker_embeddings: dict[str, list[float]] | None = None  # per diarization label, for voice prints
+    diarize_model: str = ""
 
 
 class TranscriptionProvider(Protocol):

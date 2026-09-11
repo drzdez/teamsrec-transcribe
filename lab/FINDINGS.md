@@ -70,3 +70,21 @@ Design consequences:
 - WhisperX shells out to `ffmpeg`; the WinGet install is not on PATH inside Git Bash — use the package `bin` dir.
 - HuggingFace: `hf auth login` (token in `~/.cache/huggingface/token`) + accept terms of
   `pyannote/speaker-diarization-community-1`.
+
+## Hlasové otisky – kalibrace (2026-09-11)
+
+Skript `lab/voiceprints_calib.py`: diarizace všech nahrávek v OUT_DIR s `return_embeddings=True`
+(pyannote community-1 přes whisperx), označení pojmenována překryvem s existujícím přepisem, kosinová
+podobnost všech dvojic (nahrávka, mluvčí). Tři nahrávky (12 s, 29 min, 10 min), 8 označení.
+
+| dvojice | podobnost |
+|---|---|
+| Zdeněk 29 min (mikrofon) × Zdeněk 10 min (mikrofon) | 0.94 |
+| Zdeněk 12 s × Zdeněk 29 / 10 min | 0.43 / 0.44 |
+| různí lidé, pojmenovaní (Zdeněk × Ori, Zdeněk × Miro, Ori × Miro) | max 0.36, průměr 0.24 |
+| nepojmenované SPEAKER_02 (24 s, 29 min nahrávka) × Zdeněk 10 min | 0.56 |
+
+Závěry: dostatečně dlouhá promluva téhož člověka dává shodu vysoko nad různými lidmi; krátké promluvy
+(pod ~30 s) dávají nespolehlivý embedding na obě strany (0.43 pro téhož člověka, 0.56 pro cizí hlas).
+Nastaveno: `threshold = 0.60`, `margin = 0.10`, `min_seconds = 30` (kratší označení se neporovnávají
+ani neukládají). Přehodnotit po 10+ nahrávkách s více lidmi.

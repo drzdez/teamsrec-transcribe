@@ -39,6 +39,8 @@ teamsrec-transcribe label-speakers <stem>       # interactive: SPEAKER_00 -> "Ja
 teamsrec-transcribe export <stem> [--txt] [--srt]
 teamsrec-transcribe summarize <stem> [--provider ollama|anthropic] [--model ...] [--language cs]
 teamsrec-transcribe review [latest|<stem>]              # local page: listen to each speaker, type names, save
+teamsrec-transcribe people list | merge KEEP DROP | forget-voice ID
+teamsrec-transcribe rename <stem> "New title"           # renames the folder + files to the new stem
 teamsrec-transcribe purge-audio [--older-than 30d]   # later: delete WAVs, keep transcripts
 ```
 
@@ -156,7 +158,10 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 - `web/`: the review page. `review.py` = data functions + a stdlib HTTP server on 127.0.0.1 with a small JSON API
   (documented in the module docstring); `index.html` = one page of vanilla JS (`@ts-check` + JSDoc types), no build
   step, no framework. Writes only `<stem>.speakers.json`, then regenerates exports and (on request) the summary.
-- planned (2026-09-10): voice prints – a speaker named once via `label-speakers` gets a local pyannote embedding
-  and is recognised automatically in later recordings (any source); then live Teams-window capture on the capture side
+- `voiceprints.py`: the diarization embeddings (pyannote community-1 via whisperx `return_embeddings`) are stored
+  under a person when a label gets a name (`_speakers/voiceprints.json`, max 10 per person, the user's own from
+  the mic track); unnamed labels of new recordings are named when cosine similarity >= `[voiceprints] threshold`
+  and ahead of the runner-up by `margin`; the match is written to `speakers.json` + `voice_matches` in the transcript
+- planned: live Teams-window capture on the capture side
 - `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms / speakers), two backends in
   `llm.py`: Ollama REST (`/api/chat`, context sized to the transcript) and the Anthropic SDK (streaming, cached system prompt)

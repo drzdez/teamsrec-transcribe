@@ -75,11 +75,12 @@ class WhisperXProvider:
             except ValueError as e:  # no alignment model for this language
                 log.warning("alignment skipped: %s", e)
 
+        embeddings = None
         if diarize:
             t = time.time()
             from whisperx.diarize import DiarizationPipeline
             pipeline = DiarizationPipeline(model_name=settings.diarize_model, device=device)
-            dia = pipeline(wav)
+            dia, embeddings = pipeline(wav, return_embeddings=True)  # one embedding per diarization label
             result = whisperx.assign_word_speakers(dia, result)
             timings["diarize_s"] = round(time.time() - t, 1)
 
@@ -94,4 +95,5 @@ class WhisperXProvider:
                                     speaker=s.get("speaker"), track="mix", words=words))
         timings["total_s"] = round(sum(timings.values()), 1)
         return ProviderResult(segments=segments, language=detected, provider=self.name,
-                              provider_version=_pkg_version("whisperx"), model=settings.model, timings=timings)
+                              provider_version=_pkg_version("whisperx"), model=settings.model, timings=timings,
+                              speaker_embeddings=embeddings, diarize_model=settings.diarize_model if diarize else "")

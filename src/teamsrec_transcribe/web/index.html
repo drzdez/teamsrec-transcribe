@@ -21,6 +21,10 @@
            padding: 10px 20px; display: flex; gap: 14px; align-items: center; flex-wrap: wrap; }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; white-space: nowrap; }
   header select { max-width: 46vw; }
+  .tabs { display: flex; gap: 2px; margin-left: auto; }
+  .tabs button { border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 5px 12px; cursor: pointer; font: inherit; }
+  .tabs button:first-child { border-radius: 8px 0 0 8px; } .tabs button:last-child { border-radius: 0 8px 8px 0; }
+  .tabs button.active { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
   .meta { color: var(--muted); font-size: 13px; }
   main { max-width: 1000px; margin: 0 auto; padding: 16px 20px 120px; }
   .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin: 12px 0;
@@ -36,9 +40,18 @@
   .excerpt { color: var(--muted); font-size: 13px; margin: 4px 0 0; }
   .excerpt b { color: var(--fg); font-weight: 500; }
   .side { display: flex; flex-direction: column; gap: 8px; }
+  .shown { font-size: 13px; color: var(--muted); }
+  .shown b { color: var(--fg); font-weight: 500; }
   input[type=text], select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
   input[type=text]:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .same { font-size: 13px; color: var(--muted); }
+  table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { font-size: 13px; color: var(--muted); font-weight: 500; }
+  td input[type=text], td select { padding: 6px 8px; }
+  td.act { width: 44px; text-align: center; }
+  td.act button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
+  .people-help { color: var(--muted); font-size: 13px; margin: 8px 0 14px; }
   footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line);
            padding: 10px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   footer button { padding: 9px 16px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
@@ -48,6 +61,7 @@
   #status.ok { color: var(--ok); } #status.err { color: var(--err); }
   .empty { color: var(--muted); padding: 40px 0; text-align: center; }
   kbd { font: 12px ui-monospace, Consolas, monospace; border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  [hidden] { display: none !important; }
   @media (max-width: 720px) { .card { grid-template-columns: 1fr; } header select { max-width: 100%; } }
 </style>
 </head>
@@ -56,13 +70,24 @@
   <h1>teamsrec · mluvčí</h1>
   <select id="pick" title="nahrávka"></select>
   <span class="meta" id="meta"></span>
+  <div class="tabs">
+    <button id="tabSpeakers" class="active" type="button">Mluvčí</button>
+    <button id="tabPeople" type="button">Lidé</button>
+  </div>
 </header>
 <main id="main"><div class="empty">Načítám…</div></main>
+<main id="peopleMain" hidden></main>
 <footer>
-  <button id="save" class="primary">Uložit</button>
-  <button id="saveSum">Uložit a přegenerovat zápis</button>
+  <span id="speakerButtons">
+    <button id="save" class="primary">Uložit</button>
+    <button id="saveSum">Uložit a přegenerovat zápis</button>
+  </span>
+  <span id="peopleButtons" hidden>
+    <button id="savePeople" class="primary">Uložit lidi</button>
+    <button id="addPerson">Přidat osobu</button>
+  </span>
   <button id="quit">Zavřít</button>
-  <span class="meta">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
+  <span class="meta" id="tip">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
   <span id="status"></span>
 </footer>
 <audio id="audio"></audio>
@@ -71,15 +96,20 @@
 // @ts-check
 /**
  * @typedef {{start:number,end:number,at:string,text:string}} Sample
- * @typedef {{label:string,unresolved:boolean,name:string,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,language:string,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[]}} Review
+ * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
+ * @typedef {{label:string,unresolved:boolean,name:string,person:PersonInfo|null,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[]}} Person
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,language:string,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
  */
 
 const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
-const main = $("main"), pick = /** @type {HTMLSelectElement} */ ($("pick")), meta = $("meta"), status = $("status");
+const main = $("main"), peopleMain = $("peopleMain"), pick = /** @type {HTMLSelectElement} */ ($("pick")), meta = $("meta"), status = $("status");
 const audio = /** @type {HTMLAudioElement} */ ($("audio"));
+const MODE_LABEL = { "": "výchozí", first: "jméno", full: "jméno a příjmení", nick: "přezdívka" };
 /** @type {Review|null} */ let review = null;
+/** @type {Person[]} */ let people = [];
+let displayDefault = "nick";
 /** @type {HTMLButtonElement|null} */ let playingBtn = null;
 
 /** @param {string} url @param {RequestInit=} init */
@@ -92,9 +122,13 @@ async function api(url, init) {
 
 /** @param {string} msg @param {"ok"|"err"|""=} kind */
 function setStatus(msg, kind = "") { status.textContent = msg; status.className = kind; }
-
 function fmtMin(/** @type {number} */ s) { return s >= 60 ? `${(s / 60).toFixed(1)} min` : `${Math.round(s)} s`; }
 function fmtDate(/** @type {string} */ iso) { return iso ? iso.replace("T", " ").slice(0, 16) : ""; }
+function escapeHtml(/** @type {string} */ s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] || c);
+}
+
+// ---------------------------------------------------------------- recordings
 
 async function loadList() {
   /** @type {RecordingRow[]} */
@@ -120,15 +154,18 @@ async function loadRecording(/** @type {string} */ stem) {
   try {
     review = await api(`/api/recording?stem=${encodeURIComponent(stem)}`);
   } catch (e) {
-    main.innerHTML = `<div class="empty">${String(e)}</div>`; review = null; return;
+    main.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; review = null; return;
   }
   location.hash = stem;
   const r = review;
+  people = r.people; displayDefault = r.display_default;
   meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · ${r.language || "?"} · mluvčí z: ${(r.speaker_sources || []).join(", ") || "diarizace"}`;
-  render();
+  renderSpeakers();
 }
 
-function render() {
+// ---------------------------------------------------------------- speakers tab
+
+function renderSpeakers() {
   if (!review) return;
   main.innerHTML = "";
   const dl = document.createElement("datalist"); dl.id = "names";
@@ -138,12 +175,24 @@ function render() {
   review.speakers.forEach((sp, i) => main.appendChild(card(sp, i)));
 }
 
-/** names for the datalist: known ones + whatever is typed on the page */
 function refreshNames() {
   const dl = document.getElementById("names"); if (!dl || !review) return;
   const typed = [...main.querySelectorAll("input[data-label]")].map(el => /** @type {HTMLInputElement} */ (el).value.trim());
   const all = [...new Set([...review.known_names, ...typed].filter(Boolean))].sort((a, b) => a.localeCompare(b, "cs"));
-  dl.innerHTML = all.map(n => `<option value="${n.replace(/"/g, "&quot;")}">`).join("");
+  dl.innerHTML = all.map(n => `<option value="${escapeHtml(n)}">`).join("");
+}
+
+/** what the exports will print for a typed name, using the people registry loaded in the page */
+function shownFor(/** @type {string} */ text) {
+  const t = text.trim().toLocaleLowerCase("cs");
+  if (!t) return "";
+  const p = people.find(p => [p.id, `${p.first} ${p.last}`.trim(), p.nick, ...(p.aliases || [])]
+    .some(c => c && c.toLocaleLowerCase("cs") === t)) || people.find(p => p.first.toLocaleLowerCase("cs") === t);
+  if (!p) return text.trim().split(/\s+/)[0] + " (nová osoba)";
+  const mode = p.display || displayDefault;
+  if (mode === "nick" && p.nick) return p.nick;
+  if ((mode === "nick" || mode === "first") && p.first) return p.first;
+  return `${p.first} ${p.last}`.trim() || p.nick || p.id;
 }
 
 /** @param {Speaker} sp @param {number} i */
@@ -151,7 +200,7 @@ function card(sp, i) {
   const c = document.createElement("section");
   c.className = "card" + (sp.unresolved ? "" : " done");
   const left = document.createElement("div");
-  left.innerHTML = `<span class="label ${sp.unresolved ? "" : "named"}">${sp.label}</span>` +
+  left.innerHTML = `<span class="label ${sp.unresolved ? "" : "named"}">${escapeHtml(sp.label)}</span>` +
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
   const samples = document.createElement("div"); samples.className = "samples";
@@ -170,21 +219,26 @@ function card(sp, i) {
   }
   const side = document.createElement("div"); side.className = "side";
   const input = document.createElement("input");
-  input.type = "text"; input.placeholder = sp.unresolved ? "jméno (prázdné = nechat)" : "jméno";
+  input.type = "text"; input.placeholder = sp.unresolved ? "jméno a příjmení (prázdné = nechat)" : "jméno";
   input.value = sp.name; input.setAttribute("list", "names"); input.dataset.label = sp.label; input.autocomplete = "off";
-  input.addEventListener("input", refreshNames);
-  input.addEventListener("keydown", ev => {
-    if (ev.key === "Enter") { ev.preventDefault(); focusNext(i); }
-  });
+  const shown = document.createElement("div"); shown.className = "shown";
+  const updateShown = () => {
+    const v = input.value.trim();
+    shown.innerHTML = v && v !== sp.label ? `v zápisu: <b>${escapeHtml(shownFor(v))}</b>` : "";
+  };
+  input.addEventListener("input", () => { refreshNames(); updateShown(); });
+  input.addEventListener("keydown", ev => { if (ev.key === "Enter") { ev.preventDefault(); focusNext(i); } });
   side.appendChild(input);
+  side.appendChild(shown);
+  updateShown();
   const others = (review ? review.speakers : []).filter(o => o.label !== sp.label);
   if (others.length) {
     const sel = document.createElement("select"); sel.className = "same";
     sel.innerHTML = '<option value="">stejná osoba jako…</option>' +
-      others.map(o => `<option value="${o.label}">${o.label}${o.name && o.name !== o.label ? " = " + escapeHtml(o.name) : ""}</option>`).join("");
+      others.map(o => `<option value="${escapeHtml(o.label)}">${escapeHtml(o.label)}${o.name && o.name !== o.label ? " = " + escapeHtml(o.name) : ""}</option>`).join("");
     sel.onchange = () => {
-      const src = /** @type {HTMLInputElement|null} */ (main.querySelector(`input[data-label="${sel.value}"]`));
-      if (src) { input.value = src.value.trim() || sel.value; refreshNames(); }
+      const src = /** @type {HTMLInputElement|null} */ (main.querySelector(`input[data-label="${CSS.escape(sel.value)}"]`));
+      if (src) { input.value = src.value.trim() || sel.value; refreshNames(); updateShown(); }
       sel.value = "";
     };
     side.appendChild(sel);
@@ -235,7 +289,11 @@ async function save(/** @type {boolean} */ withSummary) {
     const n = Object.keys(r.written).length;
     setStatus(`uloženo (${n} jmen), přepis a titulky přegenerovány${withSummary ? ", zápis se generuje…" : ""}`, "ok");
     if (withSummary) await waitForSummary();
-    await loadList(); pick.value = review.stem;
+    const stem = review.stem;
+    await loadList(); pick.value = stem;
+    await loadRecording(stem);  // people may have been created; refresh the "v zápisu" previews
+    if (withSummary) setStatus("uloženo, zápis přegenerován", "ok");
+    else setStatus(`uloženo (${n} jmen), přepis a titulky přegenerovány`, "ok");
   } catch (e) {
     setStatus(String(e), "err");
   } finally {
@@ -248,31 +306,125 @@ async function waitForSummary() {
     await new Promise(res => setTimeout(res, 2000));
     const s = await api("/api/status");
     if (s.error) { setStatus(`zápis se nepodařil: ${s.error}`, "err"); return; }
-    if (!s.busy) { setStatus("uloženo, zápis přegenerován", "ok"); return; }
+    if (!s.busy) return;
     setStatus("zápis se generuje… (lokální model, 1–3 min)");
   }
 }
 
-function escapeHtml(/** @type {string} */ s) {
-  return s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] || c);
+// ---------------------------------------------------------------- people tab
+
+async function loadPeople() {
+  const r = await api("/api/people");
+  people = r.people; displayDefault = r.display_default;
+  renderPeople();
 }
 
+function renderPeople() {
+  peopleMain.innerHTML = `<p class="people-help">Co se píše do přepisu a zápisu: výchozí volba je <b>${MODE_LABEL[displayDefault] || displayDefault}</b>
+    (nastavení <code>[people] display</code> v konfiguraci); u osoby ji lze změnit. Přezdívka bez vyplnění znamená jméno.
+    Aliasy jsou další podoby jména, třeba jak ho ukazuje Teams.</p>`;
+  const t = document.createElement("table");
+  t.innerHTML = `<thead><tr><th>Jméno</th><th>Příjmení</th><th>Přezdívka</th><th>V zápisu</th><th>Aliasy</th><th></th></tr></thead>`;
+  const tb = document.createElement("tbody");
+  for (const p of people) tb.appendChild(personRow(p));
+  t.appendChild(tb);
+  peopleMain.appendChild(t);
+  if (!people.length) peopleMain.innerHTML += '<div class="empty">Zatím nikdo. Osoby vznikají při ukládání jmen na záložce Mluvčí, nebo tlačítkem Přidat osobu.</div>';
+}
+
+/** @param {Person} p */
+function personRow(p) {
+  const tr = document.createElement("tr");
+  tr.dataset.id = p.id;
+  const cell = (/** @type {string} */ key, /** @type {string} */ ph = "") => {
+    const td = document.createElement("td");
+    const inp = document.createElement("input"); inp.type = "text"; inp.value = /** @type {any} */ (p)[key] || ""; inp.placeholder = ph;
+    inp.dataset.key = key; td.appendChild(inp); return td;
+  };
+  tr.appendChild(cell("first", "Petr")); tr.appendChild(cell("last", "Svoboda")); tr.appendChild(cell("nick", "Péťa"));
+  const tdMode = document.createElement("td");
+  const sel = document.createElement("select"); sel.dataset.key = "display";
+  for (const m of ["", "first", "full", "nick"]) {
+    const o = document.createElement("option"); o.value = m; o.textContent = MODE_LABEL[m]; if (p.display === m) o.selected = true; sel.appendChild(o);
+  }
+  tdMode.appendChild(sel); tr.appendChild(tdMode);
+  const tdAl = document.createElement("td");
+  const al = document.createElement("input"); al.type = "text"; al.value = (p.aliases || []).join(", "); al.placeholder = "Petr Svoboda (NG)"; al.dataset.key = "aliases";
+  tdAl.appendChild(al); tr.appendChild(tdAl);
+  const tdAct = document.createElement("td"); tdAct.className = "act";
+  const del = document.createElement("button"); del.type = "button"; del.title = "odebrat"; del.textContent = "✕";
+  del.onclick = () => tr.remove();
+  tdAct.appendChild(del); tr.appendChild(tdAct);
+  return tr;
+}
+
+/** @returns {Person[]} */
+function collectPeople() {
+  /** @type {Person[]} */ const out = [];
+  for (const tr of peopleMain.querySelectorAll("tbody tr")) {
+    const row = /** @type {HTMLTableRowElement} */ (tr);
+    const get = (/** @type {string} */ k) => /** @type {HTMLInputElement|HTMLSelectElement|null} */ (row.querySelector(`[data-key="${k}"]`));
+    out.push({ id: row.dataset.id || "", first: get("first")?.value.trim() || "", last: get("last")?.value.trim() || "",
+      nick: get("nick")?.value.trim() || "", display: get("display")?.value || "",
+      aliases: (get("aliases")?.value || "").split(",").map(s => s.trim()).filter(Boolean) });
+  }
+  return out;
+}
+
+async function savePeople() {
+  const btn = /** @type {HTMLButtonElement} */ ($("savePeople"));
+  btn.disabled = true; setStatus("ukládám lidi…");
+  try {
+    const r = await api("/api/people", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ people: collectPeople(), stem: review ? review.stem : null }) });
+    people = r.people; renderPeople();
+    setStatus(`uloženo (${people.length} osob)${review ? ", přepis a titulky přegenerovány" : ""}`, "ok");
+  } catch (e) { setStatus(String(e), "err"); }
+  finally { btn.disabled = false; }
+}
+
+function addPerson() {
+  const tb = peopleMain.querySelector("tbody");
+  if (!tb) { renderPeople(); return addPerson(); }
+  const empty = peopleMain.querySelector(".empty"); if (empty) empty.remove();
+  const tr = personRow({ id: "", first: "", last: "", nick: "", display: "", aliases: [] });
+  tb.appendChild(tr);
+  /** @type {HTMLInputElement|null} */ (tr.querySelector("input"))?.focus();
+}
+
+// ---------------------------------------------------------------- tabs, footer, start
+
+function showTab(/** @type {"speakers"|"people"} */ which) {
+  const sp = which === "speakers";
+  main.hidden = !sp; peopleMain.hidden = sp;
+  $("speakerButtons").hidden = !sp; $("peopleButtons").hidden = sp; $("tip").hidden = !sp;
+  $("tabSpeakers").classList.toggle("active", sp); $("tabPeople").classList.toggle("active", !sp);
+  setStatus("");
+  if (sp) { if (review) loadRecording(review.stem); } else loadPeople().catch(e => setStatus(String(e), "err"));
+}
+
+$("tabSpeakers").onclick = () => showTab("speakers");
+$("tabPeople").onclick = () => showTab("people");
 $("save").onclick = () => save(false);
 $("saveSum").onclick = () => save(true);
+$("savePeople").onclick = savePeople;
+$("addPerson").onclick = addPerson;
 $("quit").onclick = async () => {
   stopAudio();
   try { await api("/api/quit", { method: "POST" }); } catch (_) { /* server is gone */ }
   document.body.innerHTML = '<div class="empty">Hotovo, tuto záložku můžete zavřít.</div>';
 };
-pick.onchange = () => loadRecording(pick.value);
+pick.onchange = () => { showTab("speakers"); loadRecording(pick.value); };
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") stopAudio(); });
+// heartbeat: the server stops itself ~90 s after the last one, i.e. when this tab is closed
+setInterval(() => { fetch("/api/ping", { method: "POST" }).catch(() => {}); }, 15000);
 
 (async () => {
   try {
     await loadList();
     if (pick.value) await loadRecording(pick.value);
     else main.innerHTML = '<div class="empty">Žádná přepsaná nahrávka.</div>';
-  } catch (e) { main.innerHTML = `<div class="empty">${String(e)}</div>`; }
+  } catch (e) { main.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
 })();
 </script>
 </body>

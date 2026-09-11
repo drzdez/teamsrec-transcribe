@@ -62,6 +62,9 @@ different file.
 [user]
 name = "Jan Novák"          # live recordings: the diarization label that matches the mic track gets this name
 
+[people]
+display = "nick"                 # exports and minutes print: first | full | nick (nick without a nickname -> first)
+
 [recordings]
 out_dir = "D:/meetings"          # the recordings folder; _inbox lives inside it
 
@@ -148,6 +151,8 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
   cloud provider (Azure AI Speech or ElevenLabs Scribe) are planned
 - `video_speakers`: frame sampling + accent-colour label detection + easyocr
 - `mic_speakers`: the diarization label that coincides with microphone activity becomes the user (`[user] name`)
+- `people.py`: registry `<OUT_DIR>/_speakers/people.json` (first, last, nick, per-person display override);
+  `speakers.json` stores person ids, the display form is applied at export/summary time
 - `web/`: the review page. `review.py` = data functions + a stdlib HTTP server on 127.0.0.1 with a small JSON API
   (documented in the module docstring); `index.html` = one page of vanilla JS (`@ts-check` + JSDoc types), no build
   step, no framework. Writes only `<stem>.speakers.json`, then regenerates exports and (on request) the summary.

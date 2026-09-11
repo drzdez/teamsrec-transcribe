@@ -139,9 +139,16 @@ dvě nejdelší repliky a nápověda ze zápisu (role na schůzce, případný t
 jméno; našeptávač nabízí lidi z předchozích nahrávek a účastníky. Volba „stejná osoba jako…“ sloučí dvě označení
 téhož člověka. Nahoře lze přepnout na jinou nahrávku.
 
+Jméno napište celé („Petr Svoboda“); tím vznikne osoba v registru (`_speakers\people.json`, záložka **Lidé**
+nahoře). U každé osoby lze doplnit přezdívku a zvolit, co se má psát do přepisu a zápisu: jméno, jméno a
+příjmení, nebo přezdívka. Výchozí volba je v konfiguraci `[people] display` (výchozí `nick` = přezdívka, a kdo ji
+nemá, tomu se píše jméno). Přiřazení u nahrávky odkazuje na osobu, takže změna přezdívky nebo volby se projeví
+při dalším exportu bez nového přiřazování.
+
 - **Uložit** zapíše `<stem>.speakers.json` a přegeneruje `.txt` a `.srt`.
 - **Uložit a přegenerovat zápis** navíc znovu vytvoří `.summary.md` se jmény (lokální model, 1 až 3 minuty).
-- **Zavřít** ukončí server; okno příkazové řádky se zavře samo.
+- **Zavřít** ukončí server; okno příkazové řádky se zavře samo. Stačí i zavřít záložku prohlížeče, server se do
+  dvou minut ukončí sám. Opakované spuštění zástupce novou stránku nezakládá, jen otevře tu běžící.
 
 Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jméno znamená nechat označení.
 `label-speakers` v terminálu dělá totéž bez zvuku.

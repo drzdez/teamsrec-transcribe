@@ -10,9 +10,17 @@ API
   GET  /api/recordings           recent recordings with their unresolved-speaker count
   GET  /api/recording?stem=      everything the page needs for one recording
   GET  /api/clip?stem=&start=&end=   a WAV clip cut from the 16 kHz mix (max CLIP_MAX_S seconds)
-  POST /api/save                 {"stem", "names": {label: name}, "summary": bool} -> writes speakers.json, exports
+  POST /api/save                 {"stem", "names": {label: typed name}, "summary": bool} -> speakers.json holds
+                                 person ids (people are created from unknown names), exports regenerated
+  GET  /api/people               the people registry (_speakers/people.json)
+  POST /api/people               {"people": [...], "stem"?} -> replace the registry, re-export that recording
   GET  /api/status               background job (summary) state
+  POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
   POST /api/quit                 stop the server
+
+One server per machine: the running instance is recorded in a lock file in the temp folder, a second `review`
+just opens the existing page. Closing the browser tab ends the heartbeat, so the server (and its console window)
+goes away by itself.
 """
 
 from __future__ import annotations
@@ -20,8 +28,12 @@ from __future__ import annotations
 import io
 import json
 import logging
+import os
 import re
+import tempfile
 import threading
+import time
+import urllib.request
 import wave
 import webbrowser
 from http import HTTPStatus
@@ -30,6 +42,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ..config import Config
+from ..people import DISPLAY_MODES, People
 from ..pipeline import do_export, do_summarize, load_segments
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -43,6 +56,8 @@ SAMPLES_PER_SPEAKER = 3
 EXCERPTS_PER_SPEAKER = 2
 RECENT_RECORDINGS = 30
 PAGE = Path(__file__).with_name("index.html")
+IDLE_S = 90.0  # exit this long after the page's last heartbeat (the page pings every 15 s)
+LOCK = Path(tempfile.gettempdir()) / "teamsrec-review.json"
 
 
 def is_label(name: str | None) -> bool:
@@ -84,22 +99,24 @@ def summary_hints(rec: Recording) -> dict[str, str]:
     return hints
 
 
-def known_names(cfg: Config) -> list[str]:
-    """Names to suggest: the user, everyone named in any speakers.json, participants of any recording."""
+def known_names(cfg: Config, people: People) -> list[str]:
+    """Names to suggest: registered people (full name), the user, participants of any recording."""
     seen: dict[str, None] = {}
+    for p in people.people:
+        seen[p.full] = None
     if cfg.user_name:
         seen[cfg.user_name] = None
     for r in iter_recordings(cfg.out_dir):
-        if r.speakers_path.exists():
-            try:
-                for v in r.read_json(r.speakers_path).values():
-                    if v and not is_label(v):
-                        seen[str(v)] = None
-            except Exception:
-                pass
         for p in r.participants:
             seen[p] = None
     return sorted(seen, key=str.casefold)
+
+
+def _person_info(people: People, value: str) -> dict | None:
+    p = people.get(value) or people.find(value)
+    if not p:
+        return None
+    return {"id": p.id, "full": p.full, "nick": p.nick, "shown": p.name(people.default_mode)}
 
 
 def _fmt_hms(t: float) -> str:
@@ -112,6 +129,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         raise RecordingError(f"{rec.stem}: no transcript yet")
     data, segs = load_segments(rec)  # raw provider speakers, without speakers.json applied
     manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    people = People.load(cfg.out_dir, cfg.people_display)
     hints = summary_hints(rec)
     by: dict[str, list[Segment]] = {}
     for s in segs:
@@ -120,10 +138,13 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     for label, ss in sorted(by.items(), key=lambda kv: -sum(s.end - s.start for s in kv[1])):
         secs = sum(s.end - s.start for s in ss)
         excerpts = sorted(ss, key=lambda s: -len(s.text))[:EXCERPTS_PER_SPEAKER]
+        value = manual.get(label, "" if is_label(label) else label)
+        person = _person_info(people, value) if value else None
         speakers.append({
             "label": label,
             "unresolved": is_label(label),
-            "name": manual.get(label, "" if is_label(label) else label),
+            "name": person["full"] if person else value,  # what the input shows
+            "person": person,  # None for literal names (video / mic) that are not registered
             "seconds": round(secs, 1),
             "count": len(ss),
             "hint": hints.get(label, ""),
@@ -137,7 +158,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "duration_s": rec.sidecar.get("duration_s"), "source": rec.source,
         "language": data.get("language"), "speaker_sources": data.get("speaker_sources", []),
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
-        "speakers": speakers, "known_names": known_names(cfg),
+        "speakers": speakers, "known_names": known_names(cfg, people),
+        "people": people.to_json(), "display_default": people.default_mode,
     }
 
 
@@ -179,15 +201,34 @@ def clip_wav(mix: Path, start: float, end: float) -> bytes:
 # ---------------------------------------------------------------- saving
 
 def save_names(cfg: Config, rec: Recording, names: dict[str, str]) -> dict[str, str]:
-    """Write speakers.json (only real renames), regenerate txt/srt. Returns what was written."""
+    """Write speakers.json with person ids (people created from unknown names), regenerate txt/srt.
+    Returns {label: person id} of what was written."""
+    people = People.load(cfg.out_dir, cfg.people_display)
+    before = len(people.people)
     clean: dict[str, str] = {}
     for label, name in names.items():
         name = (name or "").strip()
-        if name and name != label:
-            clean[label] = name
+        if not name or name == label:
+            continue
+        clean[label] = label if is_label(name) else people.ensure(name).id
+        if clean[label] == label:
+            del clean[label]
+    if len(people.people) != before:
+        people.save()
     rec.write_json(rec.speakers_path, clean)
     do_export(cfg, rec)
     return clean
+
+
+def save_people(cfg: Config, rows: list[dict], stem: str | None = None) -> list[dict]:
+    people = People.load(cfg.out_dir, cfg.people_display)
+    people.replace_all(rows)
+    people.save()
+    if stem:
+        rec = resolve_recording(stem, cfg.out_dir)
+        if rec.transcript_path.exists():
+            do_export(cfg, rec)
+    return people.to_json()
 
 
 # ---------------------------------------------------------------- server
@@ -199,6 +240,10 @@ class ReviewState:
         self.busy = False
         self.message = ""
         self.error = ""
+        self.last_seen = 0.0  # time of the last request from the page (0 = no page yet)
+
+    def seen(self) -> None:
+        self.last_seen = time.monotonic()
 
     def run_summary(self, rec: Recording) -> None:
         with self.lock:
@@ -221,7 +266,8 @@ class ReviewState:
 
     def status(self) -> dict:
         with self.lock:
-            return {"busy": self.busy, "message": self.message, "error": self.error}
+            return {"app": "teamsrec-review", "out_dir": str(self.cfg.out_dir),
+                    "busy": self.busy, "message": self.message, "error": self.error}
 
 
 def _handler(state: ReviewState, server_ref: dict):
@@ -257,6 +303,7 @@ def _handler(state: ReviewState, server_ref: dict):
         def do_GET(self):
             u = urlparse(self.path)
             q = parse_qs(u.query)
+            state.seen()
             try:
                 if u.path == "/":
                     self._bytes(PAGE.read_bytes(), "text/html; charset=utf-8")
@@ -271,6 +318,10 @@ def _handler(state: ReviewState, server_ref: dict):
                     start = float(q.get("start", ["0"])[0])
                     end = min(float(q.get("end", ["0"])[0]), start + CLIP_MAX_S)
                     self._bytes(clip_wav(rec.mix_path, start, end), "audio/wav")
+                elif u.path == "/api/people":
+                    people = People.load(state.cfg.out_dir, state.cfg.people_display)
+                    self._json({"people": people.to_json(), "display_default": people.default_mode,
+                                "modes": list(DISPLAY_MODES)})
                 elif u.path == "/api/status":
                     self._json(state.status())
                 else:
@@ -282,13 +333,20 @@ def _handler(state: ReviewState, server_ref: dict):
             u = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}") if length else {}
+            state.seen()
             try:
+                if u.path == "/api/ping":
+                    self._json({"ok": True})
+                    return
                 if u.path == "/api/save":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
                     written = save_names(state.cfg, rec, body.get("names") or {})
                     if body.get("summary"):
                         state.run_summary(rec)
                     self._json({"ok": True, "written": written, "status": state.status()})
+                elif u.path == "/api/people":
+                    rows = save_people(state.cfg, body.get("people") or [], body.get("stem") or None)
+                    self._json({"ok": True, "people": rows})
                 elif u.path == "/api/quit":
                     self._json({"ok": True})
                     threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
@@ -299,22 +357,64 @@ def _handler(state: ReviewState, server_ref: dict):
     return Handler
 
 
-def serve(cfg: Config, rec: Recording | None, *, port: int = 0, open_browser: bool = True) -> None:
-    """Run the review server until the page's Close button (or Ctrl+C)."""
+def running_instance(cfg: Config, lock: Path = LOCK) -> str | None:
+    """URL of a review server already running for this recordings folder, if it answers."""
+    try:
+        info = json.loads(lock.read_text(encoding="utf-8"))
+        if Path(info.get("out_dir", "")) != cfg.out_dir:
+            return None
+        with urllib.request.urlopen(info["url"] + "api/status", timeout=1.0) as r:
+            st = json.loads(r.read().decode("utf-8"))
+            if st.get("app") == "teamsrec-review" and Path(st.get("out_dir", "")) == cfg.out_dir:
+                return info["url"]  # alive and really ours; a stale lock (crash, reboot) fails here
+    except Exception:
+        pass
+    return None
+
+
+def _idle_watchdog(state: ReviewState, server: ThreadingHTTPServer, idle_s: float) -> None:
+    """Stop the server once the page has gone quiet (tab closed). Never while a summary is being generated."""
+    while True:
+        time.sleep(min(5.0, idle_s / 3))
+        if state.last_seen and not state.busy and time.monotonic() - state.last_seen > idle_s:
+            log.info("review page closed, stopping")
+            threading.Thread(target=server.shutdown, daemon=True).start()
+            return
+
+
+def serve(cfg: Config, rec: Recording | None, *, port: int = 0, open_browser: bool = True,
+          idle_s: float = IDLE_S, lock: Path = LOCK) -> str:
+    """Run the review server until the page's Close button, the tab is closed, or Ctrl+C. Returns the URL.
+    A second call while one is running only opens the existing page."""
+    fragment = f"#{rec.stem}" if rec else ""
+    existing = running_instance(cfg, lock)
+    if existing:
+        log.info("review page already running: %s", existing)
+        if open_browser:
+            webbrowser.open(existing + fragment)
+        return existing
     state = ReviewState(cfg)
     ref: dict = {}
     server = ThreadingHTTPServer(("127.0.0.1", port), _handler(state, ref))
     ref["server"] = server
-    url = f"http://127.0.0.1:{server.server_address[1]}/" + (f"#{rec.stem}" if rec else "")
-    log.info("review page: %s  (Ctrl+C or the Close button stops it)", url)
+    base = f"http://127.0.0.1:{server.server_address[1]}/"
+    lock.write_text(json.dumps({"url": base, "pid": os.getpid(), "out_dir": str(cfg.out_dir)}), encoding="utf-8")
+    log.info("review page: %s  (closes itself when the tab is closed; Ctrl+C also works)", base + fragment)
     if open_browser:
-        webbrowser.open(url)
+        webbrowser.open(base + fragment)
+    threading.Thread(target=_idle_watchdog, args=(state, server, idle_s), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
+        try:
+            if json.loads(lock.read_text(encoding="utf-8")).get("pid") == os.getpid():
+                lock.unlink()
+        except Exception:
+            pass
+    return base
 
 
 def unresolved_labels(rec: Recording) -> list[str]:

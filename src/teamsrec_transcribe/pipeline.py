@@ -12,6 +12,7 @@ from .export import write_exports
 from .importer import import_file
 from .media import mix_tracks, probe, utc_now_iso
 from .mic_speakers import apply_mic_track
+from .people import People
 from .prompt import build_prompt
 from .providers import get_provider
 from .providers.base import Segment, Word
@@ -152,6 +153,7 @@ def do_export(cfg: Config, rec: Recording, *, txt: bool = True, srt: bool = True
     data, segs = load_segments(rec)
     if rec.speakers_path.exists():
         apply_manual_names(segs, rec.read_json(rec.speakers_path))
+    People.load(cfg.out_dir, cfg.people_display).apply(segs)
     header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
               "language": data.get("language"), "speakers": ", ".join(speaker_list(segs))}
     out = []
@@ -166,17 +168,19 @@ def do_export(cfg: Config, rec: Recording, *, txt: bool = True, srt: bool = True
 
 # ---------------------------------------------------------------- summarize
 
-def _summary_input(rec: Recording):
+def _summary_input(cfg: Config, rec: Recording):
     if not rec.transcript_path.exists():
         raise RecordingError(f"{rec.stem}: no transcript yet")
     data, segs = load_segments(rec)
     names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     if names:
         apply_manual_names(segs, names)
+    people = People.load(cfg.out_dir, cfg.people_display)
+    people.apply(segs)
     header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
               "language": data.get("language"), "participants": ", ".join(rec.participants) or None,
               "speakers": ", ".join(speaker_list(segs)),
-              "speaker labels": ", ".join(f"{k} = {v}" for k, v in names.items()) or None}
+              "speaker labels": ", ".join(f"{k} = {people.display(v)}" for k, v in names.items()) or None}
     return segs, header
 
 
@@ -185,7 +189,7 @@ def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
     if rec.summary_path.exists() and not force:
         log.info("%s: summary exists, skipping (use --force)", rec.stem)
         return rec.summary_path
-    segs, header = _summary_input(rec)
+    segs, header = _summary_input(cfg, rec)
     text = summarize(rec, segs, header, cfg.summarize)
     rec.summary_path.write_text(text, encoding="utf-8")
     return rec.summary_path
@@ -206,7 +210,7 @@ def do_summarize_compare(cfg: Config, rec: Recording, *, force: bool = False) ->
         if path.exists() and not force:
             continue
         try:
-            segs, header = _summary_input(rec)
+            segs, header = _summary_input(cfg, rec)
             text = summarize(rec, segs, header, replace(cfg.summarize, provider=provider, model=model))
             path.write_text(text, encoding="utf-8")
             out.append(path)

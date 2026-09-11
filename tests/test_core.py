@@ -216,6 +216,37 @@ def _make_transcribed(tmp_path, stem="2026-09-04_1400_tydenni-sync"):
     return rec
 
 
+def test_people_display_and_matching(tmp_path):
+    from teamsrec_transcribe.people import People, Person
+    ppl = People.load(tmp_path, "nick")
+    petr = ppl.ensure("Petr Svoboda"); petr.nick = "Péťa"
+    jana = ppl.ensure("Jana Nováková"); jana.display = "full"
+    ppl.ensure("Jan Novák")
+    ppl.save()
+    ppl = People.load(tmp_path, "nick")
+    assert [p.id for p in ppl.people] == ["petr-svoboda", "jana-novakova", "jan-novak"]
+    assert ppl.display("petr-svoboda") == "Péťa" and ppl.display("Petr Svoboda") == "Péťa"
+    assert ppl.display("jana-novakova") == "Jana Nováková"  # per-person override
+    assert ppl.display("Jan Novák") == "Jan"                 # nick mode without nickname -> first name
+    assert ppl.display("SPEAKER_00") == "SPEAKER_00" and ppl.display("Neznámý Host") == "Neznámý Host"
+    assert People.load(tmp_path, "full").display("petr-svoboda") == "Petr Svoboda"
+    assert ppl.find("petr svoboda").id == "petr-svoboda" and ppl.find("Svoboda Petr").id == "petr-svoboda"
+    assert ppl.find("Jana") is not None and ppl.find("Jan").id == "jan-novak"
+    segs = [Segment(0, 1, "a", "petr-svoboda"), Segment(1, 2, "b", "SPEAKER_01"), Segment(2, 3, "c", "Jana Nováková")]
+    assert ppl.apply(segs) == {"petr-svoboda": "Péťa"}
+    assert [s.speaker for s in segs] == ["Péťa", "SPEAKER_01", "Jana Nováková"]
+    ppl.ensure("Petr Novotný")  # two Petrs without nicknames would both print "Petr" -> full names
+    ppl.people[0].nick = ""
+    segs = [Segment(0, 1, "a", "petr-svoboda"), Segment(1, 2, "b", "petr-novotny"), Segment(2, 3, "c", "jan-novak")]
+    ppl.apply(segs)
+    assert [s.speaker for s in segs] == ["Petr Svoboda", "Petr Novotný", "Jan"]
+    ppl.replace_all([{"id": "petr-svoboda", "first": "Petr", "last": "Svoboda", "nick": "", "display": "first"},
+                     {"first": "", "last": "", "nick": ""}, {"first": "Eva", "last": "", "nick": "Evka"}])
+    assert [p.id for p in ppl.people] == ["petr-svoboda", "eva"] and ppl.display("petr-svoboda") == "Petr"
+    assert ppl.display("eva") == "Evka"
+    assert Person.from_text("Petr Svoboda", {"petr-svoboda"}).id == "petr-svoboda-2"
+
+
 def test_review_data_clip_and_save(tmp_path):
     from teamsrec_transcribe.web.review import build_review, clip_wav, list_recordings, save_names, unresolved_labels
     cfg = Config(out_dir=tmp_path, user_name="Já")
@@ -235,11 +266,17 @@ def test_review_data_clip_and_save(tmp_path):
     rows = list_recordings(cfg)
     assert rows[0]["stem"] == rec.stem and rows[0]["unresolved"] == 2
     written = save_names(cfg, rec, {"SPEAKER_00": " Petr Svoboda ", "SPEAKER_01": "", "Jana Nováková": "Jana Nováková"})
-    assert written == {"SPEAKER_00": "Petr Svoboda"}
-    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "Petr Svoboda"}
-    assert "Petr Svoboda: Dobrý den" in rec.file(".txt").read_text(encoding="utf-8")
+    assert written == {"SPEAKER_00": "petr-svoboda"}  # a person was created from the typed name
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "petr-svoboda"}
+    assert "Petr: Dobrý den" in rec.file(".txt").read_text(encoding="utf-8")  # default display: nick -> first
     assert unresolved_labels(rec) == ["SPEAKER_01"]
     assert list_recordings(cfg)[0]["unresolved"] == 1
+    rv = build_review(cfg, rec)
+    assert rv["speakers"][0]["name"] == "Petr Svoboda" and rv["speakers"][0]["person"]["shown"] == "Petr"
+    assert "Petr Svoboda" in rv["known_names"] and rv["people"][0]["id"] == "petr-svoboda"
+    from teamsrec_transcribe.web.review import save_people
+    save_people(cfg, [{"id": "petr-svoboda", "first": "Petr", "last": "Svoboda", "nick": "Péťa"}], rec.stem)
+    assert "Péťa: Dobrý den" in rec.file(".txt").read_text(encoding="utf-8")
 
 
 def test_review_http_roundtrip(tmp_path):
@@ -267,12 +304,45 @@ def test_review_http_roundtrip(tmp_path):
         body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_01": "Petr"}, "summary": False}).encode()
         req = urllib.request.Request(base + "/api/save", data=body, headers={"Content-Type": "application/json"})
         res = _json.loads(urllib.request.urlopen(req).read())
-        assert res["ok"] and res["written"] == {"SPEAKER_01": "Petr"}
+        assert res["ok"] and res["written"] == {"SPEAKER_01": "petr"}
+        ppl = _json.loads(urllib.request.urlopen(base + "/api/people").read())
+        assert ppl["people"][0]["first"] == "Petr" and ppl["modes"] == ["first", "full", "nick"]
         bad = urllib.request.Request(base + "/api/recording?stem=nope")
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(bad)
     finally:
         srv.shutdown(); srv.server_close()
+
+
+def test_review_single_instance_and_idle_exit(tmp_path):
+    import json as _json
+    import threading
+    import time
+    import urllib.request
+    from teamsrec_transcribe.web import review as rv
+    cfg = Config(out_dir=tmp_path)
+    _make_transcribed(tmp_path)
+    lock = tmp_path / "lock.json"
+    assert rv.running_instance(cfg, lock) is None  # no lock file
+    lock.write_text(_json.dumps({"url": "http://127.0.0.1:1/", "pid": 0, "out_dir": str(tmp_path)}), encoding="utf-8")
+    assert rv.running_instance(cfg, lock) is None  # stale lock: nobody answers -> ignored
+    lock.unlink()
+    result = {}
+    t = threading.Thread(target=lambda: result.update(url=rv.serve(cfg, None, open_browser=False, idle_s=1.0, lock=lock)),
+                         daemon=True)
+    t.start()
+    for _ in range(50):
+        if lock.exists():
+            break
+        time.sleep(0.05)
+    info = _json.loads(lock.read_text(encoding="utf-8"))
+    assert rv.running_instance(cfg, lock) == info["url"]                     # answers -> reuse
+    assert rv.running_instance(Config(out_dir=tmp_path / "other"), lock) is None  # different folder -> not ours
+    assert rv.serve(cfg, None, open_browser=False, lock=lock) == info["url"]  # second call just returns the URL
+    urllib.request.urlopen(info["url"] + "api/recordings").read()             # a page request starts the idle clock
+    t.join(timeout=10)
+    assert not t.is_alive() and result["url"] == info["url"]                  # exited ~1 s after the last request
+    assert not lock.exists()
 
 
 def test_clean_headings_strips_copied_instructions():

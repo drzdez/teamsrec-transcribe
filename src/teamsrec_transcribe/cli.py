@@ -234,12 +234,10 @@ def review(ctx: typer.Context, target: str = typer.Argument("latest", help="stem
     from .web.review import serve, unresolved_labels
     cfg = _cfg(ctx)
     rec = resolve_target(cfg, target, allow_import=False)
-    if not rec.transcript_path.exists():
-        raise RecordingError(f"{rec.stem}: no transcript yet (run `process` first)")
-    if only_unresolved and not unresolved_labels(rec):
+    if only_unresolved and rec.transcript_path.exists() and not unresolved_labels(rec):
         typer.echo(f"{rec.stem}: all speakers have names")
         return
-    serve(cfg, rec, port=port, open_browser=browser)
+    serve(cfg, rec, port=port, open_browser=browser)  # no transcript yet: the page offers to process it
 
 
 @app.command()
@@ -273,8 +271,11 @@ def process(ctx: typer.Context, target: Optional[str] = typer.Argument(None, hel
     _require_ffmpeg()
     cfg = _cfg(ctx)
     if latest and not target:
-        for r in do_process_inbox(cfg):
+        imported = do_process_inbox(cfg)
+        for r in imported:  # a file dropped into the inbox is what the user wants processed, whatever its date
             typer.echo(f"imported {r.stem}")
+            do_process(cfg, r, force=force)
+            typer.echo(f"done {r.stem}")
         target = latest_recording(cfg.out_dir).stem
         typer.echo(f"latest: {target}")
     if target:

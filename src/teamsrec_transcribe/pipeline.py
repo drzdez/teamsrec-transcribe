@@ -134,6 +134,36 @@ def rename_recording(cfg: Config, rec: Recording, title: str) -> Recording:
     return new
 
 
+# ---------------------------------------------------------------- remove noise "speakers"
+
+def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
+    """Drop every segment of one speaker label from the transcript (typing, mouse clicks, breathing that the
+    ASR turned into invented sentences). Recorded in `removed_speakers`; `transcribe --force` brings it back.
+    Exports are regenerated. Returns the number of removed segments."""
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    data = rec.read_json(rec.transcript_path)
+    keep = [s for s in data["segments"] if s.get("speaker") != label]
+    n = len(data["segments"]) - len(keep)
+    if not n:
+        return 0
+    data["segments"] = keep
+    data["speakers"] = [s for s in data.get("speakers", []) if s != label]
+    for key in ("speaker_embeddings", "voice_matches"):
+        if isinstance(data.get(key), dict):
+            data[key].pop(label, None)
+    data.setdefault("removed_speakers", []).append({"label": label, "segments": n, "at": utc_now_iso()})
+    rec.write_json(rec.transcript_path, data)
+    if rec.speakers_path.exists():
+        names = rec.read_json(rec.speakers_path)
+        if label in names:
+            del names[label]
+            rec.write_json(rec.speakers_path, names)
+    do_export(cfg, rec)
+    log.info("%s: removed %d segments of %s", rec.stem, n, label)
+    return n
+
+
 # ---------------------------------------------------------------- transcribe
 
 def _ensure_mix(rec: Recording) -> Path:
@@ -177,6 +207,7 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     labels_before = [s.speaker for s in res.segments]
     if timeline:
         apply_video_timeline(res.segments, timeline)
+        _register_video_names(cfg, res.segments)
     mic = rec.track_path("mic")
     speaker_sources = ["video"] if timeline else []
     mic_mapping: dict[str, str] = {}
@@ -213,6 +244,19 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     return rec.transcript_path
 
 
+def _register_video_names(cfg: Config, segments: list[Segment]) -> None:
+    """Names read from the Teams video are real display names: make sure each is in the people registry
+    (so they show up on the People tab and can collect voice prints)."""
+    people = People.load(cfg.out_dir, cfg.people_display)
+    before = len(people.people)
+    for name in speaker_list(segments):
+        if name and not name.startswith("SPEAKER_") and name != "UNKNOWN":
+            people.ensure(name)
+    if len(people.people) != before:
+        people.save()
+        log.info("people registry: %d new from the video", len(people.people) - before)
+
+
 def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[float]], durations: dict[str, float],
                       mic_mapping: dict[str, str], model: str) -> dict:
     """Name still-unknown labels by voice (writes speakers.json like a manual assignment) and store the user's
@@ -240,8 +284,14 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
         vec = embeddings.get(cfg.user_name)
         if me and vec and durations.get(cfg.user_name, 0.0) >= cfg.voiceprints.min_seconds:
             changed += vp.enroll(me.id, vec, rec.stem, cfg.user_name, model)
-    # names assigned by hand before a re-transcription (or by voice just now) are worth a print too
+    # names assigned by hand before a re-transcription (or by voice just now) are worth a print too,
+    # and so are names that came from the video / the mic and resolve to a registered person
     manual = {lab: pid for lab, pid in names.items() if lab not in matches and people.get(pid)}
+    for key in embeddings:
+        if key not in manual and not key.startswith("SPEAKER_") and key != cfg.user_name:
+            p = people.find(key)
+            if p:
+                manual[key] = p.id
     changed += enroll_from_recording(vp, {"speaker_embeddings": embeddings, "diarize_model": model,
                                           "segments": [{"start": 0, "end": durations.get(lab, 0.0), "speaker": lab}
                                                        for lab in embeddings]},

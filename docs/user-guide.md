@@ -60,7 +60,7 @@ První běh je tedy o několik minut delší.
 ### Nejnovější nahrávka jedním kliknutím
 
 Zástupce **teamsrec – zpracovat poslední** na ploše (nebo `bin\teamsrec-process-latest.cmd`) importuje, co je
-ve schránce `_inbox`, a pak zpracuje jen nejnovější nahrávku: přepis, export a zápis. Okno zůstane otevřené, aby šel
+ve schránce `_inbox` a zpracuje je, a pak ještě nejnovější nahrávku: přepis, export a zápis. Okno zůstane otevřené, aby šel
 přečíst výsledek. Totéž z příkazové řádky: `teamsrec-transcribe process --latest`.
 
 Slovo `latest` funguje místo stemu ve všech příkazech, např. `teamsrec-transcribe label-speakers latest`
@@ -156,6 +156,8 @@ doplní přezdívka a volba. Co se píše do přepisu a zápisu: jméno, jméno 
 nemá, tomu se píše jméno). Přiřazení u nahrávky odkazuje na osobu, takže změna přezdívky nebo volby se projeví
 při dalším exportu bez nového přiřazování.
 
+- Dole vlevo je příznak: zeleně „vše uloženo“, oranžově „neuložené změny“. Řečníci poznaní po hlase nebo z videa
+  už v přepisu i zápisu jsou, uložit je potřeba jen to, co na stránce změníte.
 - **Uložit** zapíše `<stem>.speakers.json` a přegeneruje `.txt` a `.srt`.
 - **Uložit a přegenerovat zápis** navíc znovu vytvoří `.summary.md` se jmény (lokální model, 1 až 3 minuty).
   Po tu dobu stránku ani okno konzole nezavírejte, tlačítko Zavřít je zablokované a prohlížeč se před zavřením
@@ -174,7 +176,15 @@ nahrávkách je přiřazena a tabulku uložených otisků – z které nahrávky
 nahrávkách a přenese přezdívku, aliasy i otisky. Totéž v terminálu: `teamsrec-transcribe people list` a
 `people merge <ponechat> <sloučit>`.
 
+Když vybraná nahrávka ještě nemá přepis, stránka to řekne a nabídne tlačítko „Ano, přepsat a zpracovat“
+(přepis, export, zápis; průběh vidíte dole). Nic se nepíše do konzole.
+
 Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jméno znamená nechat označení.
+
+Mluvčí s pár sekundami „řeči“ dole v seznamu bývá šum: klikání myší, psaní, dech. Rozpoznávač si na něj
+občas vymyslí celou větu, klidně s pojmy z vaší domény (má je v nápovědě). Odkaz „✕ smazat repliky tohoto
+mluvčího“ pod polem jména je z přepisu a titulků odstraní (po druhém kliknutí); zápis pak přegenerujte.
+Smazání se zapíše do přepisu (`removed_speakers`), `transcribe --force` repliky vrátí.
 `label-speakers` v terminálu dělá totéž bez zvuku.
 
 ## 4b. Zápis ze schůzky
@@ -199,7 +209,10 @@ s důkazem z přepisu („pravděpodobně Jan: osloven v 00:20:06 a odpověděl�
 Vyplatí se tedy nejdřív `label-speakers` a pak `summarize --force`, nebo zápis přečíst, podle sekce Mluvčí přiřadit
 jména a `summarize --force` spustit znovu. Úkoly v zápisu odkazují na čas v záznamu, dají se ověřit v `.txt` nebo `.srt`.
 S Ollamou zůstává vše na počítači. S Claude API odchází do cloudu text přepisu, nikdy zvuk ani video.
-Zápis z lokálního modelu trvá na RTX 5090 zhruba 2 až 3 minuty a GPU je po tu dobu obsazená.
+Zápis z lokálního modelu trvá na RTX 5090 zhruba 2 až 3 minuty a GPU je po tu dobu obsazená. Dlouhé schůzky
+(zhruba nad 40 minut hustého hovoru) se lokálnímu modelu předkládají po částech a výsledky se pak slučují,
+aby se celý model vešel do paměti grafické karty; jinak se počítání přelije do procesoru a trvá i půl hodiny.
+Cloudový model dostane celý přepis najednou.
 
 ## 5. Konfigurace
 

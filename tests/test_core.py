@@ -405,6 +405,50 @@ def test_review_http_roundtrip(tmp_path):
         srv.shutdown(); srv.server_close()
 
 
+def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch):
+    from teamsrec_transcribe.web import review as rv
+    cfg = Config(out_dir=tmp_path)
+    rec = Recording.load(_make_recording(tmp_path))  # sidecar + mix, no transcript
+    d = rv.build_review(cfg, rec)
+    assert d["transcribed"] is False and d["has_mix"] and d["speakers"] == []
+    calls = []
+    monkeypatch.setattr(rv, "do_process", lambda c, r: calls.append(r.stem))
+    st = rv.ReviewState(cfg)
+    assert st.run_process(rec)
+    import time
+    for _ in range(50):
+        if not st.status()["busy"]:
+            break
+        time.sleep(0.02)
+    assert calls == [rec.stem] and st.status()["message"] == "processed" and st.status()["job"] == "process"
+
+
+def test_remove_speaker_drops_segments_and_reexports(tmp_path):
+    from teamsrec_transcribe.pipeline import remove_speaker
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    rec.write_json(rec.speakers_path, {"SPEAKER_01": "petr"})
+    assert remove_speaker(cfg, rec, "SPEAKER_01") == 2
+    data = rec.read_json(rec.transcript_path)
+    assert [s["speaker"] for s in data["segments"]] == ["SPEAKER_00", "Jana Nováková", "SPEAKER_00"]
+    assert data["speakers"] == ["SPEAKER_00", "Jana Nováková"] and data["removed_speakers"][0]["label"] == "SPEAKER_01"
+    assert rec.read_json(rec.speakers_path) == {}
+    assert "SPEAKER_01" not in rec.file(".txt").read_text(encoding="utf-8")
+    assert remove_speaker(cfg, rec, "SPEAKER_01") == 0
+
+
+def test_video_names_are_registered_as_people(tmp_path):
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.pipeline import _register_video_names
+    cfg = Config(out_dir=tmp_path)
+    segs = [Segment(0, 5, "a", "Jana Nováková"), Segment(5, 9, "b", "SPEAKER_01"), Segment(9, 12, "c", "Petr Svoboda")]
+    _register_video_names(cfg, segs)
+    ppl = People.load(tmp_path)
+    assert [p.id for p in ppl.people] == ["jana-novakova", "petr-svoboda"]
+    _register_video_names(cfg, segs)  # idempotent
+    assert len(People.load(tmp_path).people) == 2
+
+
 def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
     from teamsrec_transcribe.pipeline import rename_recording
     from teamsrec_transcribe.voiceprints import Voiceprints
@@ -500,6 +544,33 @@ def test_clean_headings_strips_copied_instructions():
     assert "## Témata\n" in got and "## Úkoly\n" in got and "## Pojmy\n" in got and "## Mluvčí\n" in got
     assert "5 to 10" not in got and "| Kdo | Úkol |" in got
     assert len(HEADINGS["cs"]) == len(HEADINGS["en"]) == 7
+
+
+def test_long_transcript_is_summarized_in_parts(tmp_path, monkeypatch):
+    from teamsrec_transcribe import summarize as sm
+    from teamsrec_transcribe.config import SummarizeSettings
+    from teamsrec_transcribe.llm import LLMResult
+    rec = Recording.load(_make_recording(tmp_path))
+    segs = [Segment(i * 10, i * 10 + 9, "Věta číslo %d o rozpočtu a termínech projektu." % i, "Jana Nováková" if i % 2 else "Petr Svoboda")
+            for i in range(400)]
+    calls = []
+    def fake_complete(system, user, settings):
+        calls.append((system, user))
+        return LLMResult(text="## Shrnutí\nx\n## Témata\n* t\n## Rozhodnutí\n1. r\n## Úkoly\n| a |\n## Otevřené otázky\n-\n## Pojmy\n-\n## Mluvčí\n| – | Jana Nováková | |",
+                         model="m", input_tokens=10, output_tokens=5)
+    monkeypatch.setattr(sm, "complete", fake_complete)
+    out = sm.summarize(rec, segs, {"language": "cs"}, SummarizeSettings(provider="ollama", model="m", ollama_max_ctx=8192))
+    assert len(calls) >= 3 and "part 1 of" in calls[0][0] and "You merge partial" in calls[-1][0]
+    assert "=== Part 1/" in calls[-1][1] and out.count("## Shrnutí") == 1 and "tokens: " in out
+    chunks = sm.split_segments(segs, 3000)
+    assert len(chunks) > 1 and sum(len(c) for c in chunks) == 400 and all(c for c in chunks)
+    # short transcripts and cloud models stay single-shot
+    calls.clear()
+    sm.summarize(rec, segs[:20], {"language": "cs"}, SummarizeSettings(provider="ollama", model="m", ollama_max_ctx=8192))
+    assert len(calls) == 1
+    calls.clear()
+    sm.summarize(rec, segs, {"language": "cs"}, SummarizeSettings(provider="anthropic", model="m"))
+    assert len(calls) == 1
 
 
 def test_summarize_settings_defaults_and_unknown_provider():

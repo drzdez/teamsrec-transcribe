@@ -51,7 +51,8 @@ class SummarizeSettings:
     language: str = "cs"  # language of the minutes, independent of the meeting language
     ollama_url: str = "http://localhost:11434"
     ollama_think: bool = False  # let thinking models reason first (slower, sometimes better)
-    ollama_max_ctx: int = 65536  # cap for the context window we ask Ollama for
+    ollama_max_ctx: int = 20480  # context window cap; gemma4:31b + 20k ctx still fits 24 GB VRAM (38k spilled 12 % to CPU:
+    #                             30 min instead of 1). Longer transcripts are summarized in parts and merged.
     ollama_timeout_s: int = 1800
     compare: tuple[str, ...] = ()  # extra "provider:model" runs written to <stem>.summary.<model>.md (POC comparison)
 
@@ -174,5 +175,6 @@ provider = "ollama"          # ollama = local GPU (ollama pull <model>) | anthro
 model = "gemma4:31b"         # ollama tag, or e.g. "claude-opus-5" with provider = "anthropic"
 language = "cs"              # language of the minutes
 ollama_think = false         # thinking mode for local models: slower, sometimes better
+ollama_max_ctx = 20480       # keep the whole model on the GPU (24 GB); longer transcripts are summarized in parts
 compare = []                 # e.g. ["anthropic:claude-opus-5"] -> extra <stem>.summary.claude-opus-5.md for comparison
 """

@@ -18,6 +18,8 @@ API
   POST /api/people/merge         {"keep", "drop", "stem"?} -> fold one person into another everywhere
   GET  /api/person?id=           one person with their voice prints (recording, label, when, sample to play)
   POST /api/person/forget        {"id", "stem"?, "label"?} -> drop one print (stem+label) or all prints of the person
+  POST /api/speaker/remove       {"stem", "label"} -> drop that speaker's segments (noise turned into text)
+  POST /api/process              {"stem"} -> transcribe + export + summarize in the background (status polls it)
   GET  /api/status               background job (summary) state
   POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
   POST /api/quit                 stop the server
@@ -47,7 +49,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ..config import Config
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import do_export, do_summarize, enroll_names, load_segments, rename_recording
+from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, remove_speaker,
+                        rename_recording)
 from ..voiceprints import Voiceprints
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -131,8 +134,12 @@ def _fmt_hms(t: float) -> str:
 
 
 def build_review(cfg: Config, rec: Recording) -> dict:
-    if not rec.transcript_path.exists():
-        raise RecordingError(f"{rec.stem}: no transcript yet")
+    if not rec.transcript_path.exists():  # the page offers to process it
+        return {"stem": rec.stem, "title": rec.title, "start": rec.sidecar.get("start"),
+                "duration_s": rec.sidecar.get("duration_s"), "source": rec.source, "transcribed": False,
+                "has_mix": bool(rec.mix_path and rec.mix_path.exists()) or bool(rec.track_path("sys")),
+                "speakers": [], "known_names": [], "people": [], "display_default": cfg.people_display,
+                "language": None, "speaker_sources": [], "has_summary": False}
     data, segs = load_segments(rec)  # raw provider speakers, without speakers.json applied
     manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     people = People.load(cfg.out_dir, cfg.people_display)
@@ -173,7 +180,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         })
     return {
         "stem": rec.stem, "title": rec.title, "start": rec.sidecar.get("start"),
-        "duration_s": rec.sidecar.get("duration_s"), "source": rec.source,
+        "duration_s": rec.sidecar.get("duration_s"), "source": rec.source, "transcribed": True,
         "language": data.get("language"), "speaker_sources": data.get("speaker_sources", []),
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "speakers": speakers, "known_names": known_names(cfg, people),
@@ -368,17 +375,18 @@ class ReviewState:
     def seen(self) -> None:
         self.last_seen = time.monotonic()
 
-    def run_summary(self, rec: Recording) -> None:
+    def run_job(self, name: str, fn, done: str) -> bool:
+        """Run fn() in a background thread; the page polls /api/status. One job at a time."""
         with self.lock:
             if self.busy:
-                return
-            self.busy, self.message, self.error = True, "generating the summary", ""
+                return False
+            self.busy, self.message, self.error, self.job = True, name, "", name
 
         def work():
             try:
-                do_summarize(self.cfg, rec, force=True)
+                fn()
                 with self.lock:
-                    self.message = "summary regenerated"
+                    self.message = done
             except Exception as e:  # shown on the page, not fatal
                 with self.lock:
                     self.error = str(e)
@@ -386,10 +394,17 @@ class ReviewState:
                 with self.lock:
                     self.busy = False
         threading.Thread(target=work, daemon=True).start()
+        return True
+
+    def run_summary(self, rec: Recording) -> None:
+        self.run_job("summary", lambda: do_summarize(self.cfg, rec, force=True), "summary regenerated")
+
+    def run_process(self, rec: Recording) -> bool:
+        return self.run_job("process", lambda: do_process(self.cfg, rec), "processed")
 
     def status(self) -> dict:
         with self.lock:
-            return {"app": "teamsrec-review", "out_dir": str(self.cfg.out_dir),
+            return {"app": "teamsrec-review", "out_dir": str(self.cfg.out_dir), "job": getattr(self, "job", ""),
                     "busy": self.busy, "message": self.message, "error": self.error}
 
 
@@ -473,6 +488,15 @@ def _handler(state: ReviewState, server_ref: dict):
                 elif u.path == "/api/people":
                     rows = save_people(state.cfg, body.get("people") or [], body.get("stem") or None)
                     self._json({"ok": True, "people": rows})
+                elif u.path == "/api/process":
+                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    started = state.run_process(rec)
+                    self._json({"ok": started, "status": state.status(),
+                                **({} if started else {"error": "another job is still running"})})
+                elif u.path == "/api/speaker/remove":
+                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    n = remove_speaker(state.cfg, rec, str(body.get("label") or ""))
+                    self._json({"ok": True, "removed": n})
                 elif u.path == "/api/person/forget":
                     n = forget_print(state.cfg, str(body.get("id") or ""), body.get("stem"), body.get("label"))
                     self._json({"ok": True, "removed": n})

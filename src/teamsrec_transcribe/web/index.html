@@ -24,6 +24,8 @@
   header input#title { width: 26vw; min-width: 200px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; }
   header input#title:focus { outline: 2px solid var(--accent); border-color: transparent; }
   #status.busy { color: var(--warn); font-weight: 600; }
+  #dirty.changed { color: var(--warn); font-weight: 600; }
+  #dirty.clean { color: var(--ok); }
   .tabs { display: flex; gap: 2px; margin-left: auto; }
   .tabs button { border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 5px 12px; cursor: pointer; font: inherit; }
   .tabs button:first-child { border-radius: 8px 0 0 8px; } .tabs button:last-child { border-radius: 0 8px 8px 0; }
@@ -62,6 +64,10 @@
   .person-h { font-size: 20px; margin: 10px 0 4px; }
   button.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
   button.link.danger { color: var(--err); margin-top: 12px; }
+  button.link.small { font-size: 12px; margin-top: 4px; text-align: left; }
+  button.primary-btn { padding: 10px 18px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
+  button.primary-btn:disabled { opacity: .5; cursor: default; }
+  .empty p { margin: 6px 0; }
   button.play { border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 8px; padding: 3px 9px; cursor: pointer; font-size: 13px; }
   button.play.playing { border-color: var(--accent); color: var(--accent); }
   footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line);
@@ -101,6 +107,7 @@
     <button id="addPerson">Přidat osobu</button>
   </span>
   <button id="quit">Zavřít</button>
+  <span id="dirty" class="meta"></span>
   <span class="meta" id="tip">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
   <span id="status"></span>
 </footer>
@@ -115,7 +122,7 @@
  * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,language:string,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
  */
 
@@ -124,6 +131,19 @@ const main = $("main"), peopleMain = $("peopleMain"), pick = /** @type {HTMLSele
 const audio = /** @type {HTMLAudioElement} */ ($("audio"));
 const titleInput = /** @type {HTMLInputElement} */ ($("title"));
 let busy = false;  // a summary is being generated on the server
+let baseline = "";  // names + title as loaded; anything else = unsaved changes
+
+function snapshot() { return JSON.stringify({ names: collectNames(), title: titleInput.value.trim() }); }
+function markClean() { baseline = snapshot(); updateDirty(); }
+function isDirty() { return baseline !== "" && snapshot() !== baseline; }
+function updateDirty() {
+  const d = $("dirty");
+  if (!review || !review.transcribed) { d.textContent = ""; d.className = "meta"; return; }
+  if (isDirty()) { d.textContent = "● neuložené změny – Uložit je zapíše do přepisu a titulků"; d.className = "meta changed"; }
+  else { d.textContent = "✓ vše uloženo; Uložit je potřeba jen po změně, zápis se přegenerovává jen na vyžádání"; d.className = "meta clean"; }
+}
+document.addEventListener("input", ev => { if (ev.target instanceof HTMLInputElement || ev.target instanceof HTMLSelectElement) updateDirty(); });
+document.addEventListener("change", ev => { if (ev.target instanceof HTMLSelectElement) updateDirty(); });
 const MODE_LABEL = { "": "výchozí", first: "jméno", full: "jméno a příjmení", nick: "přezdívka" };
 /** @type {Review|null} */ let review = null;
 /** @type {Person[]} */ let people = [];
@@ -146,7 +166,7 @@ function setBusy(/** @type {boolean} */ on) {
   const quit = /** @type {HTMLButtonElement} */ ($("quit"));
   quit.disabled = on; quit.title = on ? "zápis se generuje, počkejte na dokončení" : "";
 }
-window.addEventListener("beforeunload", ev => { if (busy) { ev.preventDefault(); ev.returnValue = ""; } });
+window.addEventListener("beforeunload", ev => { if (busy || isDirty()) { ev.preventDefault(); ev.returnValue = ""; } });
 function fmtMin(/** @type {number} */ s) { return s >= 60 ? `${(s / 60).toFixed(1)} min` : `${Math.round(s)} s`; }
 function fmtDate(/** @type {string} */ iso) { return iso ? iso.replace("T", " ").slice(0, 16) : ""; }
 function emptyBox(/** @type {string} */ text) {
@@ -178,12 +198,11 @@ async function loadList() {
     o.value = r.stem;
     const flag = !r.transcribed ? " (bez přepisu)" : r.unresolved ? ` (${r.unresolved} nepojmenovaných)` : "";
     o.textContent = `${fmtDate(r.start)}  ${r.title}${flag}`;
-    o.disabled = !r.transcribed;
     pick.appendChild(o);
   }
   const wanted = location.hash.slice(1);
   if (wanted && rows.some(r => r.stem === wanted)) pick.value = wanted;
-  else { const first = rows.find(r => r.transcribed); if (first) pick.value = first.stem; }
+  else if (rows.length) pick.value = rows[0].stem;
 }
 
 async function loadRecording(/** @type {string} */ stem) {
@@ -203,8 +222,52 @@ async function loadRecording(/** @type {string} */ stem) {
   location.hash = stem;
   titleInput.value = r.title || "";
   people = r.people; displayDefault = r.display_default;
+  if (!r.transcribed) {
+    meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · bez přepisu`;
+    renderNotTranscribed(r);
+    baseline = ""; updateDirty();
+    return;
+  }
   meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · ${r.language || "?"} · mluvčí z: ${(r.speaker_sources || []).join(", ") || "diarizace"}`;
   renderSpeakers();
+  markClean();
+}
+
+/** @param {Review} r */
+function renderNotTranscribed(r) {
+  main.innerHTML = "";
+  const box = document.createElement("div"); box.className = "empty";
+  const mins = Math.round((r.duration_s || 0) / 60);
+  const est = Math.max(2, Math.round(mins / 6) + 3);
+  box.innerHTML = `<p><b>${escapeHtml(r.title)}</b> ještě nemá přepis, takže není co kontrolovat.</p>` +
+    (r.has_mix ? `<p>Přepsat, exportovat a udělat zápis teď? Zhruba ${est} min, grafická karta bude po tu dobu vytížená.</p>`
+               : `<p>Nahrávka nemá zvuk (chybí mix i stopy), přepsat ji nejde.</p>`);
+  if (r.has_mix) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "primary-btn";
+    b.textContent = "Ano, přepsat a zpracovat";
+    b.onclick = () => startProcess(r.stem, b);
+    box.appendChild(b);
+  }
+  main.appendChild(box);
+}
+
+async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonElement} */ btn) {
+  btn.disabled = true;
+  try {
+    const r = await api("/api/process", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stem }) });
+    if (!r.ok) throw new Error(r.error || "nelze spustit");
+  } catch (e) { setStatus(String(e), "err"); btn.disabled = false; return; }
+  setBusy(true);
+  try {
+    for (;;) {
+      await new Promise(res => setTimeout(res, 3000));
+      const s = await api("/api/status");
+      if (s.error) { setStatus(`zpracování selhalo: ${s.error}`, "err"); break; }
+      if (!s.busy) { setStatus("hotovo: přepis, titulky i zápis", "ok"); break; }
+      setStatus("zpracovávám: přepis, export, zápis… nezavírejte stránku ani okno konzole", "busy");
+    }
+  } finally { setBusy(false); }
+  await loadList(); pick.value = stem; await loadRecording(stem);
 }
 
 // ---------------------------------------------------------------- speakers tab
@@ -238,7 +301,7 @@ function card(sp, i) {
   const left = document.createElement("div");
   left.innerHTML = `<span class="label ${sp.unresolved ? "" : "named"}">${escapeHtml(sp.label)}</span>` +
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
-    (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – zkontrolujte a uložte</p>` : "") +
+    (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
   const samples = document.createElement("div"); samples.className = "samples";
   if (!review || !review.has_mix) samples.innerHTML = '<span class="excerpt">zvuk nahrávky chybí</span>';
@@ -303,7 +366,7 @@ function card(sp, i) {
     pickP.onchange = () => {
       const p = people.find(x => x.id === pickP.value);
       if (p) setFields({ first: p.first, last: p.last, nick: p.nick, display: p.display });
-      pickP.value = "";
+      pickP.value = ""; updateDirty();
     };
     side.appendChild(pickP);
   }
@@ -315,11 +378,24 @@ function card(sp, i) {
     sel.onchange = () => {
       const src = /** @type {HTMLElement|null} */ (main.querySelector(`.side[data-label="${CSS.escape(sel.value)}"]`));
       if (src) { const f = collectFields(src); if (!(f.first || f.last || f.nick)) f.first = sel.value; setFields(f); }
-      sel.value = "";
+      sel.value = ""; updateDirty();
     };
     side.appendChild(sel);
   }
   updateShown();
+  const rm = document.createElement("button"); rm.type = "button"; rm.className = "link danger small";
+  rm.textContent = "✕ smazat repliky tohoto mluvčího (šum, klikání, vymyšlený text)";
+  rm.title = "odstraní všechny jeho repliky z přepisu a titulků; přepis --force je vrátí";
+  armedButton(rm, `opravdu smazat ${sp.count} replik? (klikněte znovu)`, async () => {
+    setStatus("mažu…");
+    try {
+      const r = await api("/api/speaker/remove", { method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ stem: review ? review.stem : "", label: sp.label }) });
+      setStatus(`smazáno ${r.removed} replik, přepis a titulky přegenerovány; zápis přegenerujte tlačítkem dole`, "ok");
+      if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+    } catch (e) { setStatus(String(e), "err"); }
+  });
+  side.appendChild(rm);
   c.appendChild(left); c.appendChild(side);
   return c;
 }
@@ -585,7 +661,7 @@ function addPerson() {
 function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   const sp = which === "speakers";
   main.hidden = !sp; peopleMain.hidden = sp;
-  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("scope").hidden = sp;  // the people registry is shared
+  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("scope").hidden = sp; $("dirty").hidden = !sp;  // the people registry is shared
   $("speakerButtons").hidden = !sp; $("peopleButtons").hidden = sp; $("tip").hidden = !sp;
   $("tabSpeakers").classList.toggle("active", sp); $("tabPeople").classList.toggle("active", !sp);
   setStatus("");
@@ -615,7 +691,7 @@ setInterval(() => { fetch("/api/ping", { method: "POST" }).catch(() => {}); }, 1
   try {
     await loadList();
     if (pick.value) await loadRecording(pick.value);
-    else main.innerHTML = '<div class="empty">Žádná přepsaná nahrávka.</div>';
+    else main.innerHTML = '<div class="empty">Žádná nahrávka ve složce nahrávek.</div>';
   } catch (e) { main.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
 })();
 </script>

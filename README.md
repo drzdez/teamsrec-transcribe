@@ -163,5 +163,7 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
   the mic track); unnamed labels of new recordings are named when cosine similarity >= `[voiceprints] threshold`
   and ahead of the runner-up by `margin`; the match is written to `speakers.json` + `voice_matches` in the transcript
 - planned: live Teams-window capture on the capture side
-- `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms / speakers), two backends in
+- `summarize`: one prompt (summary / topics / decisions / action items / open questions / terms / speakers); transcripts
+  that do not fit the local model's context (`ollama_max_ctx`, sized to stay on the GPU) are summarized in parts
+  and merged; two backends in
   `llm.py`: Ollama REST (`/api/chat`, context sized to the transcript) and the Anthropic SDK (streaming, cached system prompt)

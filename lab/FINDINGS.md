@@ -88,3 +88,12 @@ Závěry: dostatečně dlouhá promluva téhož člověka dává shodu vysoko na
 (pod ~30 s) dávají nespolehlivý embedding na obě strany (0.43 pro téhož člověka, 0.56 pro cizí hlas).
 Nastaveno: `threshold = 0.60`, `margin = 0.10`, `min_seconds = 30` (kratší označení se neporovnávají
 ani neukládají). Přehodnotit po 10+ nahrávkách s více lidmi.
+
+## Lokální zápisy – kontext vs. VRAM (2026-09-11)
+
+gemma4:31b (20 GB) na RTX 5090 Laptop 24 GB: s `num_ctx` 38 343 (70minutový přepis, 64 tis. znaků) Ollama
+umístila 12 % modelu do CPU (`ollama ps`: 12%/88% CPU/GPU) a zápis nedoběhl do 30minutového timeoutu.
+S `num_ctx` ≈ 20 000 je model 100 % na GPU. Proto `ollama_max_ctx = 20480` a přepisy nad ~23 tis. znaků
+se sumarizují po částech (každá část samostatný zápis se stejnými nadpisy, pak sloučení). 44minutová schůzka:
+2 části + sloučení, tokeny 18 tis. in / 4,3 tis. out. Během souběžné schůzky v Teams je GPU sdílená a části
+trvají několikanásobně déle.

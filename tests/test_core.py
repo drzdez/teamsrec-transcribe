@@ -475,6 +475,44 @@ def test_remove_speaker_drops_segments_and_reexports(tmp_path):
     assert all(s.get("speaker") for s in rec.read_json(rec.transcript_path)["segments"])
 
 
+def test_merge_timelines_and_shift():
+    from teamsrec_transcribe.video_speakers import merge_timelines
+    a = VideoTimeline(fps=2, speakers={"Jana": [[0, 5], [10, 12]]}, clusters=[{"box": [1]}])
+    b = VideoTimeline(fps=2, speakers={"Jana": [[4, 8]], "Petr": [[1, 2]]}, clusters=[])
+    m = merge_timelines([a, b.shifted(100), VideoTimeline(fps=2, speakers={"Jana": [[4, 8]]}, clusters=[])])
+    assert m.speakers == {"Jana": [[0, 8], [10, 12], [104, 108]], "Petr": [[101, 102]]}  # overlap merged, shift kept
+    assert m.to_json()["source"] == "teams-screen" and m.clusters == [{"box": [1]}]
+    assert merge_timelines([None, None]) is None
+    assert VideoTimeline.from_json(m.to_json()).speakers == m.speakers
+
+
+def test_screen_analysis_writes_merged_timeline(tmp_path, monkeypatch):
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.people import People
+    cfg = Config(out_dir=tmp_path)
+    ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.save()
+    rec = Recording.load(_make_recording(tmp_path, screens=[
+        {"file": "2026-09-04_1400_tydenni-sync_screen1.mp4", "fps": 2, "width": 1600, "height": 900, "start_offset_s": 0.0, "titles": ["Sync | Microsoft Teams"]},
+        {"file": "2026-09-04_1400_tydenni-sync_screen2.mp4", "fps": 2, "width": 1600, "height": 900, "start_offset_s": 30.0, "titles": ["Galerie"]},
+        {"file": "missing_screen3.mp4", "fps": 2, "start_offset_s": 0.0}]))
+    for n in ("_screen1.mp4", "_screen2.mp4"):
+        rec.file(n).write_bytes(b"x")
+    seen = []
+    def fake_analyze(path, *, fps, names, width, height):
+        seen.append((path.name, names, width))
+        if path.name.endswith("_screen1.mp4"):
+            return VideoTimeline(fps=fps, speakers={"Petr Svoboda": [[0, 10]]}, clusters=[])
+        return VideoTimeline(fps=fps, speakers={"Jana Nováková": [[0, 5]]}, clusters=[])
+    monkeypatch.setattr(pl, "analyze_video", fake_analyze)
+    tl = pl.do_video(cfg, rec)
+    assert [s[0][-12:] for s in seen] == ["_screen1.mp4", "_screen2.mp4"]
+    assert "Petr Svoboda" in seen[0][1] and "Jana Nováková" in seen[0][1]  # registry + participants as OCR candidates
+    assert tl.speakers == {"Petr Svoboda": [[0, 10]], "Jana Nováková": [[30, 35]]}
+    assert rec.read_json(rec.speakers_video_path)["source"] == "teams-screen"
+    assert pl._looks_like_a_name("Petr Svoboda") and pl._looks_like_a_name("Jana Nováková-Černá")
+    assert not pl._looks_like_a_name("Petr") and not pl._looks_like_a_name("x1 y2") and not pl._looks_like_a_name("Nahrávání 12:30")
+
+
 def test_video_names_are_registered_as_people(tmp_path):
     from teamsrec_transcribe.people import People
     from teamsrec_transcribe.pipeline import _register_video_names

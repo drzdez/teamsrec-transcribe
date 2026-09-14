@@ -19,7 +19,7 @@ from .providers.base import Segment, Word
 from .recording import (Recording, RecordingError, is_media_file, is_sidecar, iter_recordings, make_stem,
                         resolve_recording, slugify)
 from .speakers import apply_manual_names, apply_video_timeline, speaker_list
-from .video_speakers import VideoTimeline, analyze_video
+from .video_speakers import VideoTimeline, analyze_video, merge_timelines
 from .voiceprints import Voiceprints, enroll_from_recording, remap_embeddings, speech_seconds
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,40 @@ def do_import(cfg: Config, src: Path, *, title: str | None = None, start: dateti
     return rec
 
 
+def _screen_names(cfg: Config, rec: Recording) -> list[str]:
+    """Candidate names for the label OCR of a live recording: everyone in the registry plus participants."""
+    people = People.load(cfg.out_dir, cfg.people_display)
+    names = [p.full for p in people.people] + [a for p in people.people for a in p.aliases] + list(rec.participants)
+    return sorted({n for n in names if n})
+
+
+def do_video_screens(cfg: Config, rec: Recording) -> VideoTimeline | None:
+    """Live recording: the capture app saved every Teams window as <stem>_screen<N>.mp4 (sidecar `screens`).
+    Each is analysed like a Teams recording video; the timelines are shifted by their start offset and merged."""
+    screens = rec.sidecar.get("screens") or []
+    parts = []
+    names = _screen_names(cfg, rec) or None
+    for sc in screens:
+        path = rec.dir / sc["file"]
+        if not path.exists():
+            continue
+        log.info("%s: analysing %s (%s)", rec.stem, sc["file"], "; ".join(sc.get("titles", [])[:2]))
+        tl = analyze_video(path, fps=cfg.video.fps, names=names, width=sc.get("width", 1600), height=sc.get("height", 900))
+        if tl is not None:
+            parts.append(tl.shifted(float(sc.get("start_offset_s", 0.0))))
+    tl = merge_timelines(parts)
+    if tl is None:
+        log.info("%s: no name labels found in the captured Teams windows", rec.stem)
+        return None
+    rec.write_json(rec.speakers_video_path, tl.to_json())
+    for name in sorted(tl.speakers, key=lambda n: -tl.total_seconds(n)):
+        log.info("  %-28s %5.1f min", name, tl.total_seconds(name) / 60)
+    return tl
+
+
 def do_video(cfg: Config, rec: Recording) -> VideoTimeline | None:
+    if rec.sidecar.get("screens"):
+        return do_video_screens(cfg, rec)
     src = rec.origin_path
     if not src or not src.exists():
         log.info("%s: no origin video file, skipping video analysis", rec.stem)
@@ -197,6 +230,11 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     prompt = build_prompt(rec, ts.glossary)
 
     timeline = None
+    if not rec.speakers_video_path.exists() and rec.sidecar.get("screens") and cfg.video.enabled:
+        try:
+            do_video_screens(cfg, rec)  # live recording with captured Teams windows
+        except Exception as e:  # never block the transcript on the video step
+            log.error("%s: screen analysis failed: %s", rec.stem, e)
     if rec.speakers_video_path.exists():
         timeline = VideoTimeline.from_json(rec.read_json(rec.speakers_video_path))
     want_diarize = ts.diarize if diarize is None else diarize
@@ -247,13 +285,19 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     return rec.transcript_path
 
 
+def _looks_like_a_name(text: str) -> bool:
+    """OCR of a live window is noisier than a Teams recording: only register 'First Last'-shaped strings."""
+    import re
+    return bool(re.fullmatch(r"[^\W\d_](?:[^\W\d_]|['.-])+(?: [^\W\d_](?:[^\W\d_]|['.-])+){1,3}", text))
+
+
 def _register_video_names(cfg: Config, segments: list[Segment]) -> None:
     """Names read from the Teams video are real display names: make sure each is in the people registry
     (so they show up on the People tab and can collect voice prints)."""
     people = People.load(cfg.out_dir, cfg.people_display)
     before = len(people.people)
     for name in speaker_list(segments):
-        if name and not name.startswith("SPEAKER_") and name != "UNKNOWN":
+        if name and not name.startswith("SPEAKER_") and name != "UNKNOWN" and _looks_like_a_name(name):
             people.ensure(name)
     if len(people.people) != before:
         people.save()

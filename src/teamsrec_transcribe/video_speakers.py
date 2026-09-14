@@ -36,8 +36,10 @@ class VideoTimeline:
     speakers: dict[str, list[list[float]]]
     clusters: list[dict]
 
+    source: str = "teams-video"
+
     def to_json(self) -> dict:
-        return {"format": FORMAT_VERSION, "source": "teams-video", "fps": self.fps,
+        return {"format": FORMAT_VERSION, "source": self.source, "fps": self.fps,
                 "speakers": self.speakers, "clusters": self.clusters}
 
     @classmethod
@@ -46,6 +48,35 @@ class VideoTimeline:
 
     def total_seconds(self, name: str) -> float:
         return sum(e - s for s, e in self.speakers.get(name, []))
+
+    def shifted(self, offset: float) -> "VideoTimeline":
+        return VideoTimeline(fps=self.fps, clusters=self.clusters,
+                             speakers={n: [[round(s + offset, 2), round(e + offset, 2)] for s, e in iv]
+                                       for n, iv in self.speakers.items()})
+
+
+def merge_timelines(parts: list[VideoTimeline], source: str = "teams-screen") -> VideoTimeline | None:
+    """Union of several timelines (one per captured Teams window): per name, overlapping or touching intervals
+    are merged. Used for live recordings where the gallery may sit in the meeting window, a pop-out, or both."""
+    parts = [p for p in parts if p is not None]
+    if not parts:
+        return None
+    speakers: dict[str, list[list[float]]] = {}
+    for p in parts:
+        for name, iv in p.speakers.items():
+            speakers.setdefault(name, []).extend(iv)
+    merged: dict[str, list[list[float]]] = {}
+    for name, iv in speakers.items():
+        out: list[list[float]] = []
+        for s, e in sorted(iv):
+            if out and s <= out[-1][1] + 0.01:
+                out[-1][1] = max(out[-1][1], e)
+            else:
+                out.append([s, e])
+        merged[name] = out
+    tl = VideoTimeline(fps=parts[0].fps, speakers=merged, clusters=[c for p in parts for c in p.clusters])
+    tl.source = source
+    return tl
 
 
 def _frames(video: Path, fps: float):

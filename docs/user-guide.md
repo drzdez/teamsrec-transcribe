@@ -86,7 +86,9 @@ Seznam účastníků zlepší přepis jmen a pomůže OCR při čtení jmenovek 
 
 ### Živé nahrávky z teamsrec-capture
 
-U živých nahrávek (stopy `sys` + `mic`) dostane váš hlas jméno z `[user] name` v konfiguraci: ta část
+U živých nahrávek capture (od verze 0.3.0) navíc snímá okna Teams jako videa `<stem>_screen<N>.mp4`
+a transcribe z nich čte zvýrazněné jmenovky stejně jako u stažených záznamů, takže ostatní účastníci dostanou
+jména z obrazu. Váš hlas dostane jméno z `[user] name` v konfiguraci: ta část
 diarizace, která se kryje s aktivitou mikrofonu, jste vy. Ostatní účastníci zůstávají `SPEAKER_XX`, dokud je
 nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikrofonní stopa není, jméno se nepoužije.
 

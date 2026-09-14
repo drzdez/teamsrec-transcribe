@@ -94,7 +94,7 @@ def import_cmd(ctx: typer.Context, file: Path = typer.Argument(..., exists=True,
 @_errors
 def video(ctx: typer.Context, target: str = typer.Argument(..., help="stem or any file of the recording"),
           participants: Optional[str] = typer.Option(None, help="comma-separated names for OCR matching")):
-    """(Re)run the Teams video analysis for an imported recording."""
+    """(Re)run the Teams video analysis (imported recording video, or the Teams windows captured live)."""
     from .pipeline import do_video, resolve_target
     _require_ffmpeg()
     rec = resolve_target(_cfg(ctx), target, allow_import=False)

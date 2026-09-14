@@ -65,9 +65,12 @@
   button.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
   button.link.danger { color: var(--err); margin-top: 12px; }
   button.link.small { font-size: 12px; margin-top: 4px; text-align: left; }
+  button.armed, button.link.armed, td.act button.armed { background: var(--err) !important; color: #fff !important; border-radius: 8px; padding: 6px 10px; font-weight: 600; font-size: 13px; }
+  button.link.cancel { margin-left: 8px; font-size: 13px; color: var(--muted); }
   button.primary-btn { padding: 10px 18px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.primary-btn:disabled { opacity: .5; cursor: default; }
   .empty p { margin: 6px 0; }
+  .toolbar { margin: 4px 0 10px; }
   button.play { border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 8px; padding: 3px 9px; cursor: pointer; font-size: 13px; }
   button.play.playing { border-color: var(--accent); color: var(--accent); }
   footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line);
@@ -119,9 +122,10 @@
  * @typedef {{start:number,end:number,at:string,text:string}} Sample
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
- * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
+ * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
  * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
  */
@@ -176,10 +180,14 @@ function emptyBox(/** @type {string} */ text) {
 /** a delete button that needs a second click within 3 s (no browser dialogs) */
 function armedButton(/** @type {HTMLButtonElement} */ btn, /** @type {string} */ confirmText, /** @type {() => void} */ action) {
   const original = btn.textContent;
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "link cancel"; cancel.textContent = "Zrušit"; cancel.hidden = true;
+  const disarm = () => { delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = original; cancel.hidden = true; };
+  btn.insertAdjacentElement("afterend", cancel);
+  cancel.onclick = () => { disarm(); if (status.textContent.startsWith("zatím se nic")) setStatus(""); };
   btn.onclick = () => {
-    if (btn.dataset.armed) { delete btn.dataset.armed; btn.textContent = original; action(); return; }
-    btn.dataset.armed = "1"; btn.textContent = confirmText;
-    setTimeout(() => { if (btn.dataset.armed) { delete btn.dataset.armed; btn.textContent = original; } }, 3000);
+    if (btn.dataset.armed) { disarm(); action(); return; }
+    btn.dataset.armed = "1"; btn.classList.add("armed"); btn.textContent = confirmText; cancel.hidden = false;
+    setStatus("zatím se nic nesmazalo – potvrďte kliknutím na červené tlačítko, nebo Zrušit", "busy");
   };
 }
 
@@ -276,6 +284,21 @@ function renderSpeakers() {
   if (!review) return;
   main.innerHTML = "";
   if (!review.speakers.length) { main.appendChild(emptyBox("V přepisu nejsou žádní mluvčí.")); return; }
+  if (review.speakers.some(sp => sp.unresolved && !sp.person)) {
+    const bar = document.createElement("div"); bar.className = "toolbar";
+    const b = document.createElement("button"); b.type = "button"; b.className = "play";
+    b.textContent = "Zkusit poznat neznámé po hlase (podle otisků uložených od té doby)";
+    b.onclick = async () => {
+      b.disabled = true; setStatus("porovnávám s otisky…");
+      try {
+        const r = await api("/api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stem: review ? review.stem : "" }) });
+        const n = Object.keys(r.matches).length;
+        if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+        setStatus(n ? `poznáno ${n} mluvčích, uloženo do přepisu a titulků; zápis přegenerujte tlačítkem dole` : "nikdo nepoznán (shoda pod prahem nebo příliš krátká promluva)", n ? "ok" : "");
+      } catch (e) { setStatus(String(e), "err"); b.disabled = false; }
+    };
+    bar.appendChild(b); main.appendChild(bar);
+  }
   review.speakers.forEach((sp, i) => main.appendChild(card(sp, i)));
 }
 
@@ -303,6 +326,15 @@ function card(sp, i) {
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
     (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
+  if (sp.voice_hint) {
+    const vh = sp.voice_hint;
+    const p = document.createElement("p"); p.className = "hint";
+    p.textContent = `nejpodobnější hlas: ${vh.name} (shoda ${vh.score.toFixed(2)}, ${vh.why}, nepřiřazeno automaticky) `;
+    const use = document.createElement("button"); use.type = "button"; use.className = "play"; use.textContent = "použít toto jméno";
+    use.onclick = () => { setFields(vh.fields); /** @type {HTMLInputElement|null} */ (side.querySelector('[data-key="first"]'))?.focus(); };
+    p.appendChild(use);
+    left.appendChild(p);
+  }
   const samples = document.createElement("div"); samples.className = "samples";
   if (!review || !review.has_mix) samples.innerHTML = '<span class="excerpt">zvuk nahrávky chybí</span>';
   for (const s of sp.samples) {
@@ -386,13 +418,13 @@ function card(sp, i) {
   const rm = document.createElement("button"); rm.type = "button"; rm.className = "link danger small";
   rm.textContent = "✕ smazat repliky tohoto mluvčího (šum, klikání, vymyšlený text)";
   rm.title = "odstraní všechny jeho repliky z přepisu a titulků; přepis --force je vrátí";
-  armedButton(rm, `opravdu smazat ${sp.count} replik? (klikněte znovu)`, async () => {
+  armedButton(rm, `Potvrdit smazání ${sp.count} replik mluvčího ${sp.label}`, async () => {
     setStatus("mažu…");
     try {
       const r = await api("/api/speaker/remove", { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ stem: review ? review.stem : "", label: sp.label }) });
-      setStatus(`smazáno ${r.removed} replik, přepis a titulky přegenerovány; zápis přegenerujte tlačítkem dole`, "ok");
       if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+      setStatus(`smazáno ${r.removed} replik a rovnou uloženo (přepis a titulky přegenerovány); zápis je beze změny, přegenerujte ho tlačítkem dole, pokud chcete`, "ok");
     } catch (e) { setStatus(String(e), "err"); }
   });
   side.appendChild(rm);
@@ -537,7 +569,7 @@ function personRow(p) {
   tr.appendChild(tdMerge);
   const tdAct = document.createElement("td"); tdAct.className = "act";
   const del = document.createElement("button"); del.type = "button"; del.title = "odebrat osobu (potvrdit druhým klikem, uloží se tlačítkem Uložit lidi)"; del.textContent = "✕";
-  armedButton(del, "odebrat?", () => tr.remove());
+  armedButton(del, "Potvrdit odebrání", () => tr.remove());
   tdAct.appendChild(del); tr.appendChild(tdAct);
   return tr;
 }
@@ -616,7 +648,7 @@ async function openPerson(/** @type {string} */ id) {
       const tdV = document.createElement("td"); tdV.textContent = `${pr.dims} hodnot`; tr.appendChild(tdV);
       const tdX = document.createElement("td"); tdX.className = "act";
       const del = document.createElement("button"); del.type = "button"; del.textContent = "✕"; del.title = "smazat tento otisk (potvrdit druhým klikem)";
-      armedButton(del, "smazat?", async () => {
+      armedButton(del, "Potvrdit smazání otisku", async () => {
         try { await api("/api/person/forget", { method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ id: d.id, stem: pr.stem, label: pr.label }) }); openPerson(d.id); }
         catch (e) { setStatus(String(e), "err"); }

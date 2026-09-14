@@ -101,6 +101,10 @@ Na stránce to uvidíte zeleně jako „poznáno po hlase: Pavel Orosz (shoda 0.
 `margin` (odstup od druhého nejlepšího). Otisky jednoho člověka smažete příkazem
 `teamsrec-transcribe people forget-voice <id>`, celý soubor `voiceprints.json` lze kdykoli smazat.
 
+Starší nahrávku, kde zůstali neznámí, lze porovnat s otisky nasbíranými od té doby bez nového přepisu:
+na stránce tlačítko „Zkusit poznat neznámé po hlase“ nad kartami, v terminálu `teamsrec-transcribe recognize
+<stem>` (bez stemu projde všechny nahrávky, `--summary` rovnou přegeneruje zápisy, kde někoho poznal).
+
 Otisk je biometrický údaj kolegy. Zůstává lokálně a slouží jen k tomu, aby se zápis nemusel pokaždé
 pojmenovávat ručně; informujte tým stejně, jako o nahrávání samotném.
 
@@ -183,7 +187,8 @@ Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jm�
 
 Mluvčí s pár sekundami „řeči“ dole v seznamu bývá šum: klikání myší, psaní, dech. Rozpoznávač si na něj
 občas vymyslí celou větu, klidně s pojmy z vaší domény (má je v nápovědě). Odkaz „✕ smazat repliky tohoto
-mluvčího“ pod polem jména je z přepisu a titulků odstraní (po druhém kliknutí); zápis pak přegenerujte.
+mluvčího“ pod polem jména je z přepisu a titulků odstraní: první klik tlačítko zčervená a čeká na potvrzení,
+druhý klik smaže a rovnou uloží (další Uložit není potřeba); zápis přegenerujte, pokud ho chcete bez nich.
 Smazání se zapíše do přepisu (`removed_speakers`), `transcribe --force` repliky vrátí.
 `label-speakers` v terminálu dělá totéž bez zvuku.
 

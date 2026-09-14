@@ -39,6 +39,7 @@ teamsrec-transcribe label-speakers <stem>       # interactive: SPEAKER_00 -> "Ja
 teamsrec-transcribe export <stem> [--txt] [--srt]
 teamsrec-transcribe summarize <stem> [--provider ollama|anthropic] [--model ...] [--language cs]
 teamsrec-transcribe review [latest|<stem>]              # local page: listen to each speaker, type names, save
+teamsrec-transcribe recognize [<stem>|latest] [--summary]      # match unknown speakers against voice prints collected since
 teamsrec-transcribe people list | merge KEEP DROP | forget-voice ID
 teamsrec-transcribe rename <stem> "New title"           # renames the folder + files to the new stem
 teamsrec-transcribe purge-audio [--older-than 30d]   # later: delete WAVs, keep transcripts

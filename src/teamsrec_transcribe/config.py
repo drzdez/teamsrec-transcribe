@@ -38,7 +38,7 @@ class VideoSettings:
 @dataclass(frozen=True)
 class VoiceprintSettings:
     enabled: bool = True  # store prints when labels get names, recognise unnamed labels on new recordings
-    threshold: float = 0.60  # cosine similarity needed to name a label by voice (calibrated 2026-09-11, lab/FINDINGS.md)
+    threshold: float = 0.55  # cosine similarity needed to name a label by voice (calibrated 2026-09-11, lab/FINDINGS.md)
     margin: float = 0.10  # ... and how far ahead of the runner-up person it must be
     min_seconds: float = 30.0  # labels with less speech are neither recognised nor enrolled
 
@@ -165,7 +165,7 @@ fps = 2
 
 [voiceprints]
 enabled = true               # recognise people by voice from earlier named recordings (local file _speakers/voiceprints.json)
-threshold = 0.60             # cosine similarity needed; margin = lead over the runner-up
+threshold = 0.55             # cosine similarity needed; margin = lead over the runner-up
 margin = 0.10
 min_seconds = 30             # a speaker must talk this long before their voice is compared or stored
 

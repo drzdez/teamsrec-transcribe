@@ -423,6 +423,38 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
     assert calls == [rec.stem] and st.status()["message"] == "processed" and st.status()["job"] == "process"
 
 
+def test_recognize_voices_from_stored_embeddings(tmp_path):
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.pipeline import recognize_voices
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    with pytest.raises(Exception):
+        recognize_voices(cfg, rec)  # no embeddings stored
+    data = rec.read_json(rec.transcript_path)
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0, 0.0], "SPEAKER_01": [0.0, 1.0, 0.0]}
+    data["segments"][0]["end"] = 40  # SPEAKER_00 talks long enough, SPEAKER_01 (8 s) does not
+    rec.write_json(rec.transcript_path, data)
+    ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.ensure("Jana Nováková"); ppl.save()
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll("petr-svoboda", [0.98, 0.1, 0.0], "other", "X"); vp.enroll("jana-novakova", [0.0, 0.99, 0.1], "other", "Y"); vp.save()
+    m = recognize_voices(cfg, rec)
+    assert list(m) == ["SPEAKER_00"] and m["SPEAKER_00"]["person"] == "petr-svoboda"
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "petr-svoboda"}
+    t = rec.read_json(rec.transcript_path)
+    assert "SPEAKER_00" in t["voice_matches"] and t["speaker_sources"][-2:] == ["voiceprint", "diarization"]
+    assert "Petr: Dobrý den" in rec.file(".txt").read_text(encoding="utf-8")
+    assert recognize_voices(cfg, rec) == {}  # nothing new the second time
+    # a close-but-not-close-enough print becomes a hint on the page instead of an assignment
+    from teamsrec_transcribe.web.review import build_review
+    data = rec.read_json(rec.transcript_path)
+    data["speaker_embeddings"]["SPEAKER_01"] = [0.3, 0.8, 0.0]  # ~0.85 to jana but only 8 s of speech
+    rec.write_json(rec.transcript_path, data)
+    sp = {s["label"]: s for s in build_review(cfg, rec)["speakers"]}
+    assert sp["SPEAKER_01"]["voice_hint"]["name"] == "Jana Nováková" and sp["SPEAKER_01"]["voice_hint"]["why"] == "krátká promluva"
+    assert sp["SPEAKER_00"]["voice_hint"] is None  # already assigned
+
+
 def test_remove_speaker_drops_segments_and_reexports(tmp_path):
     from teamsrec_transcribe.pipeline import remove_speaker
     cfg = Config(out_dir=tmp_path)
@@ -435,6 +467,12 @@ def test_remove_speaker_drops_segments_and_reexports(tmp_path):
     assert rec.read_json(rec.speakers_path) == {}
     assert "SPEAKER_01" not in rec.file(".txt").read_text(encoding="utf-8")
     assert remove_speaker(cfg, rec, "SPEAKER_01") == 0
+    # segments without any speaker show up as UNKNOWN on the page and can be removed under that name
+    data = rec.read_json(rec.transcript_path)
+    data["segments"].append({"start": 30, "end": 31, "text": "Přidáváme CJ.", "speaker": None})
+    rec.write_json(rec.transcript_path, data)
+    assert remove_speaker(cfg, rec, "UNKNOWN") == 1
+    assert all(s.get("speaker") for s in rec.read_json(rec.transcript_path)["segments"])
 
 
 def test_video_names_are_registered_as_people(tmp_path):

@@ -143,7 +143,10 @@ def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
     if not rec.transcript_path.exists():
         raise RecordingError(f"{rec.stem}: no transcript yet")
     data = rec.read_json(rec.transcript_path)
-    keep = [s for s in data["segments"] if s.get("speaker") != label]
+    if label == "UNKNOWN":  # segments the diarization left without a speaker
+        keep = [s for s in data["segments"] if s.get("speaker") not in (None, "", "UNKNOWN")]
+    else:
+        keep = [s for s in data["segments"] if s.get("speaker") != label]
     n = len(data["segments"]) - len(keep)
     if not n:
         return 0
@@ -298,6 +301,26 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
                                      manual, rec.stem, cfg.voiceprints.min_seconds)
     if changed:
         vp.save()
+    return matches
+
+
+def recognize_voices(cfg: Config, rec: Recording) -> dict:
+    """Compare the transcript's stored embeddings of still-unnamed labels with the voice prints collected since
+    (no re-transcription). Matches go to speakers.json + voice_matches; exports are regenerated."""
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    data = rec.read_json(rec.transcript_path)
+    embeddings = data.get("speaker_embeddings") or {}
+    if not embeddings:
+        raise RecordingError(f"{rec.stem}: the transcript has no voice embeddings (transcribed before voice prints "
+                             f"existed); run `transcribe --force`")
+    durations = speech_seconds(data.get("segments") or [])
+    matches = _voiceprints_step(cfg, rec, embeddings, durations, {}, data.get("diarize_model") or "")
+    data["voice_matches"] = {**(data.get("voice_matches") or {}), **matches}
+    if matches and "voiceprint" not in data.get("speaker_sources", []):
+        data["speaker_sources"] = [s for s in data.get("speaker_sources", []) if s != "diarization"] + ["voiceprint", "diarization"]
+    rec.write_json(rec.transcript_path, data)
+    do_export(cfg, rec)
     return matches
 
 

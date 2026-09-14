@@ -171,6 +171,31 @@ def label_speakers(ctx: typer.Context, target: str):
 
 @app.command()
 @_errors
+def recognize(ctx: typer.Context, target: Optional[str] = typer.Argument(None, help="stem or `latest`; default: every recording"),
+              summary: bool = typer.Option(False, "--summary", help="regenerate the minutes where someone was recognised")):
+    """Name still-unknown speakers by voice using the prints collected since the recording was transcribed."""
+    from .pipeline import do_summarize, recognize_voices, resolve_target
+    from .recording import iter_recordings
+    cfg = _cfg(ctx)
+    recs = [resolve_target(cfg, target, allow_import=False)] if target else \
+        [r for r in iter_recordings(cfg.out_dir) if r.transcript_path.exists()]
+    total = 0
+    for rec in recs:
+        try:
+            m = recognize_voices(cfg, rec)
+        except RecordingError as e:
+            typer.echo(f"{rec.stem}: skipped ({e})")
+            continue
+        for label, hit in m.items():
+            typer.echo(f"{rec.stem}: {label} -> {hit['person']} ({hit['score']})")
+        total += len(m)
+        if m and summary:
+            typer.echo(do_summarize(cfg, rec, force=True))
+    typer.echo(f"{total} speaker(s) recognised")
+
+
+@app.command()
+@_errors
 def rename(ctx: typer.Context, target: str = typer.Argument(..., help="stem, recording file, or `latest`"),
            title: str = typer.Argument(..., help="new meeting title")):
     """Give a recording a new title: folder and files get the new stem, exports and summary headings follow."""

@@ -20,6 +20,7 @@ API
   POST /api/person/forget        {"id", "stem"?, "label"?} -> drop one print (stem+label) or all prints of the person
   POST /api/speaker/remove       {"stem", "label"} -> drop that speaker's segments (noise turned into text)
   POST /api/process              {"stem"} -> transcribe + export + summarize in the background (status polls it)
+  POST /api/recognize            {"stem"} -> match unnamed labels against the voice prints collected since
   GET  /api/status               background job (summary) state
   POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
   POST /api/quit                 stop the server
@@ -49,8 +50,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ..config import Config
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, remove_speaker,
-                        rename_recording)
+from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, recognize_voices,
+                        remove_speaker, rename_recording)
 from ..voiceprints import Voiceprints
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -128,6 +129,27 @@ def _person_info(people: People, value: str) -> dict | None:
             "full": p.full, "shown": p.name(people.default_mode)}
 
 
+VOICE_HINT_MIN = 0.40  # below this a "closest print" is noise, not a hint
+
+
+def _voice_hint(vp: Voiceprints, people: People, vec, unresolved: bool, secs: float, threshold: float) -> dict | None:
+    """The closest voice print for a still-unknown label that did not pass the automatic threshold, so the
+    user can confirm it with one click instead of guessing."""
+    if not (unresolved and vec and vp.people):
+        return None
+    ranked = vp.scores(vec)
+    if not ranked or ranked[0][1] < VOICE_HINT_MIN:
+        return None
+    pid, score = ranked[0]
+    p = people.get(pid)
+    if p is None:
+        return None
+    second = ranked[1][1] if len(ranked) > 1 else -1.0
+    why = "krátká promluva" if secs < 30 else ("malý odstup od dalšího" if score - second < 0.10 else "pod prahem")
+    return {"person": pid, "name": p.full, "score": round(score, 2), "fields": {"first": p.first, "last": p.last,
+            "nick": p.nick, "display": p.display}, "why": why, "threshold": threshold}
+
+
 def _fmt_hms(t: float) -> str:
     t = int(t)
     return f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}"
@@ -145,6 +167,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     people = People.load(cfg.out_dir, cfg.people_display)
     hints = summary_hints(rec)
     voice = data.get("voice_matches") or {}
+    vp = Voiceprints.load(cfg.out_dir)
+    embeddings = data.get("speaker_embeddings") or {}
     by: dict[str, list[Segment]] = {}
     for s in segs:
         by.setdefault(s.speaker or "UNKNOWN", []).append(s)
@@ -170,6 +194,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
             "voice": ({"person": voice[label]["person"], "score": voice[label]["score"],
                        "name": (people.get(voice[label]["person"]) or Person(voice[label]["person"])).full}
                       if label in voice else None),
+            "voice_hint": _voice_hint(vp, people, embeddings.get(label), is_label(label) and not value, secs,
+                                      cfg.voiceprints.threshold),
             "seconds": round(secs, 1),
             "count": len(ss),
             "hint": hints.get(label, ""),
@@ -493,6 +519,10 @@ def _handler(state: ReviewState, server_ref: dict):
                     started = state.run_process(rec)
                     self._json({"ok": started, "status": state.status(),
                                 **({} if started else {"error": "another job is still running"})})
+                elif u.path == "/api/recognize":
+                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    m = recognize_voices(state.cfg, rec)
+                    self._json({"ok": True, "matches": m})
                 elif u.path == "/api/speaker/remove":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
                     n = remove_speaker(state.cfg, rec, str(body.get("label") or ""))

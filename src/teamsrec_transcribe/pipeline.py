@@ -32,6 +32,13 @@ def do_import(cfg: Config, src: Path, *, title: str | None = None, start: dateti
               video: bool | None = None, force: bool = False) -> Recording:
     rec = import_file(src, cfg.out_dir, title=title, start=start, language=language,
                       participants=participants, force=force)
+    if cfg.calendar_outlook and not rec.participants and rec.sidecar.get("start"):
+        from .outlook import calendar_fields, meeting_at
+        m = meeting_at(datetime.fromisoformat(rec.sidecar["start"]))
+        if m:
+            rec.sidecar.update(calendar_fields(m))
+            rec.save_sidecar()
+            log.info("%s: Outlook: '%s', %d participants", rec.stem, m.get("subject"), len(m.get("attendees", [])))
     want_video = cfg.video.enabled if video is None else video
     if want_video and (force or not rec.speakers_video_path.exists()):
         do_video(cfg, rec)
@@ -45,23 +52,53 @@ def _screen_names(cfg: Config, rec: Recording) -> list[str]:
     return sorted({n for n in names if n})
 
 
+TEAMS_NAV_HEADS = {"activity", "chat", "teams", "calendar", "calls", "files", "apps", "copilot", "onedrive", "meet",
+                   "viva", "planner", "aktivita", "týmy", "kalendář", "hovory", "soubory", "aplikace"}
+
+
+def is_meeting_screen(titles: list[str]) -> bool:
+    """The Teams main window (Calendar, Chat, ...) is captured too; its purple event boxes look like name labels.
+    Only windows that never carried a navigation-section title are meeting windows worth analysing."""
+    if not titles:
+        return True
+    for t in titles:
+        head = t.split("|")[0].strip().lower()
+        if head in TEAMS_NAV_HEADS:
+            return False
+    return True
+
+
 def do_video_screens(cfg: Config, rec: Recording) -> VideoTimeline | None:
     """Live recording: the capture app saved every Teams window as <stem>_screen<N>.mp4 (sidecar `screens`).
-    Each is analysed like a Teams recording video; the timelines are shifted by their start offset and merged."""
+    Each meeting window is analysed like a Teams recording video; the timelines are shifted by their start
+    offset and merged. OCR results that neither match a known person nor look like a name are dropped (a
+    live window is noisier than a recording)."""
     screens = rec.sidecar.get("screens") or []
     parts = []
-    names = _screen_names(cfg, rec) or None
+    candidates = _screen_names(cfg, rec)
+    names = candidates or None
     for sc in screens:
         path = rec.dir / sc["file"]
         if not path.exists():
             continue
+        if not is_meeting_screen(sc.get("titles") or []):
+            log.info("%s: %s is the Teams main window (%s), skipped", rec.stem, sc["file"], (sc.get("titles") or ["?"])[0])
+            continue
         log.info("%s: analysing %s (%s)", rec.stem, sc["file"], "; ".join(sc.get("titles", [])[:2]))
         tl = analyze_video(path, fps=cfg.video.fps, names=names, width=sc.get("width", 1600), height=sc.get("height", 900))
         if tl is not None:
-            parts.append(tl.shifted(float(sc.get("start_offset_s", 0.0))))
+            kept = {n: iv for n, iv in tl.speakers.items() if n in candidates or _looks_like_a_name(n)}
+            dropped = sorted(set(tl.speakers) - set(kept))
+            if dropped:
+                log.info("%s: dropped OCR noise %s", rec.stem, dropped)
+            tl.speakers = kept
+            if kept:
+                parts.append(tl.shifted(float(sc.get("start_offset_s", 0.0))))
     tl = merge_timelines(parts)
     if tl is None:
         log.info("%s: no name labels found in the captured Teams windows", rec.stem)
+        if rec.speakers_video_path.exists():
+            rec.speakers_video_path.unlink()  # a stale timeline from an earlier analysis must not be applied
         return None
     rec.write_json(rec.speakers_video_path, tl.to_json())
     for name in sorted(tl.speakers, key=lambda n: -tl.total_seconds(n)):

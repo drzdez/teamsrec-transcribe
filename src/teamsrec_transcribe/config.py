@@ -62,6 +62,7 @@ class Config:
     out_dir: Path = field(default_factory=lambda: Path.home() / "meetings")
     user_name: str = ""  # [user] name: the person behind the microphone in live recordings
     people_display: str = "nick"  # [people] display: first | full | nick (nick falls back to first)
+    calendar_outlook: bool = False  # [calendar] outlook: read title/participants from classic Outlook (COM)
     transcribe: TranscribeSettings = field(default_factory=TranscribeSettings)
     video: VideoSettings = field(default_factory=VideoSettings)
     voiceprints: VoiceprintSettings = field(default_factory=VoiceprintSettings)
@@ -113,6 +114,7 @@ def load_config(path: Path | None = None) -> Config:
         out_dir=out_dir,
         user_name=str(_section(data, "user").get("name", "")).strip(),
         people_display=str(_section(data, "people").get("display", "nick")).strip() or "nick",
+        calendar_outlook=bool(_section(data, "calendar").get("outlook", False)),
         transcribe=_build(TranscribeSettings, _section(data, "transcribe")),
         video=_build(VideoSettings, _section(data, "video")),
         voiceprints=_build(VoiceprintSettings, _section(data, "voiceprints")),
@@ -144,6 +146,12 @@ name = "{user_name}"         # you: live recordings name your microphone track a
 
 [people]
 display = "nick"             # how people appear in exports and minutes: first | full | nick (no nickname -> first)
+
+[calendar]
+outlook = {outlook}              # classic Outlook on this PC (COM, local): meeting title + participants for recordings
+
+[capture]
+prompt_default = "record"    # teamsrec-capture: what the "Record?" prompt does when nobody answers in 45 s: record | skip
 
 [recordings]
 out_dir = "{out_dir}"

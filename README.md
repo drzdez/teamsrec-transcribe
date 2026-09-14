@@ -68,6 +68,9 @@ name = "Jan Novák"          # live recordings: the diarization label that match
 [people]
 display = "nick"                 # exports and minutes print: first | full | nick (nick without a nickname -> first)
 
+[calendar]
+outlook = true                   # classic Outlook on this PC (COM): meeting title + participants (imports by start time)
+
 [recordings]
 out_dir = "D:/meetings"          # the recordings folder; _inbox lives inside it
 

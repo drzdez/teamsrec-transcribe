@@ -10,6 +10,7 @@ dependencies = [
     "typer>=0.15",
     "numpy>=1.26",
     "anthropic>=1.0",
+    "pywin32>=306; sys_platform == 'win32'",  # Outlook calendar via COM (optional feature, [calendar] outlook)
 ]
 
 [project.optional-dependencies]

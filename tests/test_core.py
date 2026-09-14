@@ -509,8 +509,39 @@ def test_screen_analysis_writes_merged_timeline(tmp_path, monkeypatch):
     assert "Petr Svoboda" in seen[0][1] and "Jana Nováková" in seen[0][1]  # registry + participants as OCR candidates
     assert tl.speakers == {"Petr Svoboda": [[0, 10]], "Jana Nováková": [[30, 35]]}
     assert rec.read_json(rec.speakers_video_path)["source"] == "teams-screen"
+    assert pl.is_meeting_screen(["Schůzka s: Petr | Microsoft Teams"]) and pl.is_meeting_screen([])
+    assert not pl.is_meeting_screen(["Calendar | Microsoft Teams"]) and not pl.is_meeting_screen(["Chat | Archi | Microsoft Teams"])
+    # a main-window capture and OCR noise are ignored
+    rec2 = Recording.load(_make_recording(tmp_path, stem="2026-09-04_1500_druha", screens=[
+        {"file": "2026-09-04_1500_druha_screen1.mp4", "fps": 2, "start_offset_s": 0.0, "titles": ["Calendar | Microsoft Teams"]},
+        {"file": "2026-09-04_1500_druha_screen2.mp4", "fps": 2, "start_offset_s": 0.0, "titles": ["WFMS | Microsoft Teams"]}]))
+    rec2.file("_screen1.mp4").write_bytes(b"x"); rec2.file("_screen2.mp4").write_bytes(b"x")
+    monkeypatch.setattr(pl, "analyze_video", lambda path, **k: VideoTimeline(fps=2, speakers={"Develonment": [[0, 5]], "Petr Svoboda": [[5, 9]]}, clusters=[]))
+    assert pl.do_video(cfg, rec2).speakers == {"Petr Svoboda": [[5, 9]]}
     assert pl._looks_like_a_name("Petr Svoboda") and pl._looks_like_a_name("Jana Nováková-Černá")
     assert not pl._looks_like_a_name("Petr") and not pl._looks_like_a_name("x1 y2") and not pl._looks_like_a_name("Nahrávání 12:30")
+
+
+def test_outlook_pick_meeting_and_fields():
+    from datetime import datetime as dt
+    from teamsrec_transcribe.outlook import calendar_fields, pick_meeting
+    items = [{"subject": "A", "start": dt(2026, 9, 14, 8, 30), "end": dt(2026, 9, 14, 9, 15), "teams": True,
+              "attendees": ["Jana Nováková", "Petr Svoboda"], "organizer": "Jana Nováková"},
+             {"subject": "B", "start": dt(2026, 9, 14, 9, 15), "end": dt(2026, 9, 14, 9, 30), "teams": False, "attendees": []},
+             {"subject": "C", "start": dt(2026, 9, 14, 9, 20), "end": dt(2026, 9, 14, 9, 40), "teams": True, "attendees": []}]
+    assert pick_meeting(items, dt(2026, 9, 14, 8, 22))["subject"] == "A"   # 8 min early
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 17))["subject"] == "B"   # inside B beats A's grace
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 25))["subject"] == "C"   # inside both: Teams first
+    assert pick_meeting(items, dt(2026, 9, 14, 12, 0)) is None
+    f = calendar_fields(items[0])
+    assert f["participants"] == [{"name": "Jana Nováková"}, {"name": "Petr Svoboda"}]
+    assert f["calendar"]["source"] == "outlook" and f["calendar"]["start"] == "2026-09-14T08:30"
+
+
+def test_config_calendar_flag(tmp_path):
+    p = tmp_path / "t.toml"
+    p.write_text('[calendar]\noutlook = true\n', encoding="utf-8")
+    assert load_config(p).calendar_outlook is True and Config().calendar_outlook is False
 
 
 def test_video_names_are_registered_as_people(tmp_path):

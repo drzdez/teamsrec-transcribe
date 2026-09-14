@@ -30,8 +30,11 @@ Jednorázově:
    by našly i jiné nástroje Anthropic, třeba Claude Code, a nabízely by účtování přes ni; tuhle čte jen teamsrec).
    Max subskripce claude.ai se na API nevztahuje, v Console se
    předplácí kredit; zápis ze 70minutové schůzky vyšel na 36 tis. vstupních a 7 tis. výstupních tokenů, tedy asi 0,35 USD.
-5. **Konfigurace:** `bin\teamsrec-transcribe.cmd config --init` založí `%APPDATA%\teamsrec\teamsrec.toml`
-   a zeptá se na vaše jméno. To se uloží jako `[user] name` a používá se u živých nahrávek: mikrofonní stopa
+5. **Konfigurace:** `bin\teamsrec-transcribe.cmd config --init` založí `%APPDATA%\teamsrec\teamsrec.toml`,
+   zeptá se na vaše jméno a na to, zda smí číst kalendář z klasického Outlooku na tomto počítači (`[calendar]
+   outlook`). S kalendářem dostane každá nahrávka správný název schůzky a seznam účastníků: capture při startu
+   hovoru, transcribe při importu záznamu (podle času začátku). Čte se lokálně přes COM, nic neodchází.
+   Nový Outlook (bez COM) kalendář neposkytne; pak zůstává název z okna Teams. To se uloží jako `[user] name` a používá se u živých nahrávek: mikrofonní stopa
    je jen váš hlas, takže vaše repliky dostanou jméno automaticky, bez hádání. Prázdné jméno = vypnuto.
    Dále upravte `out_dir` a `glossary` (viz kapitola 5).
 6. **Příkaz odkudkoli:** přidejte `D:\projects\teamsrec-transcribe\bin` do PATH (Nastavení → proměnné prostředí),
@@ -58,6 +61,9 @@ První běh je tedy o několik minut delší.
 70 minut záznamu trvá zhruba 2 minuty (video) + 3,5 minuty (přepis) na RTX 5090. Na slabší kartě úměrně déle.
 
 ### Nejnovější nahrávka jedním kliknutím
+
+Dotaz „Nahrát?“ při začátku hovoru se po 45 s rozhodne sám: výchozí je nahrávat (`[capture] prompt_default =
+"record"`), nahrávku lze kdykoli zahodit z ikony v liště. Kdo chce naopak výchozí přeskočení, nastaví `"skip"`.
 
 Zástupce **teamsrec – zpracovat poslední** na ploše (nebo `bin\teamsrec-process-latest.cmd`) importuje, co je
 ve schránce `_inbox` a zpracuje je, a pak ještě nejnovější nahrávku: přepis, export a zápis. Okno zůstane otevřené, aby šel

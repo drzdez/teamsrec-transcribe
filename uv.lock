@@ -1626,6 +1626,16 @@ wheels = [
 ]
 
 [[package]]
+name = "pywin32"
+version = "312"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/83/ff/32aa7d2ed0ab12b323aaa64f9b75e6ad4f8fd09f9ccfc28c79414d46838d/pywin32-312-cp312-cp312-win32.whl", hash = "sha256:dab4f65ac9c4e48400a2a0530c46c3c579cd5905ecd11b80692373915269208b", size = 6371877, upload-time = "2026-06-04T07:49:28.836Z" },
+    { url = "https://files.pythonhosted.org/packages/03/d9/77040d3b43df3f3be32ea289433d660d2727f5ba327bc73be835127d9d60/pywin32-312-cp312-cp312-win_amd64.whl", hash = "sha256:b457f6d628a47e8a7346ce22acb7e1a46a4a78b52e1d17e1af56871bd19a93bc", size = 6914841, upload-time = "2026-06-04T07:49:31.85Z" },
+    { url = "https://files.pythonhosted.org/packages/e3/cc/7b1ec671775756020a0ee7f4feeaf3c568f0ab86bd3900088cf986937a92/pywin32-312-cp312-cp312-win_arm64.whl", hash = "sha256:6017c58e12f6809fbb0555b75df144c2922a9ffd18e4b9b5afa863b6c1a9d950", size = 6727901, upload-time = "2026-06-04T07:49:34.244Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1890,6 +1900,7 @@ source = { editable = "." }
 dependencies = [
     { name = "anthropic" },
     { name = "numpy" },
+    { name = "pywin32", marker = "sys_platform == 'win32'" },
     { name = "typer" },
 ]
 
@@ -1932,6 +1943,7 @@ requires-dist = [
     { name = "easyocr", marker = "extra == 'video'", specifier = ">=1.7" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", marker = "extra == 'video'", specifier = ">=4.9" },
+    { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=306" },
     { name = "scipy", marker = "extra == 'video'", specifier = ">=1.11" },
     { name = "teamsrec-transcribe", extras = ["whisperx", "video"], marker = "extra == 'all'" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'whisperx') or (sys_platform == 'win32' and extra == 'whisperx')", specifier = "==2.8.0", index = "https://download.pytorch.org/whl/cu128" },

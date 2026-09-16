@@ -62,8 +62,10 @@ První běh je tedy o několik minut delší.
 
 ### Nejnovější nahrávka jedním kliknutím
 
-Dotaz „Nahrát?“ při začátku hovoru se po 45 s rozhodne sám: výchozí je nahrávat (`[capture] prompt_default =
-"record"`), nahrávku lze kdykoli zahodit z ikony v liště. Kdo chce naopak výchozí přeskočení, nastaví `"skip"`.
+Hovor se nahrává od první sekundy, jakmile si Teams vezme mikrofon. Teprve potom se objeví okno „Zahodit tuto
+nahrávku?“: Ano = smazat, Ne nebo žádná odpověď do 45 s = nechat (`[capture] prompt_default = "record"`; s `"skip"`
+se bez odpovědi zahodí). Nahrávku lze kdykoli zahodit i z ikony v liště. Capture se navíc každých 5 minut hlídá
+naplánovanou úlohou Windows `teamsrec-capture`: když by spadl, znovu se spustí (druhá instance se sama ukončí).
 
 Zástupce **teamsrec – zpracovat poslední** na ploše (nebo `bin\teamsrec-process-latest.cmd`) importuje, co je
 ve schránce `_inbox` a zpracuje je, a pak ještě nejnovější nahrávku: přepis, export a zápis. Okno zůstane otevřené, aby šel

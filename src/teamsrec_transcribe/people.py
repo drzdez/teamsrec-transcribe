@@ -119,6 +119,12 @@ class People:
                 by_first = [p for p in self.people if _norm(p.first) == t and not p.last]
             if len(by_first) == 1:
                 return by_first[0]
+            # spelling variants of the same full name (calendar "Pavol Orosz" vs registry "Pavel Orosz", OCR slips)
+            if len(parts) > 1:
+                import difflib
+                close = difflib.get_close_matches(_norm(text), [_norm(p.full) for p in self.people], n=2, cutoff=0.85)
+                if len(close) == 1:
+                    return next(p for p in self.people if _norm(p.full) == close[0])
         return None
 
     def ensure(self, text: str) -> Person:
@@ -130,6 +136,8 @@ class People:
             self.people.append(p)
         elif not p.last and len(text.split()) > 1 and _norm(p.first) == _norm(text.split()[0]):
             p.last = " ".join(text.split()[1:])
+        elif not p.matches(text) and text.strip() and text.strip() not in p.aliases:
+            p.aliases.append(text.strip())  # remember the variant so exports map it without fuzzy matching
         return p
 
     def merge(self, keep_id: str, drop_id: str, recordings: Iterable = ()) -> list:

@@ -112,10 +112,23 @@ def _segs():
 def test_video_timeline_names_segments_and_maps_fallback():
     tl = VideoTimeline(fps=2, speakers={"Jana": [[0, 5], [10, 15]], "Petr": [[5, 10]]}, clusters=[])
     segs = _segs()
-    # SPEAKER_00 overlaps Jana for 10 s -> mapping; segment at 60 s (no video) falls back to Jana
+    # SPEAKER_00 overlaps Jana for 10 s of its 11 s -> mapping; the segment at 60 s (no video) follows
     mapping = apply_video_timeline(segs, tl)
-    assert mapping == {"SPEAKER_00": "Jana", "SPEAKER_01": "Petr"} or mapping.get("SPEAKER_00") == "Jana"
+    assert mapping.get("SPEAKER_00") == "Jana"
     assert [s.speaker for s in segs] == ["Jana", "Petr", "Jana", "SPEAKER_02", "Jana"]
+    # a short highlight must not own a long label: 12 s of Jana on a 30-minute SPEAKER_05
+    from teamsrec_transcribe.speakers import video_label_mapping
+    long = [Segment(i * 60, i * 60 + 55, "x", "SPEAKER_05") for i in range(30)]
+    assert video_label_mapping(long, VideoTimeline(fps=2, speakers={"Jana": [[0, 12]]}, clusters=[])) == {}
+    # direct-only pass leaves labels alone; the fallback pass maps them afterwards
+    segs2 = _segs()
+    original = [s.speaker for s in segs2]
+    assert apply_video_timeline(segs2, tl, fallback=False) == {}
+    assert segs2[4].speaker == "SPEAKER_00"
+    from teamsrec_transcribe.speakers import apply_video_fallback
+    segs2[3].speaker = "Zdeněk"  # the mic named SPEAKER_02 in between: untouched by the fallback
+    apply_video_fallback(segs2, tl, original)
+    assert [s.speaker for s in segs2] == ["Jana", "Petr", "Jana", "Zdeněk", "Jana"]
 
 
 def test_manual_names_and_speaker_list():
@@ -144,6 +157,9 @@ def test_config_load_and_overrides(tmp_path):
                  encoding="utf-8")
     cfg = load_config(p)
     assert cfg.out_dir == Path("D:/meetings") and cfg.transcribe.language == "sk" and cfg.transcribe.glossary == ("WFMS",)
+    assert cfg.transcribe.languages == ("cs", "sk", "en")
+    p.write_text('[transcribe]\nlanguages = ["cs", "en"]\n', encoding="utf-8")
+    assert load_config(p).transcribe.languages == ("cs", "en")
     cfg2 = with_overrides(cfg, **{"transcribe.language": "cs", "transcribe.model": None, "out_dir": Path("x")})
     assert cfg2.transcribe.language == "cs" and cfg2.transcribe.model == "large-v3" and cfg2.out_dir == Path("x")
     assert load_config(tmp_path / "missing.toml") == Config(source_path=None)
@@ -258,8 +274,11 @@ def test_people_dedup_and_merge(tmp_path):
     z2 = ppl.ensure("Zdeněk Zdražil")             # the typed full name completes the same person
     assert z2 is z and z.last == "Zdražil" and len(ppl.people) == 1
     assert ppl.find("Zdeněk Zdražil") is z and ppl.find("Zdeněk") is z
+    pv = ppl.ensure("Pavel Orosz"); pv.nick = "Ori"
+    assert ppl.ensure("Pavol Orosz") is pv and "Pavol Orosz" in pv.aliases   # spelling variant, not a new person
+    assert ppl.find("Pavol Orosz") is pv and ppl.display("Pavol Orosz") == "Ori"
     other = ppl.ensure("Zdeněk Novák")            # a different Zdeněk now has to be a new person
-    assert other is not z and len(ppl.people) == 2
+    assert other is not z and len(ppl.people) == 3
     # merge: aliases/nick carried over, speakers.json rewritten, voice prints moved
     dup = ppl.ensure("Z. Zdražil"); dup.nick = "Zdenda"
     rec = _make_transcribed(tmp_path)
@@ -423,6 +442,22 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
     assert calls == [rec.stem] and st.status()["message"] == "processed" and st.status()["job"] == "process"
 
 
+def test_choose_language_restricts_to_expected():
+    from teamsrec_transcribe.providers.whisperx_provider import choose_language
+    votes = [{"ru": 0.23, "sk": 0.20, "cs": 0.15, "en": 0.05}, {"sk": 0.6, "cs": 0.3}, {"cs": 0.5, "sk": 0.4}]
+    assert choose_language(votes, ("cs", "sk", "en")) == "sk"      # ru ignored, sk 1.20 vs cs 0.95
+    assert choose_language(votes, ("en",)) == "en"
+    assert choose_language([], ("cs",)) is None and choose_language([{"ru": 1.0}], ("cs",)) is None
+
+
+def test_summary_refuses_empty_transcript(tmp_path):
+    from teamsrec_transcribe.pipeline import do_summarize
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)  # a handful of words
+    with pytest.raises(Exception, match="nothing to summarize"):
+        do_summarize(cfg, rec, force=True)
+
+
 def test_recognize_voices_from_stored_embeddings(tmp_path):
     from teamsrec_transcribe.people import People
     from teamsrec_transcribe.pipeline import recognize_voices
@@ -475,6 +510,22 @@ def test_remove_speaker_drops_segments_and_reexports(tmp_path):
     assert all(s.get("speaker") for s in rec.read_json(rec.transcript_path)["segments"])
 
 
+def test_tile_outline_detection():
+    import numpy as np
+    from teamsrec_transcribe.video_speakers import _tile_label_box, _tile_outlines
+    img = np.full((540, 960, 3), 40, dtype=np.uint8)
+    # a hollow accent-coloured rectangle = the speaking tile; a filled block = a button, not a tile
+    for x in range(480, 905):
+        img[52:54, x] = (122, 122, 205); img[287:289, x] = (116, 116, 159)
+    for y in range(52, 289):
+        img[y, 480:482] = (98, 104, 143); img[y, 903:905] = (122, 122, 205)
+    img[10:30, 700:760] = (122, 122, 205)
+    tiles = _tile_outlines(img)
+    assert len(tiles) == 1 and tiles[0][0] <= 482 and tiles[0][2] >= 903 and tiles[0][1] <= 54 and tiles[0][3] >= 287
+    lx0, ly0, lx1, ly1 = _tile_label_box(tiles[0])
+    assert lx0 < 500 and ly1 <= 289 and ly0 >= 255 and lx1 <= 482 + 240
+
+
 def test_merge_timelines_and_shift():
     from teamsrec_transcribe.video_speakers import merge_timelines
     a = VideoTimeline(fps=2, speakers={"Jana": [[0, 5], [10, 12]]}, clusters=[{"box": [1]}])
@@ -503,7 +554,7 @@ def test_screen_analysis_writes_merged_timeline(tmp_path, monkeypatch):
         if path.name.endswith("_screen1.mp4"):
             return VideoTimeline(fps=fps, speakers={"Petr Svoboda": [[0, 10]]}, clusters=[])
         return VideoTimeline(fps=fps, speakers={"Jana Nováková": [[0, 5]]}, clusters=[])
-    monkeypatch.setattr(pl, "analyze_video", fake_analyze)
+    monkeypatch.setattr(pl, "analyze_screen", fake_analyze)
     tl = pl.do_video(cfg, rec)
     assert [s[0][-12:] for s in seen] == ["_screen1.mp4", "_screen2.mp4"]
     assert "Petr Svoboda" in seen[0][1] and "Jana Nováková" in seen[0][1]  # registry + participants as OCR candidates
@@ -516,7 +567,7 @@ def test_screen_analysis_writes_merged_timeline(tmp_path, monkeypatch):
         {"file": "2026-09-04_1500_druha_screen1.mp4", "fps": 2, "start_offset_s": 0.0, "titles": ["Calendar | Microsoft Teams"]},
         {"file": "2026-09-04_1500_druha_screen2.mp4", "fps": 2, "start_offset_s": 0.0, "titles": ["WFMS | Microsoft Teams"]}]))
     rec2.file("_screen1.mp4").write_bytes(b"x"); rec2.file("_screen2.mp4").write_bytes(b"x")
-    monkeypatch.setattr(pl, "analyze_video", lambda path, **k: VideoTimeline(fps=2, speakers={"Develonment": [[0, 5]], "Petr Svoboda": [[5, 9]]}, clusters=[]))
+    monkeypatch.setattr(pl, "analyze_screen", lambda path, **k: VideoTimeline(fps=2, speakers={"Develonment": [[0, 5]], "Petr Svoboda": [[5, 9]]}, clusters=[]))
     assert pl.do_video(cfg, rec2).speakers == {"Petr Svoboda": [[5, 9]]}
     assert pl._looks_like_a_name("Petr Svoboda") and pl._looks_like_a_name("Jana Nováková-Černá")
     assert not pl._looks_like_a_name("Petr") and not pl._looks_like_a_name("x1 y2") and not pl._looks_like_a_name("Nahrávání 12:30")
@@ -524,18 +575,56 @@ def test_screen_analysis_writes_merged_timeline(tmp_path, monkeypatch):
 
 def test_outlook_pick_meeting_and_fields():
     from datetime import datetime as dt
-    from teamsrec_transcribe.outlook import calendar_fields, pick_meeting
-    items = [{"subject": "A", "start": dt(2026, 9, 14, 8, 30), "end": dt(2026, 9, 14, 9, 15), "teams": True,
+    from teamsrec_transcribe.outlook import calendar_fields, candidates_at, pick_meeting
+    items = [{"subject": "Archi week plan", "start": dt(2026, 9, 14, 8, 30), "end": dt(2026, 9, 14, 9, 15), "teams": True,
               "attendees": ["Jana Nováková", "Petr Svoboda"], "organizer": "Jana Nováková"},
              {"subject": "B", "start": dt(2026, 9, 14, 9, 15), "end": dt(2026, 9, 14, 9, 30), "teams": False, "attendees": []},
-             {"subject": "C", "start": dt(2026, 9, 14, 9, 20), "end": dt(2026, 9, 14, 9, 40), "teams": True, "attendees": []}]
-    assert pick_meeting(items, dt(2026, 9, 14, 8, 22))["subject"] == "A"   # 8 min early
-    assert pick_meeting(items, dt(2026, 9, 14, 9, 17))["subject"] == "B"   # inside B beats A's grace
-    assert pick_meeting(items, dt(2026, 9, 14, 9, 25))["subject"] == "C"   # inside both: Teams first
-    assert pick_meeting(items, dt(2026, 9, 14, 12, 0)) is None
-    f = calendar_fields(items[0])
-    assert f["participants"] == [{"name": "Jana Nováková"}, {"name": "Petr Svoboda"}]
+             {"subject": "DeepSource", "start": dt(2026, 9, 14, 9, 20), "end": dt(2026, 9, 14, 9, 40), "teams": True, "attendees": []}]
+    assert pick_meeting(items, dt(2026, 9, 14, 8, 22)) == (items[0], "time")   # 8 min early
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 17))[0]["subject"] == "B"   # inside B beats A's grace
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 25))[0]["subject"] == "DeepSource"   # inside both: Teams first
+    assert pick_meeting(items, dt(2026, 9, 14, 12, 0)) == (None, "")
+    # the Teams window / file title settles parallel meetings and ad-hoc calls
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 25), "Archi week plan | Microsoft Teams") == (items[0], "title")
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 25), "Deep Source") == (items[2], "title")
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 25), "Připojení ke schůzce")[1] == "time"
+    assert pick_meeting(items, dt(2026, 9, 14, 9, 25), "Schůzka s: Petr")[1] == "time"
+    assert [c["subject"] for c in candidates_at(items, dt(2026, 9, 14, 9, 25))] == ["DeepSource", "B", "Archi week plan"]
+    f = calendar_fields(dict(items[0], match="title"))
+    assert f["participants"] == [{"name": "Jana Nováková", "source": "calendar"}, {"name": "Petr Svoboda", "source": "calendar"}]
     assert f["calendar"]["source"] == "outlook" and f["calendar"]["start"] == "2026-09-14T08:30"
+    assert f["calendar"]["match"] == "title" and f["calendar"]["status"] == "auto"
+
+
+def test_meeting_link_edits(tmp_path, monkeypatch):
+    from datetime import datetime as dt
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe import outlook
+    cfg = Config(out_dir=tmp_path, calendar_outlook=True)
+    rec = _make_transcribed(tmp_path)
+    rec.sidecar.update(outlook.calendar_fields({"subject": "Týdenní sync", "organizer": "Jana Nováková", "match": "time",
+                                                "start": dt(2026, 9, 4, 14, 0), "end": dt(2026, 9, 4, 14, 30), "attendees": ["Jana Nováková"]}))
+    rec.sidecar["participants"].append({"name": "Host Ručně", "source": "manual"})
+    rec.sidecar["title_source"] = "calendar"
+    rec.save_sidecar()
+    info = pl.meeting_info(cfg, rec)
+    assert info["calendar"]["match"] == "time" and info["calendar"]["status"] == "auto" and info["title_source"] == "calendar"
+    assert [p["source"] for p in info["participants"]] == ["calendar", "manual"]
+    pl.set_meeting_link(cfg, rec, "confirm")
+    assert Recording.load(rec.sidecar_path).sidecar["calendar"]["status"] == "confirmed"
+    rec = pl.set_meeting_link(cfg, rec, "detach")
+    sc = Recording.load(rec.sidecar_path).sidecar
+    assert "calendar" not in sc and sc["participants"] == [{"name": "Host Ručně", "source": "manual"}] and sc["title_source"] == "manual"
+    monkeypatch.setattr(outlook, "candidates_for", lambda at, window_s=3600: [
+        {"subject": "Plánování Q4", "start": "2026-09-04T14:30", "end": "2026-09-04T15:00", "teams": True,
+         "attendees": ["Petr Svoboda"], "organizer": "Petr Svoboda"}])
+    rec = pl.set_meeting_link(cfg, rec, "attach", {"subject": "Plánování Q4", "start": "2026-09-04T14:30"})
+    assert rec.stem == "2026-09-04_1400_planovani-q4" and rec.title == "Plánování Q4"
+    sc = rec.sidecar
+    assert sc["calendar"]["status"] == "confirmed" and sc["calendar"]["match"] == "manual"
+    assert sc["participants"] == [{"name": "Petr Svoboda", "source": "calendar"}] and sc["title_source"] == "calendar"
+    with pytest.raises(Exception):
+        pl.set_meeting_link(cfg, rec, "attach", {"subject": "nope", "start": "2026-09-04T14:30"})
 
 
 def test_config_calendar_flag(tmp_path):
@@ -554,6 +643,9 @@ def test_video_names_are_registered_as_people(tmp_path):
     assert [p.id for p in ppl.people] == ["jana-novakova", "petr-svoboda"]
     _register_video_names(cfg, segs)  # idempotent
     assert len(People.load(tmp_path).people) == 2
+    _register_video_names(cfg, [Segment(0, 5, "a", "Jana Novakowa")])  # OCR slip -> alias saved, no new person
+    ppl = People.load(tmp_path)
+    assert len(ppl.people) == 2 and "Jana Novakowa" in ppl.get("jana-novakova").aliases
 
 
 def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
@@ -563,6 +655,8 @@ def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
     cfg = Config(out_dir=tmp_path)
     rec = _make_transcribed(tmp_path)
     old_stem, old_dir = rec.stem, rec.dir
+    rec.sidecar["screens"] = [{"file": f"{old_stem}_screen1.mp4", "fps": 2, "start_offset_s": 0.0, "titles": []}]
+    rec.save_sidecar(); rec.file("_screen1.mp4").write_bytes(b"x")
     (old_dir / f"{old_stem}.summary.md").write_text("<!-- x -->\n# Týdenní sync\n\n## Shrnutí\n", encoding="utf-8")
     (old_dir / f"{old_stem}.summary.claude-opus-5.md").write_text("<!-- x -->\n# Týdenní sync\n", encoding="utf-8")
     vp = Voiceprints.load(tmp_path); vp.enroll("jana", [1.0, 0.0], old_stem, "Jana Nováková"); vp.save()
@@ -570,11 +664,12 @@ def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
     new = rename_recording(cfg, rec, "Plánování Q4 / rozpočet")
     assert new.stem == "2026-09-04_1400_planovani-q4-rozpocet" and not old_dir.exists() and new.dir.exists()
     names = sorted(p.name for p in new.dir.iterdir())
-    assert names == sorted([f"{new.stem}.json", f"{new.stem}_mix.wav", f"{new.stem}.transcript.json",
+    assert names == sorted([f"{new.stem}.json", f"{new.stem}_mix.wav", f"{new.stem}.transcript.json", f"{new.stem}_screen1.mp4",
                             f"{new.stem}.summary.md", f"{new.stem}.summary.claude-opus-5.md"])
     again = Recording.load(new.sidecar_path)
     assert again.title == "Plánování Q4 / rozpočet" and again.sidecar["slug"] == "planovani-q4-rozpocet"
     assert again.mix_path.name == f"{new.stem}_mix.wav" and again.mix_path.exists()
+    assert again.sidecar["screens"][0]["file"] == f"{new.stem}_screen1.mp4" and (new.dir / again.sidecar["screens"][0]["file"]).exists()
     assert again.summary_path.read_text(encoding="utf-8").splitlines()[1] == "# Plánování Q4 / rozpočet"
     assert Voiceprints.load(tmp_path).people["jana"][0]["stem"] == new.stem
     assert build_review(cfg, again)["title"] == "Plánování Q4 / rozpočet"
@@ -586,6 +681,20 @@ def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
     _make_recording(tmp_path, stem="2026-09-04_1400_jina")
     with pytest.raises(Exception):
         rename_recording(cfg, again, "Jiná")
+
+
+def test_recording_docs_and_read_doc(tmp_path):
+    from teamsrec_transcribe.web.review import read_doc, recording_docs
+    rec = _make_transcribed(tmp_path)
+    assert recording_docs(rec) == {"transcript": None, "summaries": [{"file": f"{rec.stem}.summary.md", "label": "zápis (lokální model)"}]}
+    rec.file(".txt").write_text("# T\n[00:00:00] Jana: Ahoj\n", encoding="utf-8")
+    (rec.dir / f"{rec.stem}.summary.claude-opus-5.md").write_text("# T\n", encoding="utf-8")
+    d = recording_docs(rec)
+    assert d["transcript"] == f"{rec.stem}.txt" and [s["label"] for s in d["summaries"]] == ["zápis (lokální model)", "zápis (claude-opus-5)"]
+    assert "Jana: Ahoj" in read_doc(rec, f"{rec.stem}.txt")
+    for bad in ("../x.md", "other.md", f"{rec.stem}.json", f"{rec.stem}.nothere.md"):
+        with pytest.raises(Exception):
+            read_doc(rec, bad)
 
 
 def test_person_detail_lists_prints_with_samples(tmp_path):

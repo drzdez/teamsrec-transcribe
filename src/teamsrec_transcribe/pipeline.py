@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 from datetime import datetime
@@ -18,8 +19,8 @@ from .providers import get_provider
 from .providers.base import Segment, Word
 from .recording import (Recording, RecordingError, is_media_file, is_sidecar, iter_recordings, make_stem,
                         resolve_recording, slugify)
-from .speakers import apply_manual_names, apply_video_timeline, speaker_list
-from .video_speakers import VideoTimeline, analyze_video, merge_timelines
+from .speakers import apply_manual_names, apply_video_fallback, apply_video_timeline, speaker_list
+from .video_speakers import VideoTimeline, analyze_screen, analyze_video, merge_timelines
 from .voiceprints import Voiceprints, enroll_from_recording, remap_embeddings, speech_seconds
 
 log = logging.getLogger(__name__)
@@ -34,11 +35,13 @@ def do_import(cfg: Config, src: Path, *, title: str | None = None, start: dateti
                       participants=participants, force=force)
     if cfg.calendar_outlook and not rec.participants and rec.sidecar.get("start"):
         from .outlook import calendar_fields, meeting_at
-        m = meeting_at(datetime.fromisoformat(rec.sidecar["start"]))
+        m = meeting_at(datetime.fromisoformat(rec.sidecar["start"]), rec.title)
         if m:
             rec.sidecar.update(calendar_fields(m))
+            rec.sidecar.setdefault("title_source", rec.sidecar.get("metadata_source", "file"))
             rec.save_sidecar()
-            log.info("%s: Outlook: '%s', %d participants", rec.stem, m.get("subject"), len(m.get("attendees", [])))
+            log.info("%s: Outlook: '%s' (by %s), %d participants", rec.stem, m.get("subject"), m.get("match"),
+                     len(m.get("attendees", [])))
     want_video = cfg.video.enabled if video is None else video
     if want_video and (force or not rec.speakers_video_path.exists()):
         do_video(cfg, rec)
@@ -85,7 +88,7 @@ def do_video_screens(cfg: Config, rec: Recording) -> VideoTimeline | None:
             log.info("%s: %s is the Teams main window (%s), skipped", rec.stem, sc["file"], (sc.get("titles") or ["?"])[0])
             continue
         log.info("%s: analysing %s (%s)", rec.stem, sc["file"], "; ".join(sc.get("titles", [])[:2]))
-        tl = analyze_video(path, fps=cfg.video.fps, names=names, width=sc.get("width", 1600), height=sc.get("height", 900))
+        tl = analyze_screen(path, fps=cfg.video.fps, names=names, width=sc.get("width", 1600), height=sc.get("height", 900))
         if tl is not None:
             kept = {n: iv for n, iv in tl.speakers.items() if n in candidates or _looks_like_a_name(n)}
             dropped = sorted(set(tl.speakers) - set(kept))
@@ -160,7 +163,7 @@ def rename_recording(cfg: Config, rec: Recording, title: str) -> Recording:
     if not title:
         raise RecordingError("empty title")
     start = datetime.fromisoformat(rec.sidecar["start"]) if rec.sidecar.get("start") else None
-    new_stem = make_stem(start, title) if start else f"{rec.stem[:16]}_{slugify(title)}"
+    new_stem = make_stem(start, title) if start else f"{rec.stem[:15]}_{slugify(title)}"
     old_stem, old_dir = rec.stem, rec.dir
     if new_stem == old_stem:
         if title != rec.title:
@@ -184,6 +187,9 @@ def rename_recording(cfg: Config, rec: Recording, title: str) -> Recording:
             t["file"] = new_stem + t["file"][len(old_stem):]
     if isinstance(sc.get("mix"), dict) and str(sc["mix"].get("file", "")).startswith(old_stem):
         sc["mix"]["file"] = new_stem + sc["mix"]["file"][len(old_stem):]
+    for scr in sc.get("screens") or []:
+        if isinstance(scr, dict) and str(scr.get("file", "")).startswith(old_stem):
+            scr["file"] = new_stem + scr["file"][len(old_stem):]
     if str(sc.get("origin_path", "")).replace("\\", "/").startswith(str(old_dir).replace("\\", "/")):
         sc["origin_path"] = str(new_dir / (new_stem + Path(sc["origin_path"]).name[len(old_stem):]))
     new = Recording(stem_path=new_dir / new_stem, sidecar=sc)
@@ -237,6 +243,55 @@ def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
     return n
 
 
+# ---------------------------------------------------------------- meeting <-> calendar link (review page)
+
+def meeting_info(cfg: Config, rec: Recording) -> dict:
+    """What the page shows next to the speakers: where the title and the participants came from, the calendar
+    link and its status, so the user can confirm, detach or pick another meeting."""
+    sc = rec.sidecar
+    cal = sc.get("calendar")
+    participants = [{"name": p.get("name"), "source": p.get("source", "manual")} for p in sc.get("participants", []) if p.get("name")]
+    return {"title": rec.title, "title_source": sc.get("title_source") or sc.get("metadata_source") or "unknown",
+            "calendar": cal, "participants": participants, "outlook_enabled": cfg.calendar_outlook,
+            "start": sc.get("start")}
+
+
+def set_meeting_link(cfg: Config, rec: Recording, action: str, candidate: dict | None = None) -> Recording:
+    """confirm: keep the calendar link and mark it confirmed. detach: drop the calendar link and the participants
+    that came from it (the title stays, edit it separately). attach: link the given Outlook item instead (title,
+    participants, folder name follow)."""
+    from .outlook import calendar_fields, candidates_for
+    sc = rec.sidecar
+    if action == "confirm":
+        if sc.get("calendar"):
+            sc["calendar"]["status"] = "confirmed"
+        rec.save_sidecar()
+        return rec
+    if action == "detach":
+        sc.pop("calendar", None)
+        sc["participants"] = [p for p in sc.get("participants", []) if p.get("source") not in (None, "calendar")]
+        if sc.get("title_source") == "calendar":
+            sc["title_source"] = "manual"
+        rec.save_sidecar()
+        return rec
+    if action == "attach":
+        if not candidate or not sc.get("start"):
+            raise RecordingError("attach needs a candidate meeting")
+        found = None
+        for c in candidates_for(datetime.fromisoformat(sc["start"]), window_s=4 * 3600):
+            if c["subject"] == candidate.get("subject") and c["start"] == candidate.get("start"):
+                found = c
+                break
+        if found is None:
+            raise RecordingError("that meeting is no longer in the calendar")
+        found["match"] = "manual"
+        sc.update(calendar_fields(found, status="confirmed"))
+        sc["title_source"] = "calendar"
+        rec.save_sidecar()
+        return rename_recording(cfg, rec, found["subject"])
+    raise RecordingError(f"unknown action {action!r}")
+
+
 # ---------------------------------------------------------------- transcribe
 
 def _ensure_mix(rec: Recording) -> Path:
@@ -284,17 +339,19 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
 
     labels_before = [s.speaker for s in res.segments]
     if timeline:
-        apply_video_timeline(res.segments, timeline)
-        _register_video_names(cfg, res.segments)
+        apply_video_timeline(res.segments, timeline, fallback=False)  # only what the highlight covers directly
     mic = rec.track_path("mic")
     speaker_sources = ["video"] if timeline else []
     mic_mapping: dict[str, str] = {}
     if cfg.user_name and mic and mic.exists():
-        mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)
+        mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)  # the user's label, before any guessing
         if mic_mapping:
             speaker_sources.append("mic")
     elif mic and mic.exists():
         log.info("%s: mic track present but [user] name is not set, your voice stays SPEAKER_xx", rec.stem)
+    if timeline:
+        apply_video_fallback(res.segments, timeline, labels_before)  # whole labels the video attributes clearly
+        _register_video_names(cfg, res.segments)
     embeddings = remap_embeddings(res.speaker_embeddings or {}, labels_before, [s.speaker for s in res.segments])
     durations = speech_seconds([{"start": s.start, "end": s.end, "speaker": s.speaker} for s in res.segments])
     voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
@@ -333,10 +390,11 @@ def _register_video_names(cfg: Config, segments: list[Segment]) -> None:
     (so they show up on the People tab and can collect voice prints)."""
     people = People.load(cfg.out_dir, cfg.people_display)
     before = len(people.people)
+    snapshot = json.dumps(people.to_json(), sort_keys=True)
     for name in speaker_list(segments):
         if name and not name.startswith("SPEAKER_") and name != "UNKNOWN" and _looks_like_a_name(name):
             people.ensure(name)
-    if len(people.people) != before:
+    if json.dumps(people.to_json(), sort_keys=True) != snapshot:  # new people, or new spelling aliases
         people.save()
         log.info("people registry: %d new from the video", len(people.people) - before)
 
@@ -457,11 +515,17 @@ def _summary_input(cfg: Config, rec: Recording):
         apply_manual_names(segs, names)
     people = People.load(cfg.out_dir, cfg.people_display)
     people.apply(segs)
+    cal = rec.sidecar.get("calendar") or {}
     header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
               "language": data.get("language"), "participants": ", ".join(rec.participants) or None,
+              "organizer": cal.get("organizer") or None,
+              "scheduled": f"{cal['start']} to {cal['end']} (calendar: {cal.get('subject')})" if cal.get("start") else None,
               "speakers": ", ".join(speaker_list(segs)),
               "speaker labels": ", ".join(f"{k} = {people.display(v)}" for k, v in names.items()) or None}
     return segs, header
+
+
+MIN_SUMMARY_WORDS = 40  # a transcript with fewer words is a failed recording, not a meeting
 
 
 def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
@@ -470,6 +534,9 @@ def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
         log.info("%s: summary exists, skipping (use --force)", rec.stem)
         return rec.summary_path
     segs, header = _summary_input(cfg, rec)
+    words = sum(len(s.text.split()) for s in segs)
+    if words < MIN_SUMMARY_WORDS:
+        raise RecordingError(f"{rec.stem}: only {words} words transcribed, nothing to summarize (no audio recorded?)")
     text = summarize(rec, segs, header, cfg.summarize)
     rec.summary_path.write_text(text, encoding="utf-8")
     return rec.summary_path
@@ -491,6 +558,9 @@ def do_summarize_compare(cfg: Config, rec: Recording, *, force: bool = False) ->
             continue
         try:
             segs, header = _summary_input(cfg, rec)
+            if sum(len(s.text.split()) for s in segs) < MIN_SUMMARY_WORDS:
+                log.info("%s: too few words for a %s summary", rec.stem, spec)
+                continue
             text = summarize(rec, segs, header, replace(cfg.summarize, provider=provider, model=model))
             path.write_text(text, encoding="utf-8")
             out.append(path)

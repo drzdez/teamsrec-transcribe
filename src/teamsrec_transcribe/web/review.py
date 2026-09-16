@@ -21,6 +21,9 @@ API
   POST /api/speaker/remove       {"stem", "label"} -> drop that speaker's segments (noise turned into text)
   POST /api/process              {"stem"} -> transcribe + export + summarize in the background (status polls it)
   POST /api/recognize            {"stem"} -> match unnamed labels against the voice prints collected since
+  GET  /api/doc?stem=&file=      text of one document of the recording (transcript .txt, any .summary*.md)
+  GET  /api/meeting/candidates?stem=   nearby Outlook items to link instead
+  POST /api/meeting              {"stem", "action": confirm|detach|attach, "candidate"?} -> calendar link edits
   GET  /api/status               background job (summary) state
   POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
   POST /api/quit                 stop the server
@@ -50,8 +53,8 @@ from urllib.parse import parse_qs, urlparse
 
 from ..config import Config
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, recognize_voices,
-                        remove_speaker, rename_recording)
+from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, meeting_info,
+                        recognize_voices, remove_speaker, rename_recording, set_meeting_link)
 from ..voiceprints import Voiceprints
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -211,7 +214,29 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "speakers": speakers, "known_names": known_names(cfg, people),
         "people": people.to_json(), "display_default": people.default_mode,
+        "meeting": meeting_info(cfg, rec),
+        "docs": recording_docs(rec),
     }
+
+
+def recording_docs(rec: Recording) -> dict:
+    """Readable documents of a recording for the Přepis / Zápis tabs."""
+    summaries = []
+    if rec.summary_path.exists():
+        summaries.append({"file": rec.summary_path.name, "label": "zápis (lokální model)"})
+    for p in sorted(rec.dir.glob(f"{rec.stem}.summary.*.md")):
+        summaries.append({"file": p.name, "label": f"zápis ({p.name[len(rec.stem) + 9:-3]})"})
+    return {"transcript": rec.file(".txt").name if rec.file(".txt").exists() else None, "summaries": summaries}
+
+
+def read_doc(rec: Recording, name: str) -> str:
+    """Only the recording's own text documents (no path tricks)."""
+    if "/" in name or "\\" in name or not name.startswith(rec.stem) or not (name.endswith(".md") or name.endswith(".txt")):
+        raise RecordingError("not a document of this recording")
+    path = rec.dir / name
+    if not path.exists():
+        raise RecordingError(f"{name} does not exist")
+    return path.read_text(encoding="utf-8")
 
 
 def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
@@ -486,6 +511,16 @@ def _handler(state: ReviewState, server_ref: dict):
                     self._json(people_rows(state.cfg))
                 elif u.path == "/api/person":
                     self._json(person_detail(state.cfg, (q.get("id") or [""])[0]))
+                elif u.path == "/api/doc":
+                    rec = self._rec(q)
+                    name = (q.get("file") or [""])[0]
+                    self._json({"file": name, "text": read_doc(rec, name)})
+                elif u.path == "/api/meeting/candidates":
+                    from datetime import datetime as _dt
+                    from ..outlook import candidates_for
+                    rec = self._rec(q)
+                    start = rec.sidecar.get("start")
+                    self._json({"candidates": candidates_for(_dt.fromisoformat(start), 4 * 3600) if start and state.cfg.calendar_outlook else []})
                 elif u.path == "/api/status":
                     self._json(state.status())
                 else:
@@ -519,6 +554,12 @@ def _handler(state: ReviewState, server_ref: dict):
                     started = state.run_process(rec)
                     self._json({"ok": started, "status": state.status(),
                                 **({} if started else {"error": "another job is still running"})})
+                elif u.path == "/api/meeting":
+                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    rec = set_meeting_link(state.cfg, rec, str(body.get("action") or ""), body.get("candidate"))
+                    if rec.transcript_path.exists():
+                        do_export(state.cfg, rec)
+                    self._json({"ok": True, "stem": rec.stem, "meeting": meeting_info(state.cfg, rec)})
                 elif u.path == "/api/recognize":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
                     m = recognize_voices(state.cfg, rec)

@@ -188,6 +188,17 @@ nahrávkách je přiřazena a tabulku uložených otisků – z které nahrávky
 nahrávkách a přenese přezdívku, aliasy i otisky. Totéž v terminálu: `teamsrec-transcribe people list` a
 `people merge <ponechat> <sloučit>`.
 
+Horní záložky: **Schůzka** (vybraná nahrávka) a **Lidé (společné)**. Uvnitř Schůzky jsou podzáložky **Mluvčí**
+(přiřazení jmen), **Přepis** (čitelný přepis s časem a mluvčím) a **Zápis** (vyrenderovaný Markdown; když existuje i
+srovnávací zápis z Claude, vyberete ho vpravo). Úpravy textu se dělají v souborech, stránka je jen zobrazuje.
+
+Nad kartami je panel **Schůzka**: odkud je název (kalendář / okno Teams / ručně / soubor), která schůzka
+z kalendáře je připojená a jak jistě („podle názvu schůzky“ je spolehlivé, „jen podle času, ověřte“ je odhad,
+například ad-hoc hovor během naplánované schůzky nebo dvě schůzky najednou), účastníci se zdrojem. Tlačítka:
+**Potvrdit spojení**, **Odpojit** (účastníci z kalendáře se odeberou, název zůstane) a **spojit s jinou schůzkou**
+(nabídne schůzky z Outlooku v okolí, spojení přepíše název, účastníky i název složky). Organizátor a plánovaný
+čas z kalendáře se dostanou do zápisu.
+
 Když vybraná nahrávka ještě nemá přepis, stránka to řekne a nabídne tlačítko „Ano, přepsat a zpracovat“
 (přepis, export, zápis; průběh vidíte dole). Nic se nepíše do konzole.
 
@@ -262,6 +273,7 @@ Každé nastavení jde jednorázově přepsat z příkazové řádky, např.
 | `ffmpeg/ffprobe not found` | ffmpeg není v PATH. Použijte `bin\teamsrec-transcribe.cmd`, nebo nastavte `TEAMSREC_FFMPEG_DIR` na složku `bin` ffmpegu. |
 | `CUDA is not available to torch` | Starý NVIDIA driver (potřeba 570+), nebo se nainstaloval CPU torch. `uv sync --extra all` znovu; ověření `uv run python -c "import torch;print(torch.cuda.is_available())"`. |
 | `ollama: cannot reach` / `model not found` | Ollama neběží nebo model není stažený: `ollama pull gemma4:31b`. Přepis a export fungují i bez zápisu. |
+| přepis je v nesmyslném jazyce | Automatická detekce jazyka se dřív dívala jen na prvních 30 s; teď hlasuje mezi jazyky z `[transcribe] languages` (výchozí cs, sk, en) na několika hlasitých úsecích. Jazyk lze i vynutit: `transcribe <stem> --language sk --force`. |
 | `no valid Claude credentials` | `provider = "anthropic"` bez `TEAMSREC_ANTHROPIC_API_KEY`. Krok 4 instalace. |
 | `GatedRepoError` / 403 u pyannote | Nepřijaté podmínky modelu nebo chybí přihlášení. Krok 3 instalace. |
 | Jména z videa jsou zkomolená | OCR nezná diakritiku. Zadejte `--participants` při importu; jména se dohledají podle podobnosti. `teamsrec-transcribe video <stem> --participants "..."` analýzu zopakuje. |

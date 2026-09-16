@@ -18,6 +18,45 @@ from .base import ProviderError, ProviderResult, Segment, Word
 log = logging.getLogger(__name__)
 
 
+def choose_language(votes: list[dict[str, float]], allowed: tuple[str, ...]) -> str | None:
+    """Sum the per-window probabilities of the allowed languages; the best one wins. Pure, testable."""
+    if not votes:
+        return None
+    totals: dict[str, float] = {}
+    for probs in votes:
+        for lang in allowed:
+            totals[lang] = totals.get(lang, 0.0) + float(probs.get(lang, 0.0))
+    if not totals or max(totals.values()) <= 0:
+        return None
+    return max(totals.items(), key=lambda kv: kv[1])[0]
+
+
+def _language_votes(model, wav, windows: int = 4) -> list[dict[str, float]]:
+    """Whisper's language probabilities on several loud 30 s windows spread over the recording (the first 30 s
+    are often silence or a lone greeting and mislead the detector)."""
+    import numpy as np
+    from whisperx.audio import N_SAMPLES, SAMPLE_RATE, log_mel_spectrogram
+    total = len(wav)
+    if total <= N_SAMPLES:
+        starts = [0]
+    else:
+        # candidate starts every 15 s; keep the loudest `windows` among evenly spread quarters
+        step = SAMPLE_RATE * 15
+        cands = list(range(0, total - N_SAMPLES, step))
+        loud = sorted(cands, key=lambda s: -float(np.abs(wav[s:s + N_SAMPLES]).mean()))
+        starts = sorted(loud[:windows]) or [0]
+    n_mels = model.model.feat_kwargs.get("feature_size") if hasattr(model.model, "feat_kwargs") else None
+    votes = []
+    for s in starts:
+        chunk = wav[s:s + N_SAMPLES]
+        seg = log_mel_spectrogram(chunk, n_mels=n_mels if n_mels is not None else 80,
+                                  padding=0 if chunk.shape[0] >= N_SAMPLES else N_SAMPLES - chunk.shape[0])
+        enc = model.model.encode(seg)
+        results = model.model.model.detect_language(enc)
+        votes.append({tok[2:-2]: float(p) for tok, p in results[0]})
+    return votes
+
+
 def _pkg_version(name: str) -> str:
     try:
         return version(name)
@@ -52,6 +91,15 @@ class WhisperXProvider:
         model = whisperx.load_model(settings.model, device, compute_type=settings.compute_type,
                                     language=language, asr_options=asr_options)
         timings["load_model_s"] = round(time.time() - t, 1)
+        if language is None and settings.languages:
+            try:
+                votes = _language_votes(model, wav)
+                chosen = choose_language(votes, tuple(settings.languages))
+                best = {k: round(v, 2) for k, v in sorted(votes[0].items(), key=lambda kv: -kv[1])[:3]} if votes else {}
+                log.info("language among %s: %s (window 1 top: %s)", ",".join(settings.languages), chosen, best)
+                language = chosen
+            except Exception as e:  # fall back to whisperx's own detection
+                log.warning("restricted language detection failed (%s), using whisperx default", e)
         t = time.time()
         result = model.transcribe(wav, batch_size=settings.batch_size, language=language)
         timings["transcribe_s"] = round(time.time() - t, 1)

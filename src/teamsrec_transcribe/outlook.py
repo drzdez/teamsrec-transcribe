@@ -7,15 +7,49 @@ the same from teamsrec-capture at call start. Off unless `[calendar] outlook = t
 
 from __future__ import annotations
 
+import difflib
 import logging
+import re
+import unicodedata
 from datetime import datetime, timedelta
 
 log = logging.getLogger(__name__)
 
+GENERIC_TITLES = {"meeting", "join meeting", "meeting compact view", "compact view", "call", "teams-call", "teams call",
+                  "připojení ke schůzce", "kompaktní zobrazení schůzky", "hovor", "schůzka", "ovládací panel sdílení"}
 
-def pick_meeting(items: list[dict], at: datetime, before_s: int = 600, after_s: int = 300) -> dict | None:
-    """The item running at `at` (start - 10 min .. end + 5 min): one that really contains `at` first, then Teams
-    meetings, then the closest start. Pure function over dicts (testable without Outlook)."""
+
+def _title_norm(s: str) -> str:
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+
+
+def is_generic_title(title: str | None) -> bool:
+    t = (title or "").strip().lower()
+    return not t or t in GENERIC_TITLES or t.startswith("schůzka s:") or t.startswith("meeting with")
+
+
+def candidates_at(items: list[dict], at: datetime, window_s: int = 3600) -> list[dict]:
+    """Items whose span comes within `window_s` of `at`, closest start first."""
+    out = [it for it in items if it["start"] - timedelta(seconds=window_s) <= at <= it["end"] + timedelta(seconds=window_s)]
+    return sorted(out, key=lambda it: abs((it["start"] - at).total_seconds()))
+
+
+def pick_meeting(items: list[dict], at: datetime, title: str | None = None,
+                 before_s: int = 600, after_s: int = 300) -> tuple[dict | None, str]:
+    """The calendar item for a recording: by title first (the Teams window / recording file carries the subject,
+    which settles ad-hoc calls and parallel meetings), else by time (the item running at `at`: containing `at`
+    first, then Teams meetings, then the closest start). Returns (item, match) with match "title" | "time" | ""."""
+    if title and not is_generic_title(title):
+        t = _title_norm(title)
+        near = candidates_at(items, at, window_s=7200)
+        subjects = [_title_norm(it["subject"]) for it in near]
+        hit = [it for it, s in zip(near, subjects) if s and (s == t or s in t or t in s)]
+        if not hit:
+            close = difflib.get_close_matches(t, [s for s in subjects if s], n=1, cutoff=0.8)
+            hit = [it for it, s in zip(near, subjects) if close and s == close[0]]
+        if hit:
+            return hit[0], "title"
     best = None
     for it in items:
         if not (it["start"] - timedelta(seconds=before_s) <= at <= it["end"] + timedelta(seconds=after_s)):
@@ -24,7 +58,7 @@ def pick_meeting(items: list[dict], at: datetime, before_s: int = 600, after_s: 
         key = (0 if inside else 1, 0 if it.get("teams") else 1, abs((it["start"] - at).total_seconds()))
         if best is None or key < best[0]:
             best = (key, it)
-    return best[1] if best else None
+    return (best[1], "time") if best else (None, "")
 
 
 def outlook_items(day: datetime) -> list[dict]:
@@ -58,17 +92,43 @@ def outlook_items(day: datetime) -> list[dict]:
         pythoncom.CoUninitialize()
 
 
-def meeting_at(at: datetime) -> dict | None:
-    """The Outlook meeting running at `at`, or None (Outlook off / not installed / nothing running)."""
+def meeting_at(at: datetime, title: str | None = None) -> dict | None:
+    """The Outlook meeting for a recording starting at `at` (title match first), with `match` and `candidates`;
+    None when Outlook is off / not installed / nothing matches."""
     try:
-        return pick_meeting(outlook_items(at), at)
+        items = outlook_items(at)
     except Exception as e:
         log.info("outlook calendar not available: %s", str(e)[:120])
         return None
+    it, match = pick_meeting(items, at, title)
+    if it is None:
+        return None
+    out = dict(it)
+    out["match"] = match
+    out["candidates"] = [_brief(c) for c in candidates_at(items, at) if c is not it][:5]
+    return out
 
 
-def calendar_fields(m: dict) -> dict:
-    """Sidecar fields for a matched meeting (contract: `participants`, `calendar`)."""
-    return {"participants": [{"name": n} for n in m.get("attendees", [])],
+def candidates_for(at: datetime, window_s: int = 3600) -> list[dict]:
+    """Nearby Outlook items for the review page ("choose another meeting")."""
+    try:
+        return [dict(_brief(c), attendees=c.get("attendees", []), organizer=c.get("organizer", ""))
+                for c in candidates_at(outlook_items(at), at, window_s)]
+    except Exception as e:
+        log.info("outlook calendar not available: %s", str(e)[:120])
+        return []
+
+
+def _brief(c: dict) -> dict:
+    return {"subject": c["subject"], "start": c["start"].isoformat(timespec="minutes"),
+            "end": c["end"].isoformat(timespec="minutes"), "teams": bool(c.get("teams"))}
+
+
+def calendar_fields(m: dict, status: str = "auto") -> dict:
+    """Sidecar fields for a matched meeting (contract: `participants` with source, `calendar` with match/status)."""
+    start = m["start"] if isinstance(m["start"], str) else m["start"].isoformat(timespec="minutes")
+    end = m["end"] if isinstance(m["end"], str) else m["end"].isoformat(timespec="minutes")
+    return {"participants": [{"name": n, "source": "calendar"} for n in m.get("attendees", [])],
             "calendar": {"source": "outlook", "subject": m.get("subject"), "organizer": m.get("organizer"),
-                         "start": m["start"].isoformat(timespec="minutes"), "end": m["end"].isoformat(timespec="minutes")}}
+                         "start": start, "end": end, "match": m.get("match", "manual"), "status": status,
+                         "candidates": m.get("candidates", [])}}

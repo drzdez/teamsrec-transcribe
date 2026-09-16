@@ -18,6 +18,7 @@ from typing import Any
 class TranscribeSettings:
     provider: str = "whisperx"
     language: str = "auto"  # auto | BCP-47 code
+    languages: tuple[str, ...] = ("cs", "sk", "en")  # with auto: detect only among these, on several 30 s windows
     model: str = "large-v3"
     compute_type: str = "float16"
     batch_size: int = 16
@@ -96,7 +97,7 @@ def _build(cls, values: dict[str, Any]):
     for k, v in values.items():
         if k not in known:
             continue
-        if k in ("glossary", "compare"):
+        if k in ("glossary", "compare", "languages"):
             v = tuple(str(x) for x in v)
         kwargs[k] = v
     return cls(**kwargs)
@@ -159,6 +160,7 @@ out_dir = "{out_dir}"
 [transcribe]
 provider = "whisperx"
 language = "auto"            # auto | cs | sk | en
+languages = ["cs", "sk", "en"]  # auto picks among these only (a noisy first 30 s once came out as "ru")
 model = "large-v3"
 compute_type = "float16"     # float16 | int8_float16 | int8
 batch_size = 16

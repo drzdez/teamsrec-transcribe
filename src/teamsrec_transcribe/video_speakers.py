@@ -55,6 +55,68 @@ class VideoTimeline:
                                        for n, iv in self.speakers.items()})
 
 
+# ---------------------------------------------------------------- live Teams window (captured screen video)
+
+TILE_MIN_W, TILE_MIN_H = 150, 100  # at analysis resolution; a gallery tile is never smaller
+TILE_MAX_FILL = 0.25  # an outline is hollow; filled accent areas (buttons, calendar) are not tiles
+STATIC_TILE_FRACTION = 0.95  # a tile "speaking" in almost every frame is a spotlight/pin, not a speaker
+
+
+def _tile_outlines(img: np.ndarray) -> list[tuple[int, int, int, int]]:
+    """Active-speaker tiles in the live Teams gallery: the speaking tile gets a thin accent-coloured outline
+    (the recorded MP4 colours the name label instead). Returns tile boxes (x0, y0, x1, y1)."""
+    from scipy import ndimage
+    r, g, b = img[..., 0].astype(int), img[..., 1].astype(int), img[..., 2].astype(int)
+    mask = (b > 120) & (b - r > 35) & (b - g > 35) & (r > 60) & (r < 200)
+    mask = ndimage.binary_dilation(mask, iterations=2)  # joins the four thin sides into one hollow component
+    lab, _ = ndimage.label(mask)
+    boxes = []
+    for sl in ndimage.find_objects(lab):
+        y0, y1, x0, x1 = sl[0].start, sl[0].stop, sl[1].start, sl[1].stop
+        if x1 - x0 >= TILE_MIN_W and y1 - y0 >= TILE_MIN_H and mask[sl].mean() < TILE_MAX_FILL:
+            boxes.append((x0, y0, x1, y1))
+    return boxes
+
+
+def _tile_label_box(tile: tuple[int, int, int, int]) -> tuple[int, int, int, int]:
+    """Where the name label sits inside a tile: bottom-left corner."""
+    x0, y0, x1, y1 = tile
+    return (x0 + 4, max(y0, y1 - 28), x0 + min(240, int((x1 - x0) * 0.6)), y1 - 3)
+
+
+def analyze_screen(video: Path, *, fps: float = 2.0, names: list[str] | None = None,
+                   min_samples: int = 4, width: int = 1600, height: int = 900) -> VideoTimeline | None:
+    """Like analyze_video, for a Teams window captured live (`<stem>_screen<N>.mp4`)."""
+    step = 1.0 / fps
+    hits: dict[tuple[int, int], list[tuple[float, tuple]]] = defaultdict(list)
+    n = 0
+    for t, img in _frames(video, fps):
+        n += 1
+        for box in _tile_outlines(img):
+            hits[_cluster_key(box)].append((t, box))
+    log.info("screen: %d frames, %d raw tile clusters", n, len(hits))
+    hits = {k: v for k, v in hits.items() if len(v) >= min_samples and len(v) < STATIC_TILE_FRACTION * max(n, 1)}
+    if not hits:
+        log.info("screen: no active-speaker tile outlines found (no gallery visible?)")
+        return None
+
+    import easyocr
+    reader = easyocr.Reader(["cs", "en"], gpu=True, verbose=False)
+    known = names or []
+    clusters, by_name = [], defaultdict(set)
+    for key, lst in sorted(hits.items(), key=lambda kv: -len(kv[1])):
+        t_mid, tile_mid = lst[len(lst) // 2]
+        name = _normalize(_ocr_label(video, t_mid, _tile_label_box(tile_mid), reader, width, height), known)
+        clusters.append({"box": [int(v) for v in tile_mid], "samples": len(lst), "name": name})
+        for t, _ in lst:
+            by_name[name].add(round(t, 3))
+        log.info("screen: tile at %s x%d -> %s", tile_mid, len(lst), name)
+    speakers = {name: _merge(sorted(ts), step) for name, ts in by_name.items() if name != "?"}
+    tl = VideoTimeline(fps=fps, speakers=speakers, clusters=clusters)
+    tl.source = "teams-screen"
+    return tl
+
+
 def merge_timelines(parts: list[VideoTimeline], source: str = "teams-screen") -> VideoTimeline | None:
     """Union of several timelines (one per captured Teams window): per name, overlapping or touching intervals
     are merged. Used for live recordings where the gallery may sit in the meeting window, a pop-out, or both."""

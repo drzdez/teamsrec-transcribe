@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>teamsrec – mluvčí</title>
+<title>teamsrec – schůzky</title>
 <style>
   :root {
     --bg: #f6f7f9; --card: #ffffff; --fg: #1d2129; --muted: #6b7280; --line: #e3e6ea;
@@ -71,6 +71,26 @@
   button.primary-btn:disabled { opacity: .5; cursor: default; }
   .empty p { margin: 6px 0; }
   .toolbar { margin: 4px 0 10px; }
+  .subtabs { max-width: 1000px; margin: 12px auto 0; padding: 0 20px; display: flex; gap: 2px; align-items: center; }
+  .subtabs button { border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 5px 14px; cursor: pointer; font: inherit; border-radius: 8px 8px 0 0; border-bottom: 0; }
+  .subtabs button.active { background: var(--card); font-weight: 600; }
+  .subtabs select { margin-left: auto; width: auto; padding: 4px 8px; font-size: 13px; }
+  main.doc { background: var(--card); border: 1px solid var(--line); border-radius: 0 10px 10px 10px; padding: 18px 28px; margin-top: 0; line-height: 1.55; }
+  main.doc h1 { font-size: 22px; margin: 0 0 12px; } main.doc h2 { font-size: 17px; margin: 22px 0 8px; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+  main.doc h3 { font-size: 15px; margin: 16px 0 6px; }
+  main.doc table { width: auto; margin: 6px 0 10px; } main.doc th, main.doc td { padding: 5px 10px; font-size: 14px; }
+  main.doc ul, main.doc ol { margin: 4px 0 8px; padding-left: 24px; } main.doc li { margin: 2px 0; }
+  main.doc code { background: var(--chip); border-radius: 4px; padding: 0 4px; font-size: 13px; }
+  main.doc .meta-block { color: var(--muted); font-size: 13px; margin-bottom: 12px; }
+  main.doc .line { display: grid; grid-template-columns: 70px 150px 1fr; gap: 10px; padding: 2px 0; border-bottom: 1px dotted var(--line); font-size: 14px; }
+  main.doc .line .t { color: var(--muted); font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding-top: 2px; }
+  main.doc .line .who { font-weight: 600; }
+  main.doc .stamp { color: var(--muted); font-size: 12px; }
+  .meeting { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; margin: 4px 0 12px; font-size: 14px; }
+  .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+  .badge { display: inline-block; border-radius: 999px; padding: 0 8px; font-size: 12px; background: var(--chip); color: var(--muted); margin-left: 4px; }
+  .badge.ok { color: var(--ok); } .badge.warn { color: var(--warn); }
+  .meeting button.play { margin-left: 4px; }
   button.play { border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 8px; padding: 3px 9px; cursor: pointer; font-size: 13px; }
   button.play.playing { border-color: var(--accent); color: var(--accent); }
   footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line);
@@ -88,17 +108,24 @@
 </head>
 <body>
 <header>
-  <h1>teamsrec · mluvčí</h1>
+  <h1>teamsrec</h1>
   <select id="pick" title="nahrávka"></select>
   <input id="title" type="text" placeholder="název schůzky" title="název schůzky – uloží se tlačítkem Uložit; složka i soubory nahrávky se přejmenují podle něj">
   <span class="meta" id="meta"></span>
   <span class="meta" id="scope" hidden>společný seznam lidí pro všechny nahrávky</span>
   <div class="tabs">
-    <button id="tabSpeakers" class="active" type="button">Mluvčí</button>
+    <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
   </div>
 </header>
+<nav id="subtabs" class="subtabs">
+  <button data-sub="speakers" class="active" type="button">Mluvčí</button>
+  <button data-sub="transcript" type="button">Přepis</button>
+  <button data-sub="summary" type="button">Zápis</button>
+  <select id="docPick" hidden></select>
+</nav>
 <main id="main"><div class="empty">Načítám…</div></main>
+<main id="docMain" class="doc" hidden></main>
 <main id="peopleMain" hidden></main>
 <footer>
   <span id="speakerButtons">
@@ -126,7 +153,10 @@
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string}} Review
+ * @typedef {{subject:string,start:string,end:string,teams:boolean,attendees?:string[],organizer?:string}} Candidate
+ * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
+ * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
  */
 
@@ -232,6 +262,7 @@ async function loadRecording(/** @type {string} */ stem) {
   people = r.people; displayDefault = r.display_default;
   if (!r.transcribed) {
     meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · bez přepisu`;
+    showSub("speakers", false);
     renderNotTranscribed(r);
     baseline = ""; updateDirty();
     return;
@@ -239,6 +270,8 @@ async function loadRecording(/** @type {string} */ stem) {
   meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · ${r.language || "?"} · mluvčí z: ${(r.speaker_sources || []).join(", ") || "diarizace"}`;
   renderSpeakers();
   markClean();
+  docPick.innerHTML = ""; docPick.dataset.stem = "";
+  showSub(subTab, subTab !== "speakers");
 }
 
 /** @param {Review} r */
@@ -284,6 +317,7 @@ function renderSpeakers() {
   if (!review) return;
   main.innerHTML = "";
   if (!review.speakers.length) { main.appendChild(emptyBox("V přepisu nejsou žádní mluvčí.")); return; }
+  if (review.meeting) main.appendChild(meetingPanel(review.meeting));
   if (review.speakers.some(sp => sp.unresolved && !sp.person)) {
     const bar = document.createElement("div"); bar.className = "toolbar";
     const b = document.createElement("button"); b.type = "button"; b.className = "play";
@@ -315,6 +349,65 @@ function personFor(/** @type {Fields} */ f) {
   const full = `${f.first} ${f.last}`.trim().toLocaleLowerCase("cs");
   const nick = f.nick.trim().toLocaleLowerCase("cs");
   return people.find(p => (full && `${p.first} ${p.last}`.trim().toLocaleLowerCase("cs") === full) || (!full && nick && p.nick.toLocaleLowerCase("cs") === nick)) || null;
+}
+
+const SOURCE_LABEL = { calendar: "z kalendáře", window: "z okna Teams", manual: "ručně", file: "z názvu souboru",
+  "teams-name": "z názvu souboru Teams", container: "z metadat souboru", generic: "obecný titulek okna", unknown: "?" };
+const MATCH_LABEL = { title: "podle názvu schůzky", time: "jen podle času, ověřte", manual: "vybráno ručně" };
+
+/** @param {Meeting} m */
+function meetingPanel(m) {
+  const box = document.createElement("div"); box.className = "meeting";
+  const cal = m.calendar;
+  const head = document.createElement("div"); head.className = "row2";
+  head.innerHTML = `<b>Schůzka</b> název <span class="badge">${escapeHtml(SOURCE_LABEL[m.title_source] || m.title_source)}</span>` +
+    (cal ? ` · kalendář: <b>${escapeHtml(cal.subject || "")}</b> ${escapeHtml((cal.start || "").slice(11, 16))}–${escapeHtml((cal.end || "").slice(11, 16))}` +
+           (cal.organizer ? `, organizátor ${escapeHtml(cal.organizer)}` : "") +
+           `<span class="badge ${cal.status === "confirmed" ? "ok" : ((cal.match || "time") === "time" ? "warn" : "")}">${cal.status === "confirmed" ? "potvrzeno" : escapeHtml(MATCH_LABEL[cal.match || "time"] || cal.match)}</span>`
+         : ` · <span class="badge warn">bez schůzky v kalendáři</span>`);
+  box.appendChild(head);
+  const people = document.createElement("div"); people.className = "row2";
+  people.innerHTML = "účastníci: " + (m.participants.length
+    ? m.participants.map(p => `${escapeHtml(p.name)}<span class="badge">${escapeHtml(SOURCE_LABEL[p.source] || p.source)}</span>`).join(" ")
+    : "<span class='meta'>žádní</span>");
+  box.appendChild(people);
+  const actions = document.createElement("div"); actions.className = "row2";
+  const btn = (/** @type {string} */ text, /** @type {() => void} */ fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = text; b.onclick = fn; actions.appendChild(b); return b; };
+  if (cal && cal.status !== "confirmed") btn("Potvrdit spojení se schůzkou", () => meetingAction("confirm"));
+  if (cal) btn("Odpojit od schůzky", () => meetingAction("detach"));
+  if (m.outlook_enabled) {
+    const sel = document.createElement("select"); sel.className = "same"; sel.style.width = "auto";
+    sel.innerHTML = '<option value="">spojit s jinou schůzkou z kalendáře…</option>';
+    let loaded = false;
+    sel.onfocus = async () => {
+      if (loaded || !review) return; loaded = true;
+      try {
+        const r = await api(`/api/meeting/candidates?stem=${encodeURIComponent(review.stem)}`);
+        for (const c of r.candidates) {
+          const o = document.createElement("option"); o.value = JSON.stringify({ subject: c.subject, start: c.start });
+          o.textContent = `${c.start.slice(11, 16)}–${c.end.slice(11, 16)} ${c.subject}${c.teams ? " (Teams)" : ""}, ${(c.attendees || []).length} lidí`;
+          sel.appendChild(o);
+        }
+        if (r.candidates.length === 0) { const o = document.createElement("option"); o.disabled = true; o.textContent = "v kalendáři nic v okolí"; sel.appendChild(o); }
+      } catch (e) { setStatus(String(e), "err"); }
+    };
+    sel.onchange = () => { if (sel.value) meetingAction("attach", JSON.parse(sel.value)); };
+    actions.appendChild(sel);
+  }
+  if (actions.children.length) box.appendChild(actions);
+  return box;
+}
+
+async function meetingAction(/** @type {string} */ action, /** @type {any=} */ candidate) {
+  if (!review) return;
+  setStatus(action === "attach" ? "spojuji se schůzkou (přejmenuje se složka)…" : "ukládám…");
+  try {
+    const r = await api("/api/meeting", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ stem: review.stem, action, candidate: candidate || null }) });
+    await loadList(); pick.value = r.stem; await loadRecording(r.stem);
+    setStatus({ confirm: "spojení potvrzeno", detach: "odpojeno; účastníci z kalendáře odebráni, název zůstal (upravte nahoře)",
+                attach: "spojeno s vybranou schůzkou: název, účastníci a složka" }[action] || "hotovo", "ok");
+  } catch (e) { setStatus(String(e), "err"); }
 }
 
 /** @param {Speaker} sp @param {number} i */
@@ -486,7 +579,7 @@ async function save(/** @type {boolean} */ withSummary) {
     const stem = r.stem || review.stem;  // a new title renames the folder, so the stem may have changed
     await loadList(); pick.value = stem;
     await loadRecording(stem);  // people may have been created; refresh the "v zápisu" previews
-    if (withSummary) setStatus("uloženo, zápis přegenerován", "ok");
+    if (withSummary) { setStatus("uloženo, zápis přegenerován", "ok"); if (subTab === "summary") renderDoc(); }
     else setStatus(`uloženo (${n} jmen), přepis a titulky přegenerovány`, "ok");
   } catch (e) {
     setStatus(String(e), "err");
@@ -690,16 +783,123 @@ function addPerson() {
 
 // ---------------------------------------------------------------- tabs, footer, start
 
+/** @type {"speakers"|"transcript"|"summary"} */ let subTab = "speakers";
+const docMain = $("docMain"), docPick = /** @type {HTMLSelectElement} */ ($("docPick"));
+
 function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   const sp = which === "speakers";
-  main.hidden = !sp; peopleMain.hidden = sp;
-  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("scope").hidden = sp; $("dirty").hidden = !sp;  // the people registry is shared
-  $("speakerButtons").hidden = !sp; $("peopleButtons").hidden = sp; $("tip").hidden = !sp;
+  peopleMain.hidden = sp; $("subtabs").hidden = !sp;
+  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("scope").hidden = sp;  // the people registry is shared
+  $("peopleButtons").hidden = sp;
   $("tabSpeakers").classList.toggle("active", sp); $("tabPeople").classList.toggle("active", !sp);
   setStatus("");
+  if (sp) showSub(subTab, false); else { main.hidden = true; docMain.hidden = true; $("speakerButtons").hidden = true; $("tip").hidden = true; $("dirty").hidden = true; }
   if (!reload) return;
   if (sp) { if (review) loadRecording(review.stem); } else loadPeople().catch(e => setStatus(String(e), "err"));
 }
+
+function showSub(/** @type {"speakers"|"transcript"|"summary"} */ which, render = true) {
+  subTab = which;
+  const sp = which === "speakers";
+  main.hidden = !sp; docMain.hidden = sp;
+  $("speakerButtons").hidden = !sp; $("tip").hidden = !sp; $("dirty").hidden = !sp;
+  for (const b of $("subtabs").querySelectorAll("button")) b.classList.toggle("active", b.dataset.sub === which);
+  docPick.hidden = which !== "summary" || !review || !review.docs || review.docs.summaries.length < 2;
+  if (render && !sp) renderDoc();
+}
+
+async function renderDoc() {
+  if (!review || !review.docs) { docMain.innerHTML = '<div class="empty">Nahrávka ještě nemá přepis.</div>'; return; }
+  let file = null;
+  if (subTab === "transcript") file = review.docs.transcript;
+  else {
+    const list = review.docs.summaries;
+    if (list.length) {
+      if (!docPick.options.length || docPick.dataset.stem !== review.stem) {
+        docPick.innerHTML = list.map(d => `<option value="${escapeHtml(d.file)}">${escapeHtml(d.label)}</option>`).join("");
+        docPick.dataset.stem = review.stem;
+      }
+      file = docPick.value || list[0].file;
+    }
+  }
+  if (!file) { docMain.innerHTML = `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vytvoříte ho tlačítkem „Uložit a přegenerovat zápis“ na záložce Mluvčí."}</div>`; return; }
+  docMain.innerHTML = '<div class="empty">Načítám…</div>';
+  try {
+    const r = await api(`/api/doc?stem=${encodeURIComponent(review.stem)}&file=${encodeURIComponent(file)}`);
+    docMain.innerHTML = subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text);
+  } catch (e) { docMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
+}
+
+/** the .txt export: header lines, then [hh:mm:ss] Name: text */
+function renderTranscript(/** @type {string} */ text) {
+  const out = [];
+  const metaLines = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const m = raw.match(/^\[(\d\d:\d\d:\d\d)\] (?:([^:]{1,60}): )?(.*)$/);
+    if (m) out.push(`<div class="line"><span class="t">${m[1]}</span><span class="who">${escapeHtml(m[2] || "")}</span><span>${escapeHtml(m[3])}</span></div>`);
+    else if (raw.startsWith("# ")) out.push(`<h1>${escapeHtml(raw.slice(2))}</h1>`);
+    else if (raw.trim()) metaLines.push(escapeHtml(raw));
+  }
+  if (metaLines.length) out.splice(out[0] && out[0].startsWith("<h1>") ? 1 : 0, 0, `<div class="meta-block">${metaLines.join("<br>")}</div>`);
+  return out.join("");
+}
+
+/** minimal Markdown: headings, paragraphs, bullet/numbered lists, tables, bold/italic/code, HTML comments as a stamp */
+function renderMarkdown(/** @type {string} */ md) {
+  const inline = (/** @type {string} */ s) => escapeHtml(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+  const lines = md.split(/\r?\n/);
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    const cm = line.match(/^<!--\s*(.*?)\s*-->$/);
+    if (cm) { out.push(`<div class="stamp">${escapeHtml(cm[1])}</div>`); i++; continue; }
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) { out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (line.startsWith("|")) {
+      const rows = [];
+      while (i < lines.length && lines[i].startsWith("|")) rows.push(lines[i++]);
+      const cells = (/** @type {string} */ r) => r.replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+      const [head, ...rest] = rows.filter(r => !/^[\s|:-]+$/.test(r));  // drop the |---|---| separator
+      out.push("<table><thead><tr>" + cells(head).map(c => `<th>${inline(c)}</th>`).join("") + "</tr></thead><tbody>" +
+        rest.map(r => "<tr>" + cells(r).map(c => `<td>${inline(c)}</td>`).join("") + "</tr>").join("") + "</tbody></table>");
+      continue;
+    }
+    const lm = line.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+    if (lm) {
+      const ordered = /\d/.test(lm[2]);
+      const tag = ordered ? "ol" : "ul";
+      const items = [];
+      while (i < lines.length) {
+        const m2 = lines[i].match(/^(\s*)([-*]|\d+\.)\s+(.*)$/);
+        if (!m2) break;
+        const depth = Math.floor(m2[1].replace(/\t/g, "  ").length / 2);
+        items.push({ depth, text: m2[3] });
+        i++;
+      }
+      let html = `<${tag}>`; let cur = 0;
+      for (const it of items) {
+        while (cur < it.depth) { html += "<ul>"; cur++; }
+        while (cur > it.depth) { html += "</ul>"; cur--; }
+        html += `<li>${inline(it.text)}</li>`;
+      }
+      while (cur > 0) { html += "</ul>"; cur--; }
+      out.push(html + `</${tag}>`);
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,3}\s|\||\s*([-*]|\d+\.)\s|<!--)/.test(lines[i])) para.push(lines[i++]);
+    out.push(`<p>${inline(para.join(" "))}</p>`);
+  }
+  return out.join("\n");
+}
+
+for (const b of $("subtabs").querySelectorAll("button")) b.onclick = () => showSub(/** @type {any} */ (b.dataset.sub));
+docPick.onchange = () => renderDoc();
 
 $("tabSpeakers").onclick = () => showTab("speakers");
 $("tabPeople").onclick = () => showTab("people");

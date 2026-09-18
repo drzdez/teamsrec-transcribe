@@ -62,9 +62,10 @@ První běh je tedy o několik minut delší.
 
 ### Nejnovější nahrávka jedním kliknutím
 
-Hovor se nahrává od první sekundy, jakmile si Teams vezme mikrofon. Teprve potom se objeví okno „Zahodit tuto
-nahrávku?“: Ano = smazat, Ne nebo žádná odpověď do 45 s = nechat (`[capture] prompt_default = "record"`; s `"skip"`
-se bez odpovědi zahodí). Nahrávku lze kdykoli zahodit i z ikony v liště. Capture se navíc každých 5 minut hlídá
+Hovor se nahrává od první sekundy, jakmile si Teams vezme mikrofon, a nic se neklikají: z lišty jen vyskočí
+oznámení „Nahrávám: …“. Nahrávku lze kdykoli zahodit z menu ikony v liště (Abort & delete). Kdo chce raději
+dotaz, nastaví `[capture] prompt_default = "ask"` (okno „Zahodit?“, bez odpovědi do 45 s se nechá) nebo `"skip"`
+(bez odpovědi se zahodí). Capture se navíc každých 5 minut hlídá
 naplánovanou úlohou Windows `teamsrec-capture`: když by spadl, znovu se spustí (druhá instance se sama ukončí).
 
 Zástupce **teamsrec – zpracovat poslední** na ploše (nebo `bin\teamsrec-process-latest.cmd`) importuje, co je
@@ -117,6 +118,11 @@ na stránce tlačítko „Zkusit poznat neznámé po hlase“ nad kartami, v ter
 
 Otisk je biometrický údaj kolegy. Zůstává lokálně a slouží jen k tomu, aby se zápis nemusel pokaždé
 pojmenovávat ručně; informujte tým stejně, jako o nahrávání samotném.
+
+Schůzka na místě bez Teams: v menu ikony *Record on-site meeting (microphone only)*. Nahrává jen mikrofon
+(`[capture] onsite_mic` = část názvu zařízení, u notebooku „Pole mikrofonu“; musí být ve Windows povolený), název
+a účastníci se vezmou z kalendáře, konec přes *Stop & keep*. Na jednom mikrofonu jsou všichni, takže se z něj
+nepojmenovává váš hlas; jména dají hlasové otisky a diarizace, zbytek doplníte na stránce.
 
 Nahrávky pořízené prototypem `teamsrec-capture/legacy/teamsrec.py` (živý hovor, *Record now*, *Record playback*)
 leží už ve správném adresáři. `teamsrec-transcribe process` je zpracuje spolu s ostatními. Označení „já“ podle mikrofonní stopy zatím není hotové, mluvčí dá diarizace.

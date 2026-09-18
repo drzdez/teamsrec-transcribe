@@ -450,6 +450,25 @@ def test_choose_language_restricts_to_expected():
     assert choose_language([], ("cs",)) is None and choose_language([{"ru": 1.0}], ("cs",)) is None
 
 
+def test_onsite_recording_skips_mic_naming(tmp_path, monkeypatch):
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.providers.base import ProviderResult
+    cfg = Config(out_dir=tmp_path, user_name="Já")
+    rec = _make_transcribed(tmp_path)  # real 30 s wav as the mix
+    rec.sidecar["source"] = "onsite"
+    rec.sidecar["tracks"] = {"mic": {"file": rec.mix_path.name, "sample_rate": 16000, "channels": 1}}
+    rec.save_sidecar()
+    calls = []
+    monkeypatch.setattr(pl, "apply_mic_track", lambda *a, **k: calls.append(a) or {})
+    class P:
+        name = "fake"
+        def transcribe(self, audio, **k):
+            return ProviderResult(segments=[Segment(0, 40, "ahoj", "SPEAKER_00")], language="cs", provider="fake", provider_version="0", model="m")
+    monkeypatch.setattr(pl, "get_provider", lambda name: P())
+    pl.do_transcribe(cfg, rec, force=True)
+    assert calls == [] and rec.read_json(rec.transcript_path)["speakers"] == ["SPEAKER_00"]
+
+
 def test_summary_refuses_empty_transcript(tmp_path):
     from teamsrec_transcribe.pipeline import do_summarize
     cfg = Config(out_dir=tmp_path)

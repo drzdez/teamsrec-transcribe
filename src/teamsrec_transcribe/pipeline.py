@@ -343,6 +343,9 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     mic = rec.track_path("mic")
     speaker_sources = ["video"] if timeline else []
     mic_mapping: dict[str, str] = {}
+    if rec.source == "onsite":
+        mic = None  # the room microphone carries everybody; only voice prints and diarization can tell them apart
+        log.info("%s: on-site recording, speakers from voice prints / diarization only", rec.stem)
     if cfg.user_name and mic and mic.exists():
         mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)  # the user's label, before any guessing
         if mic_mapping:

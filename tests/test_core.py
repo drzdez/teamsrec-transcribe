@@ -10,7 +10,9 @@ from teamsrec_transcribe.export import to_srt, to_txt
 from teamsrec_transcribe.importer import derive_metadata
 from teamsrec_transcribe.prompt import build_prompt
 from teamsrec_transcribe.providers.base import Segment
-from teamsrec_transcribe.recording import Recording, is_sidecar, make_stem, resolve_recording, slugify
+from teamsrec_transcribe.pipeline import do_transcribe
+from teamsrec_transcribe.recording import (Recording, RecordingError, is_sidecar, make_stem, resolve_recording,
+                                          slugify)
 from teamsrec_transcribe.speakers import apply_manual_names, apply_video_timeline, speaker_list
 from teamsrec_transcribe.video_speakers import VideoTimeline
 
@@ -448,6 +450,17 @@ def test_choose_language_restricts_to_expected():
     assert choose_language(votes, ("cs", "sk", "en")) == "sk"      # ru ignored, sk 1.20 vs cs 0.95
     assert choose_language(votes, ("en",)) == "en"
     assert choose_language([], ("cs",)) is None and choose_language([{"ru": 1.0}], ("cs",)) is None
+
+
+def test_silent_recording_is_not_transcribed_and_latest_skips_it(tmp_path):
+    from teamsrec_transcribe.recording import latest_recording
+    cfg = Config(out_dir=tmp_path)
+    _make_recording(tmp_path, stem="2026-09-21_0900_archi-week-plan", source="live", audio_silent=True)
+    good = Recording.load(_make_recording(tmp_path, stem="2026-09-20_1000_tydenni-sync", source="live"))
+    assert latest_recording(tmp_path).stem == good.stem  # newest is silent -> skipped
+    silent = resolve_recording("2026-09-21_0900_archi-week-plan", tmp_path)
+    with pytest.raises(RecordingError, match="audio_silent"):
+        do_transcribe(cfg, silent)
 
 
 def test_onsite_recording_skips_mic_naming(tmp_path, monkeypatch):

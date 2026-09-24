@@ -119,6 +119,10 @@ na stránce tlačítko „Zkusit poznat neznámé po hlase“ nad kartami, v ter
 Otisk je biometrický údaj kolegy. Zůstává lokálně a slouží jen k tomu, aby se zápis nemusel pokaždé
 pojmenovávat ručně; informujte tým stejně, jako o nahrávání samotném.
 
+Nahrávka bez zvuku: když zvukové zařízení nic nedodá (uspaná sluchátka, dongle přepnutý na jiný profil),
+označí ji capture v sidecaru jako `audio_silent`. Taková nahrávka se nepřepisuje (`transcribe` skončí hláškou)
+a `latest` ji přeskočí, takže „zpracovat poslední“ vezme poslední nahrávku, na které je něco slyšet.
+
 Schůzka na místě bez Teams: v menu ikony *Record on-site meeting (microphone only)*. Nahrává jen mikrofon
 (`[capture] onsite_mic` = část názvu zařízení, u notebooku „Pole mikrofonu“; musí být ve Windows povolený), název
 a účastníci se vezmou z kalendáře, konec přes *Stop & keep*. Na jednom mikrofonu jsou všichni, takže se z něj

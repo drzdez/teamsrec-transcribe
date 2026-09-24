@@ -313,6 +313,8 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     if rec.transcript_path.exists() and not force:
         log.info("%s: transcript exists, skipping (use --force)", rec.stem)
         return rec.transcript_path
+    if rec.sidecar.get("audio_silent"):  # the capture app heard nothing at all: headset asleep, device taken
+        raise RecordingError(f"{rec.stem}: the recording has no audible audio (audio_silent), nothing to transcribe")
     audio = _ensure_mix(rec)
     if audio.stat().st_size < 16000 * 2:  # under one second of 16 kHz PCM
         raise RecordingError(f"{rec.stem}: audio is empty ({audio.name}, {audio.stat().st_size} bytes)")

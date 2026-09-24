@@ -129,11 +129,14 @@ def is_media_file(path: Path) -> bool:
 
 
 def latest_recording(out_dir: Path) -> Recording:
-    """The newest recording by stem (stems sort chronologically)."""
+    """The newest recording by stem (stems sort chronologically). Recordings the capture app marked
+    `audio_silent` (no device delivered anything) are skipped: `latest` means the newest recording there is
+    something to hear on. If every recording is silent, the newest one is returned and fails loudly later."""
     recs = list(iter_recordings(out_dir))
     if not recs:
         raise RecordingError(f"no recordings under {out_dir}")
-    return max(recs, key=lambda r: r.stem)
+    usable = [r for r in recs if not r.sidecar.get("audio_silent")] or recs
+    return max(usable, key=lambda r: r.stem)
 
 
 def resolve_recording(target: Path | str, out_dir: Path) -> Recording:

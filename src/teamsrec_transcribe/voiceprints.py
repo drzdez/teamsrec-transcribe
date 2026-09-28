@@ -22,6 +22,8 @@ from pathlib import Path
 FILE_NAME = "voiceprints.json"
 MAX_PER_PERSON = 10
 MIN_SECONDS = 30.0  # embeddings of shorter speech are noisy (calibration: 12 s of the user scored 0.43 vs 0.94)
+NEAR_DUPLICATE = 0.95  # a print this similar to one already stored adds nothing (same voice, same conditions:
+                       # two recordings of the same person on the same microphone scored 0.94, see lab/FINDINGS.md)
 
 
 def _unit(v: list[float]) -> list[float] | None:
@@ -79,8 +81,11 @@ class Voiceprints:
         self.path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
 
     # ---- enrolment
-    def enroll(self, pid: str, vector: list[float], stem: str, label: str, model: str = "") -> bool:
-        """Store one print for a person; the same recording+label is never stored twice. Returns True if added."""
+    def enroll(self, pid: str, vector: list[float], stem: str, label: str, model: str = "",
+               near_duplicate: float = NEAR_DUPLICATE) -> bool:
+        """Store one print for a person; the same recording+label is never stored twice, and neither is a print
+        that is nearly identical to one already there (the ten slots are worth more when they cover different
+        microphones and rooms). Returns True if added."""
         u = _unit(vector)
         if not u:
             return False
@@ -88,6 +93,8 @@ class Voiceprints:
             self.model = model
         prints = self.people.setdefault(pid, [])
         if any(p.get("stem") == stem and p.get("label") == label for p in prints):
+            return False
+        if any(cosine(u, p["v"]) >= near_duplicate for p in prints):
             return False
         prints.append({"v": [round(x, 6) for x in u], "stem": stem, "label": label,
                        "added": datetime.now().replace(microsecond=0).isoformat()})

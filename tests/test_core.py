@@ -315,9 +315,9 @@ def test_voiceprints_registry_and_recognition(tmp_path):
     assert vp.count("jana") == 0 and vp.count("jana-novakova") == 1
     vp.forget("petr")
     assert vp.count("petr") == 0
-    # cap per person
+    # cap per person (distinct prints, otherwise they are skipped as adding nothing)
     for i in range(15):
-        vp.enroll("x", [1.0, float(i) / 10, 0.0, 0.0], f"r{i}", "S")
+        vp.enroll("x", [1.0 if j == i else 0.0 for j in range(15)], f"r{i}", "S")
     assert vp.count("x") == 10
     # remap: two labels renamed to the same name are averaged, untouched labels keep their key
     emb = {"SPEAKER_00": a, "SPEAKER_01": [0.0, 0.0, 1.0, 0.0], "SPEAKER_02": b}
@@ -520,6 +520,48 @@ def test_recognize_voices_from_stored_embeddings(tmp_path):
     sp = {s["label"]: s for s in build_review(cfg, rec)["speakers"]}
     assert sp["SPEAKER_01"]["voice_hint"]["name"] == "Jana Nováková" and sp["SPEAKER_01"]["voice_hint"]["why"] == "krátká promluva"
     assert sp["SPEAKER_00"]["voice_hint"] is None  # already assigned
+
+
+def test_merge_same_person_folds_labels_and_keeps_distinct_prints(tmp_path):
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.pipeline import merge_same_person, same_person_groups
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path); ppl.ensure("Jana Nováková"); ppl.save()
+    data = rec.read_json(rec.transcript_path)
+    data["segments"][0]["end"] = 40  # both labels speak long enough to be worth a print
+    data["segments"][3]["end"] = 60
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0, 0.0], "Jana Nováková": [0.6, 0.8, 0.0],
+                                  "SPEAKER_01": [0.0, 0.0, 1.0]}
+    data["voice_matches"] = {"Jana Nováková": {"person": "jana-novakova", "score": 0.9}}
+    rec.write_json(rec.transcript_path, data)
+    # the video named one label, the user named the other one: one person, two cards
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": "jana-novakova", "Jana Nováková": "jana-novakova",
+                                       "SPEAKER_01": "petr-svoboda"})
+    assert same_person_groups(rec, People.load(tmp_path)) == {"jana-novakova": ["SPEAKER_00", "Jana Nováková"]}
+
+    res = merge_same_person(cfg, rec)
+    assert res["merged"] == 1 and res["prints"] == 2  # both embeddings differ enough to be worth keeping
+    t = rec.read_json(rec.transcript_path)
+    speakers = {s["speaker"] for s in t["segments"]}
+    assert speakers == {"SPEAKER_00", "SPEAKER_01"}  # the label with the most speech won
+    assert t["speakers"] == ["SPEAKER_00", "SPEAKER_01"]
+    assert "Jana Nováková" not in t["speaker_embeddings"] and "Jana Nováková" not in t["voice_matches"]
+    assert t["merged_speakers"][0]["kept"] == "SPEAKER_00" and t["merged_speakers"][0]["merged"] == ["Jana Nováková"]
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "jana-novakova", "SPEAKER_01": "petr-svoboda"}
+    assert Voiceprints.load(tmp_path).count("jana-novakova") == 2
+    assert "Jana: Rozpočet je hotový" in rec.file(".txt").read_text(encoding="utf-8")
+    assert merge_same_person(cfg, rec) == {"groups": [], "merged": 0, "prints": 0}  # nothing left to do
+
+
+def test_voiceprint_skips_a_print_that_adds_nothing(tmp_path):
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    vp = Voiceprints.load(tmp_path)
+    assert vp.enroll("petr", [1.0, 0.0, 0.0], "rec1", "SPEAKER_00")
+    assert not vp.enroll("petr", [0.99, 0.02, 0.0], "rec2", "SPEAKER_00")  # same voice, same conditions
+    assert vp.enroll("petr", [0.8, 0.6, 0.0], "rec3", "SPEAKER_00")        # another room, worth keeping
+    assert vp.count("petr") == 2
 
 
 def test_remove_speaker_drops_segments_and_reexports(tmp_path):

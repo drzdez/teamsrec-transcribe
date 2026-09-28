@@ -105,7 +105,7 @@ nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikro
 
 Koho jednou pojmenujete (na stránce nebo přes `label-speakers`), toho další nahrávky poznají po hlase samy:
 při pojmenování se uloží hlasový otisk z diarizace do `_speakers\voiceprints.json` (jen na tomto počítači,
-nejvýš 10 otisků na osobu), váš vlastní otisk vzniká automaticky z mikrofonní stopy. U nové nahrávky se každý
+nejvýš 10 otisků na osobu, a jen takové, které přidají něco nového – skoro shodný vzorek se zahodí), váš vlastní otisk vzniká automaticky z mikrofonní stopy. U nové nahrávky se každý
 dosud neznámý řečník porovná s otisky a když je shoda dost vysoká a jasně nejlepší, dostane jméno rovnou.
 Na stránce to uvidíte zeleně jako „poznáno po hlase: Pavel Orosz (shoda 0.72) – zkontrolujte a uložte“;
 špatné rozpoznání opravíte přepsáním jména. Nastavení `[voiceprints]`: `enabled`, `threshold` (potřebná shoda),
@@ -215,6 +215,16 @@ Když vybraná nahrávka ještě nemá přepis, stránka to řekne a nabídne tl
 (přepis, export, zápis; průběh vidíte dole). Nic se nepíše do konzole.
 
 Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jméno znamená nechat označení.
+
+V nadpisu karty je jméno, které mluvčí dostal (jak ho píšete, tak se nadpis mění), a vedle něj šedě původní
+označení z přepisu – `SPEAKER_03`, jméno z jmenovky ve videu, i když ho OCR přečetlo špatně.
+
+Diarizace jednoho člověka občas rozdělí na dvě označení (druhý mikrofon, dlouhá schůzka, opětovné připojení).
+Když oběma přiřadíte stejnou osobu, objeví se nad kartami tlačítko **Sloučit podle osoby**: repliky se spojí
+pod jedno označení (to s nejdelší řečí) a hlasové vzorky obou se uloží jako otisky, pokud se dost liší – právě
+záznam téhož hlasu za jiných podmínek dělá rozpoznávání spolehlivějším. Slučuje se podle uloženého přiřazení,
+takže nejdřív dejte Uložit. Sloučení se zapíše do přepisu (`merged_speakers`), `transcribe --force` vrátí
+původní označení.
 
 Mluvčí s pár sekundami „řeči“ dole v seznamu bývá šum: klikání myší, psaní, dech. Rozpoznávač si na něj
 občas vymyslí celou větu, klidně s pojmy z vaší domény (má je v nápovědě). Odkaz „✕ smazat repliky tohoto

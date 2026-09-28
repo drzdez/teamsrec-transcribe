@@ -156,7 +156,8 @@
  * @typedef {{subject:string,start:string,end:string,teams:boolean,attendees?:string[],organizer?:string}} Candidate
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting}} Review
+ * @typedef {{person:string,labels:string[],name:string}} SamePerson
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[]}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
  */
 
@@ -333,6 +334,30 @@ function renderSpeakers() {
     };
     bar.appendChild(b); main.appendChild(bar);
   }
+  const same = review.same_person || [];
+  if (same.length) {
+    const bar = document.createElement("div"); bar.className = "toolbar";
+    const extra = same.reduce((n, g) => n + g.labels.length - 1, 0);
+    const b = document.createElement("button"); b.type = "button"; b.className = "play";
+    b.textContent = `Sloučit podle osoby (${extra > 1 ? extra + " označení navíc" : "1 označení navíc"})`;
+    b.title = "Označení, která patří jedné osobě, se spojí do jednoho mluvčího; jejich hlasové vzorky zůstanou "
+      + "jako otisky, pokud se dost liší:\n"
+      + same.map(g => `${g.name || g.person}: ${g.labels.join(" + ")}`).join("\n");
+    b.onclick = async () => {
+      if (isDirty()) { setStatus("nejdřív uložte jména (slučuje se podle uloženého přiřazení)", "err"); return; }
+      b.disabled = true; setStatus("slučuji…");
+      try {
+        const stem = review ? review.stem : "";
+        const r = await api("/api/speakers/merge", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stem }) });
+        await loadList(); pick.value = stem; await loadRecording(stem);
+        setStatus(r.merged ? `sloučeno ${r.merged} označení, přepis a titulky přegenerovány`
+                             + (r.prints ? `; hlasových otisků přibylo ${r.prints}` : "; nové otisky nepřibyly (vzorky byly skoro stejné)")
+                           : "nebylo co sloučit", r.merged ? "ok" : "");
+      } catch (e) { setStatus(String(e), "err"); b.disabled = false; }
+    };
+    bar.appendChild(b); main.appendChild(bar);
+  }
   review.speakers.forEach((sp, i) => main.appendChild(card(sp, i)));
 }
 
@@ -415,7 +440,9 @@ function card(sp, i) {
   const c = document.createElement("section");
   c.className = "card" + (sp.unresolved ? "" : " done");
   const left = document.createElement("div");
-  left.innerHTML = `<span class="label ${sp.unresolved ? "" : "named"}">${escapeHtml(sp.label)}</span>` +
+  const named = sp.name && sp.name !== sp.label ? sp.name : "";
+  left.innerHTML = `<span class="label ${sp.unresolved ? "" : "named"}">${escapeHtml(named || sp.label)}</span>` +
+    (named ? `<span class="chip" title="označení v přepisu (z diarizace, videa nebo mikrofonu)">${escapeHtml(sp.label)}</span>` : "") +
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
     (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
@@ -470,9 +497,12 @@ function card(sp, i) {
   const shown = document.createElement("div"); shown.className = "shown";
   side.appendChild(shown);
 
+  const head = /** @type {HTMLElement|null} */ (left.querySelector(".label"));
   function fields() { return collectFields(side); }
   function updateShown() {
     const f = fields();
+    const full = `${f.first} ${f.last}`.trim() || f.nick;
+    if (head) head.textContent = full || sp.label;  // the heading is the person, not the label under it
     if (!(f.first || f.last || f.nick)) { shown.innerHTML = sp.unresolved ? "prázdné = nechat SPEAKER" : ""; return; }
     const known = personFor(f);
     shown.innerHTML = `v zápisu: <b>${escapeHtml(shownFor(f))}</b>${known ? "" : " · nová osoba"}`;

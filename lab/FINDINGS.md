@@ -89,6 +89,8 @@ Závěry: dostatečně dlouhá promluva téhož člověka dává shodu vysoko na
 Nastaveno: `threshold = 0.60`, `margin = 0.10`, `min_seconds = 30` (kratší označení se neporovnávají
 ani neukládají). Přehodnotit po 10+ nahrávkách s více lidmi.
 
+Ukládání otisků (2026-09-28): otisk, který má k některému uloženému podobnost ≥ `NEAR_DUPLICATE = 0.95`, se zahazuje – týž hlas za týchž podmínek dal 0.94 (řádek výše), takže nad 0.95 už vzorek nepřidává nic nového a jen zabere jeden z deseti slotů. Slučování mluvčích (`merge_same_person`) proto ukládá vzorky všech slučovaných označení – ta, která vznikla za jiných podmínek, projdou a rozpoznávání zlepší.
+
 Doplněk po 7 nahrávkách (10 osob s otisky): dva správné kandidáty práh 0.60 těsně odmítl (0.597 s odstupem
 0.29, 0.58 s odstupem 0.15), cizí hlasy zůstávají pod 0.36. Práh snížen na 0.55; kandidáti mezi 0.40 a prahem se
 na stránce ukazují jako „nejpodobnější hlas“ s tlačítkem k potvrzení, ale nepřiřazují se sami.

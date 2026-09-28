@@ -19,6 +19,7 @@ API
   GET  /api/person?id=           one person with their voice prints (recording, label, when, sample to play)
   POST /api/person/forget        {"id", "stem"?, "label"?} -> drop one print (stem+label) or all prints of the person
   POST /api/speaker/remove       {"stem", "label"} -> drop that speaker's segments (noise turned into text)
+  POST /api/speakers/merge       {"stem"} -> labels that resolve to the same person become one speaker
   POST /api/process              {"stem"} -> transcribe + export + summarize in the background (status polls it)
   POST /api/recognize            {"stem"} -> match unnamed labels against the voice prints collected since
   GET  /api/doc?stem=&file=      text of one document of the recording (transcript .txt, any .summary*.md)
@@ -54,7 +55,8 @@ from urllib.parse import parse_qs, urlparse
 from ..config import Config
 from ..people import DISPLAY_MODES, People, Person
 from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, meeting_info,
-                        recognize_voices, remove_speaker, rename_recording, set_meeting_link)
+                        merge_same_person, recognize_voices, remove_speaker, rename_recording, same_person_groups,
+                        set_meeting_link)
 from ..voiceprints import Voiceprints
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -213,6 +215,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "language": data.get("language"), "speaker_sources": data.get("speaker_sources", []),
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "speakers": speakers, "known_names": known_names(cfg, people),
+        "same_person": [{"person": pid, "labels": labels, "name": (people.get(pid) or Person(pid)).full}
+                        for pid, labels in same_person_groups(rec, people).items()],
         "people": people.to_json(), "display_default": people.default_mode,
         "meeting": meeting_info(cfg, rec),
         "docs": recording_docs(rec),
@@ -568,6 +572,9 @@ def _handler(state: ReviewState, server_ref: dict):
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
                     n = remove_speaker(state.cfg, rec, str(body.get("label") or ""))
                     self._json({"ok": True, "removed": n})
+                elif u.path == "/api/speakers/merge":
+                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    self._json({"ok": True, **merge_same_person(state.cfg, rec)})
                 elif u.path == "/api/person/forget":
                     n = forget_print(state.cfg, str(body.get("id") or ""), body.get("stem"), body.get("label"))
                     self._json({"ok": True, "removed": n})

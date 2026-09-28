@@ -212,6 +212,77 @@ def rename_recording(cfg: Config, rec: Recording, title: str) -> Recording:
 
 # ---------------------------------------------------------------- remove noise "speakers"
 
+def same_person_groups(rec: Recording, people: People) -> dict[str, list[str]]:
+    """{person id: labels of this recording that resolve to them}, only where there is more than one label.
+    Diarization splits a person over two labels often enough (a second microphone, a long meeting, somebody
+    joining twice), and after naming them the page shows two cards for one person."""
+    if not rec.transcript_path.exists():
+        return {}
+    data = rec.read_json(rec.transcript_path)
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    labels = [s for s in (data.get("speakers") or []) if s]
+    if not labels:
+        labels = sorted({s.get("speaker") for s in data.get("segments") or [] if s.get("speaker")})
+    groups: dict[str, list[str]] = {}
+    for label in labels:
+        value = names.get(label) or ("" if label.startswith("SPEAKER_") or label == "UNKNOWN" else label)
+        if not value:
+            continue
+        person = people.get(value) or people.find(value)
+        groups.setdefault(person.id if person else value.strip().casefold(), []).append(label)
+    return {pid: ls for pid, ls in groups.items() if len(ls) > 1}
+
+
+def merge_same_person(cfg: Config, rec: Recording) -> dict:
+    """Fold every group of labels that belongs to one person into a single speaker. Their embeddings are kept
+    as voice prints first - the same voice recorded under different conditions is exactly what makes later
+    recognition work - and only then do the segments move to the label that spoke the most. `transcribe
+    --force` rebuilds the original labels."""
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    people = People.load(cfg.out_dir, cfg.people_display)
+    groups = same_person_groups(rec, people)
+    if not groups:
+        return {"groups": [], "merged": 0, "prints": 0}
+    data = rec.read_json(rec.transcript_path)
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    segments = data.get("segments") or []
+    secs = speech_seconds(segments)
+    emb = data.get("speaker_embeddings") or {}
+    vp = Voiceprints.load(cfg.out_dir) if cfg.voiceprints.enabled else None
+    prints = 0
+    done = []
+    for pid, labels in groups.items():
+        keep = max(labels, key=lambda l: (secs.get(l, 0.0), l))
+        gone = [l for l in labels if l != keep]
+        if vp is not None and people.get(pid):  # an unregistered literal name has nowhere to store prints
+            for label in labels:
+                vec = emb.get(label)
+                if vec and secs.get(label, 0.0) >= cfg.voiceprints.min_seconds:
+                    prints += vp.enroll(pid, vec, rec.stem, label, data.get("diarize_model") or "")
+        for s in segments:
+            if s.get("speaker") in gone:
+                s["speaker"] = keep
+        for label in gone:
+            emb.pop(label, None)
+            if isinstance(data.get("voice_matches"), dict):
+                data["voice_matches"].pop(label, None)
+            names.pop(label, None)
+        if people.get(pid):  # a registered person keeps the mapping; an unregistered literal name has none
+            names[keep] = pid
+        data["speakers"] = [l for l in (data.get("speakers") or []) if l not in gone]
+        done.append({"person": pid, "kept": keep, "merged": gone,
+                     "seconds": round(sum(secs.get(l, 0.0) for l in labels), 1)})
+        log.info("%s: %s merged into %s (%s)", rec.stem, ", ".join(gone), keep, pid)
+    data.setdefault("merged_speakers", []).extend([dict(g, at=utc_now_iso()) for g in done])
+    rec.write_json(rec.transcript_path, data)
+    rec.write_json(rec.speakers_path, names)
+    if vp is not None and prints:
+        vp.save()
+    do_export(cfg, rec)
+    return {"groups": done, "merged": sum(len(g["merged"]) for g in done), "prints": prints}
+
+
 def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
     """Drop every segment of one speaker label from the transcript (typing, mouse clicks, breathing that the
     ASR turned into invented sentences). Recorded in `removed_speakers`; `transcribe --force` brings it back.

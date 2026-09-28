@@ -20,7 +20,9 @@ API
   POST /api/person/forget        {"id", "stem"?, "label"?} -> drop one print (stem+label) or all prints of the person
   POST /api/speaker/remove       {"stem", "label"} -> drop that speaker's segments (noise turned into text)
   POST /api/speakers/merge       {"stem"} -> labels that resolve to the same person become one speaker
-  POST /api/process              {"stem"} -> transcribe + export + summarize in the background (status polls it)
+  POST /api/speakers/unmerge     {"stem"} -> put the merged labels back (only merges that recorded where from)
+  POST /api/process              {"stem", "force"?} -> transcribe + export + summarize in the background
+                                 (status polls it); force starts from scratch and drops the manual names
   POST /api/recognize            {"stem"} -> match unnamed labels against the voice prints collected since
   GET  /api/doc?stem=&file=      text of one document of the recording (transcript .txt, any .summary*.md)
   GET  /api/meeting/candidates?stem=   nearby Outlook items to link instead
@@ -55,8 +57,8 @@ from urllib.parse import parse_qs, urlparse
 from ..config import Config
 from ..people import DISPLAY_MODES, People, Person
 from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, meeting_info,
-                        merge_same_person, recognize_voices, remove_speaker, rename_recording, same_person_groups,
-                        set_meeting_link)
+                        merge_same_person, recognize_voices, remove_speaker, rename_recording, reset_names,
+                        same_person_groups, set_meeting_link, unmerge_speakers)
 from ..voiceprints import Voiceprints
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -217,6 +219,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "speakers": speakers, "known_names": known_names(cfg, people),
         "same_person": [{"person": pid, "labels": labels, "name": (people.get(pid) or Person(pid)).full}
                         for pid, labels in same_person_groups(rec, people).items()],
+        "can_unmerge": any(s.get("merged_from") for s in (data.get("segments") or [])),
         "people": people.to_json(), "display_default": people.default_mode,
         "meeting": meeting_info(cfg, rec),
         "docs": recording_docs(rec),
@@ -454,8 +457,14 @@ class ReviewState:
     def run_summary(self, rec: Recording) -> None:
         self.run_job("summary", lambda: do_summarize(self.cfg, rec, force=True), "summary regenerated")
 
-    def run_process(self, rec: Recording) -> bool:
-        return self.run_job("process", lambda: do_process(self.cfg, rec), "processed")
+    def run_process(self, rec: Recording, force: bool = False) -> bool:
+        """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
+        they are keyed by labels that will not exist any more, and a wrong one must not come back."""
+        def work():
+            if force:
+                reset_names(rec)
+            do_process(self.cfg, rec, force=force)
+        return self.run_job("process", work, "processed")
 
     def status(self) -> dict:
         with self.lock:
@@ -555,7 +564,7 @@ def _handler(state: ReviewState, server_ref: dict):
                     self._json({"ok": True, "people": rows})
                 elif u.path == "/api/process":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    started = state.run_process(rec)
+                    started = state.run_process(rec, force=bool(body.get("force")))
                     self._json({"ok": started, "status": state.status(),
                                 **({} if started else {"error": "another job is still running"})})
                 elif u.path == "/api/meeting":
@@ -575,6 +584,9 @@ def _handler(state: ReviewState, server_ref: dict):
                 elif u.path == "/api/speakers/merge":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
                     self._json({"ok": True, **merge_same_person(state.cfg, rec)})
+                elif u.path == "/api/speakers/unmerge":
+                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
+                    self._json({"ok": True, "restored": unmerge_speakers(state.cfg, rec)})
                 elif u.path == "/api/person/forget":
                     n = forget_print(state.cfg, str(body.get("id") or ""), body.get("stem"), body.get("label"))
                     self._json({"ok": True, "removed": n})

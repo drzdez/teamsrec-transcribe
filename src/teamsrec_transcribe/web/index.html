@@ -157,7 +157,7 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[]}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
  */
 
@@ -357,6 +357,45 @@ function renderSpeakers() {
       } catch (e) { setStatus(String(e), "err"); b.disabled = false; }
     };
     bar.appendChild(b); main.appendChild(bar);
+  }
+  {
+    const bar = document.createElement("div"); bar.className = "toolbar";
+    const b = document.createElement("button"); b.type = "button"; b.className = "play";
+    const mins = Math.max(2, Math.round((review.duration_s || 0) / 60 / 6) + 3);
+    b.textContent = "Přepsat znovu od nuly";
+    b.title = "Nový přepis i diarizace (transcribe --force): mluvčí se rozdělí znovu, ruční přiřazení jmen "
+      + "u této nahrávky se zahodí. Hodí se, když se do označení promíchali dva lidé.";
+    armedButton(b, `Potvrdit nový přepis (~${mins} min, jména se zahodí)`, async () => {
+      const stem = review ? review.stem : "";
+      setStatus("spouštím nový přepis…");
+      try {
+        const r = await api("/api/process", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stem, force: true }) });
+        if (!r.ok) throw new Error(r.error || "nelze spustit");
+      } catch (e) { setStatus(String(e), "err"); return; }
+      setBusy(true);
+      try { await waitForSummary(); } finally { setBusy(false); }
+      await loadList(); pick.value = stem; await loadRecording(stem);
+      setStatus("hotovo: nový přepis, mluvčí jsou znovu k pojmenování", "ok");
+    });
+    bar.appendChild(b); main.appendChild(bar);
+  }
+  if (review.can_unmerge) {
+    const bar = document.createElement("div"); bar.className = "toolbar";
+    const u = document.createElement("button"); u.type = "button"; u.className = "play";
+    u.textContent = "Vrátit sloučení";
+    u.title = "Vrátí repliky pod původní označení (například když se sloučili dva různí lidé)";
+    u.onclick = async () => {
+      u.disabled = true; setStatus("vracím…");
+      try {
+        const stem = review ? review.stem : "";
+        const r = await api("/api/speakers/unmerge", { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ stem }) });
+        await loadList(); pick.value = stem; await loadRecording(stem);
+        setStatus(`vráceno ${r.restored} replik pod původní označení`, "ok");
+      } catch (e) { setStatus(String(e), "err"); u.disabled = false; }
+    };
+    bar.appendChild(u); main.appendChild(bar);
   }
   review.speakers.forEach((sp, i) => main.appendChild(card(sp, i)));
 }

@@ -48,6 +48,13 @@ def do_import(cfg: Config, src: Path, *, title: str | None = None, start: dateti
     return rec
 
 
+def keep_video_names(found: dict, candidates) -> dict:
+    """Which names read from a live Teams window are worth keeping. With a list of participants only those
+    that matched one of them (OCR of a live tile invents people); without one, anything name-shaped."""
+    cands = set(candidates)
+    return {n: iv for n, iv in found.items() if n in cands or (not cands and _looks_like_a_name(n))}
+
+
 def _screen_names(cfg: Config, rec: Recording) -> list[str]:
     """Candidate names for the label OCR of a live recording: everyone in the registry plus participants."""
     people = People.load(cfg.out_dir, cfg.people_display)
@@ -74,8 +81,11 @@ def is_meeting_screen(titles: list[str]) -> bool:
 def do_video_screens(cfg: Config, rec: Recording) -> VideoTimeline | None:
     """Live recording: the capture app saved every Teams window as <stem>_screen<N>.mp4 (sidecar `screens`).
     Each meeting window is analysed like a Teams recording video; the timelines are shifted by their start
-    offset and merged. OCR results that neither match a known person nor look like a name are dropped (a
-    live window is noisier than a recording)."""
+    offset and merged. When the meeting has participants (calendar, registry), only names that matched one of
+    them count: a live window is noisy and OCR invents people ("Miroslav Bystriansky" came out as "Miory
+    Baotnbnsc" and collected 48 minutes under a name nobody could place). An anonymous SPEAKER_XX that voice
+    prints or the user can name is worth more than a made-up one. Without participants (imported recordings)
+    anything name-shaped is kept, as before."""
     screens = rec.sidecar.get("screens") or []
     parts = []
     candidates = _screen_names(cfg, rec)
@@ -90,10 +100,10 @@ def do_video_screens(cfg: Config, rec: Recording) -> VideoTimeline | None:
         log.info("%s: analysing %s (%s)", rec.stem, sc["file"], "; ".join(sc.get("titles", [])[:2]))
         tl = analyze_screen(path, fps=cfg.video.fps, names=names, width=sc.get("width", 1600), height=sc.get("height", 900))
         if tl is not None:
-            kept = {n: iv for n, iv in tl.speakers.items() if n in candidates or _looks_like_a_name(n)}
+            kept = keep_video_names(tl.speakers, candidates)
             dropped = sorted(set(tl.speakers) - set(kept))
             if dropped:
-                log.info("%s: dropped OCR noise %s", rec.stem, dropped)
+                log.info("%s: dropped OCR names that match no participant: %s", rec.stem, dropped)
             tl.speakers = kept
             if kept:
                 parts.append(tl.shifted(float(sc.get("start_offset_s", 0.0))))
@@ -235,9 +245,12 @@ def same_person_groups(rec: Recording, people: People) -> dict[str, list[str]]:
 
 def merge_same_person(cfg: Config, rec: Recording) -> dict:
     """Fold every group of labels that belongs to one person into a single speaker. Their embeddings are kept
-    as voice prints first - the same voice recorded under different conditions is exactly what makes later
-    recognition work - and only then do the segments move to the label that spoke the most. `transcribe
-    --force` rebuilds the original labels."""
+    as voice prints first - the same voice recorded under different conditions is what makes later recognition
+    work - and only then do the segments move to the label that spoke the most.
+
+    The voices are not second-guessed here: one person can be clean on the microphone track and muffled on
+    the loopback, which is exactly the case the embeddings get wrong and the user hears in one second. Every
+    moved segment remembers where it came from, so `unmerge_speakers` puts it back without a new transcript."""
     if not rec.transcript_path.exists():
         raise RecordingError(f"{rec.stem}: no transcript yet")
     people = People.load(cfg.out_dir, cfg.people_display)
@@ -256,12 +269,13 @@ def merge_same_person(cfg: Config, rec: Recording) -> dict:
         keep = max(labels, key=lambda l: (secs.get(l, 0.0), l))
         gone = [l for l in labels if l != keep]
         if vp is not None and people.get(pid):  # an unregistered literal name has nowhere to store prints
-            for label in labels:
+            for label in [keep, *gone]:
                 vec = emb.get(label)
                 if vec and secs.get(label, 0.0) >= cfg.voiceprints.min_seconds:
                     prints += vp.enroll(pid, vec, rec.stem, label, data.get("diarize_model") or "")
         for s in segments:
             if s.get("speaker") in gone:
+                s["merged_from"] = s["speaker"]  # so the merge can be undone without transcribing again
                 s["speaker"] = keep
         for label in gone:
             emb.pop(label, None)
@@ -272,7 +286,7 @@ def merge_same_person(cfg: Config, rec: Recording) -> dict:
             names[keep] = pid
         data["speakers"] = [l for l in (data.get("speakers") or []) if l not in gone]
         done.append({"person": pid, "kept": keep, "merged": gone,
-                     "seconds": round(sum(secs.get(l, 0.0) for l in labels), 1)})
+                     "seconds": round(sum(secs.get(l, 0.0) for l in [keep, *gone]), 1)})
         log.info("%s: %s merged into %s (%s)", rec.stem, ", ".join(gone), keep, pid)
     data.setdefault("merged_speakers", []).extend([dict(g, at=utc_now_iso()) for g in done])
     rec.write_json(rec.transcript_path, data)
@@ -281,6 +295,41 @@ def merge_same_person(cfg: Config, rec: Recording) -> dict:
         vp.save()
     do_export(cfg, rec)
     return {"groups": done, "merged": sum(len(g["merged"]) for g in done), "prints": prints}
+
+
+def unmerge_speakers(cfg: Config, rec: Recording) -> int:
+    """Undo `merge_same_person`: every segment that remembers a `merged_from` label goes back to it, and the
+    labels get their entry in speakers.json again (the same person as the label they were merged into). The
+    embeddings of the restored labels are gone - they live on as voice prints - so recognition keeps working
+    from the label that stayed. Returns the number of restored segments."""
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    data = rec.read_json(rec.transcript_path)
+    merged = data.get("merged_speakers") or []
+    back = 0
+    restored: set[str] = set()
+    for s in data.get("segments") or []:
+        origin = s.pop("merged_from", None)
+        if origin:
+            s["speaker"] = origin
+            restored.add(origin)
+            back += 1
+    if not back:
+        raise RecordingError(f"{rec.stem}: nothing to undo"
+                             + (" (the merge was made before this was recorded, use transcribe --force)"
+                                if merged else ""))
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    for group in merged:
+        for label in group.get("merged", []):
+            if label in restored and group.get("person"):
+                names[label] = group["person"]
+    data["speakers"] = sorted({s.get("speaker") for s in data["segments"] if s.get("speaker")})
+    data["merged_speakers"] = [g for g in merged if not set(g.get("merged", [])) & restored]
+    rec.write_json(rec.transcript_path, data)
+    rec.write_json(rec.speakers_path, names)
+    do_export(cfg, rec)
+    log.info("%s: merge undone, %d segments back on %s", rec.stem, back, ", ".join(sorted(restored)))
+    return back
 
 
 def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
@@ -411,21 +460,24 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     log.info("%s: %d segments, language %s, timings %s", rec.stem, len(res.segments), res.language, res.timings)
 
     labels_before = [s.speaker for s in res.segments]
-    if timeline:
-        apply_video_timeline(res.segments, timeline, fallback=False)  # only what the highlight covers directly
     mic = rec.track_path("mic")
-    speaker_sources = ["video"] if timeline else []
+    speaker_sources = []
     mic_mapping: dict[str, str] = {}
     if rec.source == "onsite":
         mic = None  # the room microphone carries everybody; only voice prints and diarization can tell them apart
         log.info("%s: on-site recording, speakers from voice prints / diarization only", rec.stem)
+    # The microphone goes first: it is the user's own hardware, while Teams never draws the speaking outline
+    # around the local user's own tile, so the video keeps the previous speaker highlighted while the user
+    # talks (2026-09-24: 48 minutes of the user landed on the participant highlighted before him).
     if cfg.user_name and mic and mic.exists():
-        mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)  # the user's label, before any guessing
+        mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)
         if mic_mapping:
             speaker_sources.append("mic")
     elif mic and mic.exists():
         log.info("%s: mic track present but [user] name is not set, your voice stays SPEAKER_xx", rec.stem)
     if timeline:
+        speaker_sources.append("video")
+        apply_video_timeline(res.segments, timeline, fallback=False, keep_named=True)  # what the highlight covers
         apply_video_fallback(res.segments, timeline, labels_before)  # whole labels the video attributes clearly
         _register_video_names(cfg, res.segments)
     embeddings = remap_embeddings(res.speaker_embeddings or {}, labels_before, [s.speaker for s in res.segments])
@@ -665,6 +717,16 @@ def do_process_inbox(cfg: Config) -> list[Recording]:
         rec.save_sidecar()
         imported.append(rec)
     return imported
+
+
+def reset_names(rec: Recording) -> dict:
+    """Forget the manual label -> person assignment of one recording (the labels change with a new transcript,
+    and a wrong assignment must not survive the re-run). The old mapping goes to the log, nowhere else."""
+    old = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    if old:
+        log.info("%s: dropping the manual speaker names before a fresh transcript: %s", rec.stem, old)
+        rec.speakers_path.unlink()
+    return old
 
 
 def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:

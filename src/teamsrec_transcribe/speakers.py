@@ -1,4 +1,4 @@
-"""Speaker attribution: video timeline (priority 1) -> diarization labels (fallback) -> manual speakers.json."""
+"""Speaker attribution: microphone track (the user) -> video timeline -> diarization labels -> speakers.json."""
 
 from __future__ import annotations
 
@@ -49,12 +49,17 @@ def video_label_mapping(segments: list[Segment], timeline: VideoTimeline,
     return mapping
 
 
-def apply_video_timeline(segments: list[Segment], timeline: VideoTimeline, fallback: bool = True) -> dict[str, str]:
+def apply_video_timeline(segments: list[Segment], timeline: VideoTimeline, fallback: bool = True,
+                         keep_named: bool = False) -> dict[str, str]:
     """Rename segment speakers in place using the video: a segment that the highlight covers gets that name;
-    with `fallback`, whole labels are mapped by video_label_mapping. Returns the mapping applied."""
+    with `fallback`, whole labels are mapped by video_label_mapping. `keep_named` leaves segments that already
+    carry a name (the microphone track ran first and is certain about the user). Returns the mapping applied."""
     original = [s.speaker for s in segments]
-    n_video = n_kept = 0
+    n_video = n_kept = n_mic = 0
     for seg in segments:
+        if keep_named and seg.speaker and not seg.speaker.startswith("SPEAKER_") and seg.speaker != "UNKNOWN":
+            n_mic += 1
+            continue
         best, best_o = None, 0.0
         for name, iv in timeline.speakers.items():
             o = _overlap(seg, iv)
@@ -65,7 +70,7 @@ def apply_video_timeline(segments: list[Segment], timeline: VideoTimeline, fallb
             n_video += 1
         else:
             n_kept += 1
-    log.info("speakers from video: %d segments, %d not covered", n_video, n_kept)
+    log.info("speakers from video: %d segments, %d not covered, %d already named", n_video, n_kept, n_mic)
     return apply_video_fallback(segments, timeline, original) if fallback else {}
 
 

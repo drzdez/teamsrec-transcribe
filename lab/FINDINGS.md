@@ -51,6 +51,19 @@ Design consequences:
   diarization**; diarization remains for audio-only recordings (live capture, playback without tiles visible).
 - For live capture the same idea could work on screenshots of the Teams window, but that is a later experiment.
 
+## Kdo je zvýrazněný v okně Teams (2026-09-28)
+
+Průchod devíti živými nahrávkami s analýzou oken: **vlastní dlaždice uživatele nebyla zvýrazněná ani jednou**
+(`speakers_video.json` nikde neobsahuje jeho jméno). Teams v jeho vlastním klientovi rámeček kolem jeho dlaždice
+nekreslí, takže když mluví on, zůstává zvýrazněný předchozí mluvčí – a video jeho řeč připíše tomu druhému.
+Na schůzce 2026-09-24 Archi board to znamenalo 52 minut zvýraznění jedné dlaždice, zatímco mikrofon uživatele
+byl v té době hlasitý (medián −40 dB proti −73 dB u ostatních označení).
+
+Důsledky: mikrofonní stopa má přednost před videem (je to jeho vlastní hardware), video pojmenovává jen repliky,
+které mikrofon nezabral. A jména z jmenovek se berou jen tehdy, když sedí na účastníka schůzky: OCR živého okna
+přečetlo „Miroslav Bystriansky“ jako „Miory Baotnbnsc“ a „Miory Baotnongg“, což se rozdílem skóre nedá spolehlivě
+opravit (0.46 vs 0.43 na jiného účastníka), takže z takového jména je lepší nechat `SPEAKER_XX`.
+
 ## Decisions (2026-09-04)
 
 1. **One pipeline, several speaker sources.** ASR is identical for every recording. Speaker attribution picks sources by

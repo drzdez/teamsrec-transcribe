@@ -223,8 +223,15 @@ Diarizace jednoho člověka občas rozdělí na dvě označení (druhý mikrofon
 Když oběma přiřadíte stejnou osobu, objeví se nad kartami tlačítko **Sloučit podle osoby**: repliky se spojí
 pod jedno označení (to s nejdelší řečí) a hlasové vzorky obou se uloží jako otisky, pokud se dost liší – právě
 záznam téhož hlasu za jiných podmínek dělá rozpoznávání spolehlivějším. Slučuje se podle uloženého přiřazení,
-takže nejdřív dejte Uložit. Sloučení se zapíše do přepisu (`merged_speakers`), `transcribe --force` vrátí
-původní označení.
+takže nejdřív dejte Uložit.
+
+Sloučení se zapíše do přepisu (`merged_speakers`) a každá přesunutá replika si pamatuje původní označení, takže
+tlačítko **Vrátit sloučení** ji dá zpátky bez nového přepisu; u nahrávek sloučených dřív (bez té informace) pomůže
+jen nový přepis.
+
+Když je přiřazení mluvčích úplně rozházené (třeba se do jednoho označení promíchali dva lidé), je nad kartami
+tlačítko **Přepsat znovu od nuly**: nový přepis i diarizace, ruční přiřazení jmen u té nahrávky se zahodí
+(jsou navázaná na označení, která po novém přepisu neexistují). Trvá to zhruba jako první zpracování.
 
 Mluvčí s pár sekundami „řeči“ dole v seznamu bývá šum: klikání myší, psaní, dech. Rozpoznávač si na něj
 občas vymyslí celou větu, klidně s pojmy z vaší domény (má je v nápovědě). Odkaz „✕ smazat repliky tohoto

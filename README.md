@@ -52,8 +52,12 @@ Typical day:
 3. Run `teamsrec-transcribe process`. Both recordings get `.transcript.json`, `.txt`, `.srt` and `.summary.md`.
 4. If a speaker is still `SPEAKER_03` (audio-only recording), run `label-speakers` once; exports are regenerated.
 
-Speaker names come from, in priority order: the Teams video (highlighted name labels, imported recordings),
-the microphone track (live captures: that is `me`), and pyannote diarization as the fallback.
+Speaker names come from, in priority order: the microphone track of a live capture (that track is the user and
+nothing else), the Teams video (the highlighted tile's name label), voice prints, and pyannote diarization as the
+fallback. The microphone outranks the video because Teams never draws the speaking outline around the local
+user's own tile: while the user talks, the outline stays on whoever spoke before them. Names read from a live
+window count only when they match a participant of the meeting - OCR of a tile label invents people, and an
+anonymous `SPEAKER_03` that voice prints or one click can name is worth more than a made-up one.
 
 ## Configuration
 

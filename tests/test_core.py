@@ -433,7 +433,7 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
     d = rv.build_review(cfg, rec)
     assert d["transcribed"] is False and d["has_mix"] and d["speakers"] == []
     calls = []
-    monkeypatch.setattr(rv, "do_process", lambda c, r: calls.append(r.stem))
+    monkeypatch.setattr(rv, "do_process", lambda c, r, force=False: calls.append((r.stem, force)))
     st = rv.ReviewState(cfg)
     assert st.run_process(rec)
     import time
@@ -441,7 +441,16 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls == [rec.stem] and st.status()["message"] == "processed" and st.status()["job"] == "process"
+    assert calls == [(rec.stem, False)] and st.status()["message"] == "processed" and st.status()["job"] == "process"
+
+    # "přepsat znovu od nuly": the manual names must not survive a new diarization
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": "petr-svoboda"})
+    assert st.run_process(rec, force=True)
+    for _ in range(50):
+        if not st.status()["busy"]:
+            break
+        time.sleep(0.02)
+    assert calls[-1] == (rec.stem, True) and not rec.speakers_path.exists()
 
 
 def test_choose_language_restricts_to_expected():
@@ -552,7 +561,46 @@ def test_merge_same_person_folds_labels_and_keeps_distinct_prints(tmp_path):
     assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "jana-novakova", "SPEAKER_01": "petr-svoboda"}
     assert Voiceprints.load(tmp_path).count("jana-novakova") == 2
     assert "Jana: Rozpočet je hotový" in rec.file(".txt").read_text(encoding="utf-8")
-    assert merge_same_person(cfg, rec) == {"groups": [], "merged": 0, "prints": 0}  # nothing left to do
+    assert merge_same_person(cfg, rec)["merged"] == 0  # nothing left to do
+
+    # and it can be taken back without transcribing again
+    from teamsrec_transcribe.pipeline import unmerge_speakers
+    assert unmerge_speakers(cfg, rec) == 1
+    t = rec.read_json(rec.transcript_path)
+    assert sorted({s["speaker"] for s in t["segments"]}) == ["Jana Nováková", "SPEAKER_00", "SPEAKER_01"]
+    assert t["merged_speakers"] == [] and not any("merged_from" in s for s in t["segments"])
+    assert rec.read_json(rec.speakers_path)["Jana Nováková"] == "jana-novakova"
+    with pytest.raises(RecordingError, match="nothing to undo"):
+        unmerge_speakers(cfg, rec)
+
+
+def test_mic_named_segments_survive_the_video_pass():
+    """Teams never outlines the local user's own tile, so the highlight must not overwrite the mic track."""
+    from teamsrec_transcribe.speakers import apply_video_timeline
+    from teamsrec_transcribe.video_speakers import VideoTimeline
+    tl = VideoTimeline(fps=2.0, speakers={"Miroslav Bystriansky": [[0, 60]]}, clusters=[])
+    segs = [Segment(0, 10, "já mluvím", "Zdeněk Zdražil"),   # named by the microphone a moment ago
+            Segment(10, 20, "a teď on", "SPEAKER_01"),
+            Segment(20, 30, "mimo zvýraznění", "SPEAKER_02")]
+    segs[2].start, segs[2].end = 120, 130
+    apply_video_timeline(segs, tl, fallback=False, keep_named=True)
+    assert [s.speaker for s in segs] == ["Zdeněk Zdražil", "Miroslav Bystriansky", "SPEAKER_02"]
+    # without keep_named the highlight wins, as it did for imported recordings
+    segs2 = [Segment(0, 10, "já mluvím", "Zdeněk Zdražil")]
+    apply_video_timeline(segs2, tl, fallback=False)
+    assert segs2[0].speaker == "Miroslav Bystriansky"
+
+
+def test_video_names_that_match_no_participant_are_dropped():
+    from teamsrec_transcribe.pipeline import keep_video_names
+    found = {"Marián Bobrík": [[0, 10]], "Miory Baotnbnsc": [[10, 3000]], "onen Boork": [[20, 25]]}
+    # the meeting has participants: only what OCR snapped onto one of them survives
+    kept = keep_video_names(found, ["Marián Bobrík", "Miroslav Bystriansky", "Zdeněk Zdražil"])
+    assert list(kept) == ["Marián Bobrík"]
+    # no participants (imported recording): anything name-shaped is kept, as before ("onen Boork" too:
+    # without somebody to compare against there is nothing better to go on)
+    kept = keep_video_names(found, [])
+    assert list(kept) == ["Marián Bobrík", "Miory Baotnbnsc", "onen Boork"]
 
 
 def test_voiceprint_skips_a_print_that_adds_nothing(tmp_path):

@@ -7,7 +7,8 @@ it later without touching this module's data functions.
 
 API
   GET  /                         the page
-  GET  /api/recordings           recent recordings with their unresolved-speaker count
+  GET  /api/recordings?limit=    recent recordings: title, whether they have a transcript and a summary, and
+                                 how many speakers are still unnamed (default 30 newest)
   GET  /api/recording?stem=      everything the page needs for one recording
   GET  /api/clip?stem=&start=&end=   a WAV clip cut from the 16 kHz mix (max CLIP_MAX_S seconds)
   POST /api/save                 {"stem", "names": {label: name}, "summary": bool, "title"?}; a name is either a string
@@ -27,7 +28,7 @@ API
   GET  /api/doc?stem=&file=      text of one document of the recording (transcript .txt, any .summary*.md)
   GET  /api/meeting/candidates?stem=   nearby Outlook items to link instead
   POST /api/meeting              {"stem", "action": confirm|detach|attach, "candidate"?} -> calendar link edits
-  GET  /api/status               background job (summary) state
+  GET  /api/status               background job state + the event log (what the server did, newest last)
   POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
   POST /api/quit                 stop the server
 
@@ -49,6 +50,7 @@ import time
 import urllib.request
 import wave
 import webbrowser
+from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -73,6 +75,7 @@ EXCERPTS_PER_SPEAKER = 2
 RECENT_RECORDINGS = 30
 PAGE = Path(__file__).with_name("index.html")
 IDLE_S = 90.0  # exit this long after the page's last heartbeat (the page pings every 15 s)
+MAX_EVENTS = 200   # kept in memory only: the log is a convenience, the files are the truth
 LOCK = Path(tempfile.gettempdir()) / "teamsrec-review.json"
 
 
@@ -203,6 +206,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                       if label in voice else None),
             "voice_hint": _voice_hint(vp, people, embeddings.get(label), is_label(label) and not value, secs,
                                       cfg.voiceprints.threshold),
+            "confirmed": bool(value) and bool(manual.get(label)) and label not in voice,
             "seconds": round(secs, 1),
             "count": len(ss),
             "hint": hints.get(label, ""),
@@ -259,7 +263,8 @@ def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
             except Exception:
                 unresolved = None
         out.append({"stem": r.stem, "title": r.title, "start": r.sidecar.get("start"),
-                    "transcribed": r.transcript_path.exists(), "unresolved": unresolved})
+                    "transcribed": r.transcript_path.exists(), "unresolved": unresolved,
+                    "summary": r.summary_path.exists()})
     return out
 
 
@@ -332,7 +337,13 @@ def save_names(cfg: Config, rec: Recording, names: dict) -> dict[str, str]:
         people.save()
     rec.write_json(rec.speakers_path, clean)
     do_export(cfg, rec)
-    enroll_names(cfg, rec, clean)
+    if clean and rec.transcript_path.exists():  # a name the user saw and saved is confirmed, not a guess any more
+        data = rec.read_json(rec.transcript_path)
+        voice = data.get("voice_matches") or {}
+        if any(lab in voice for lab in clean):
+            data["voice_matches"] = {lab: v for lab, v in voice.items() if lab not in clean}
+            rec.write_json(rec.transcript_path, data)
+    enroll_names(cfg, rec, clean)  # only now does the print go into the shared registry
     return clean
 
 
@@ -424,30 +435,47 @@ def save_people(cfg: Config, rows: list[dict], stem: str | None = None) -> list[
 class ReviewState:
     def __init__(self, cfg: Config):
         self.cfg = cfg
-        self.lock = threading.Lock()
+        self.lock = threading.RLock()
         self.busy = False
         self.message = ""
         self.error = ""
         self.last_seen = 0.0  # time of the last request from the page (0 = no page yet)
+        self.events: list[dict] = []
+        self.seq = 0
 
     def seen(self) -> None:
         self.last_seen = time.monotonic()
 
-    def run_job(self, name: str, fn, done: str) -> bool:
+    def event(self, text: str, level: str = "ok", stem: str = "", reload: bool = False) -> int:
+        """One line of history: what the server did, for the status bar and the list behind it. A long job is
+        started and forgotten, so the page has to be able to ask later what happened."""
+        with self.lock:
+            self.seq += 1
+            self.events.append({"n": self.seq, "at": datetime.now().strftime("%H:%M:%S"), "text": text,
+                                "level": level, "stem": stem, "reload": reload})
+            del self.events[:-MAX_EVENTS]
+        log.info("%s", text)
+        return self.seq
+
+    def run_job(self, name: str, fn, done: str, stem: str = "", start: str = "") -> bool:
         """Run fn() in a background thread; the page polls /api/status. One job at a time."""
         with self.lock:
             if self.busy:
                 return False
             self.busy, self.message, self.error, self.job = True, name, "", name
+            if start:
+                self.event(start, "busy", stem)  # logged before the work, so the order in the log is the real one
 
         def work():
             try:
                 fn()
                 with self.lock:
                     self.message = done
+                self.event(f"{done}: {stem}" if stem else done, "ok", stem, reload=True)
             except Exception as e:  # shown on the page, not fatal
                 with self.lock:
                     self.error = str(e)
+                self.event(f"{name} selhalo: {e}", "err", stem, reload=True)
             finally:
                 with self.lock:
                     self.busy = False
@@ -462,14 +490,23 @@ class ReviewState:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
         def work():
             if force:
-                reset_names(rec)
+                old = reset_names(rec)
+                if old:
+                    self.event(f"{rec.stem}: ruční přiřazení jmen zahozeno ({len(old)})", "info", rec.stem)
+                if rec.speakers_video_path.exists():
+                    # the cached timeline holds the names OCR read last time; from scratch means those too
+                    rec.speakers_video_path.unlink()
+                    self.event(f"{rec.stem}: okna Teams se projdou znovu (jmenovky z minule zahozeny)",
+                               "info", rec.stem)
             do_process(self.cfg, rec, force=force)
-        return self.run_job("process", work, "processed")
+        return self.run_job("process", work, "zpracováno", rec.stem,
+                            start=f"{rec.stem}: {'nový přepis od nuly' if force else 'zpracování'} spuštěno")
 
-    def status(self) -> dict:
+    def status(self, events: int = 40) -> dict:
         with self.lock:
             return {"app": "teamsrec-review", "out_dir": str(self.cfg.out_dir), "job": getattr(self, "job", ""),
-                    "busy": self.busy, "message": self.message, "error": self.error}
+                    "busy": self.busy, "message": self.message, "error": self.error,
+                    "seq": self.seq, "events": self.events[-events:]}
 
 
 def _handler(state: ReviewState, server_ref: dict):
@@ -510,7 +547,9 @@ def _handler(state: ReviewState, server_ref: dict):
                 if u.path == "/":
                     self._bytes(PAGE.read_bytes(), "text/html; charset=utf-8")
                 elif u.path == "/api/recordings":
-                    self._json(list_recordings(state.cfg))
+                    want = (q.get("limit") or [""])[0]
+                    limit = min(int(want), 2000) if want.isdigit() else RECENT_RECORDINGS
+                    self._json(list_recordings(state.cfg, limit))
                 elif u.path == "/api/recording":
                     self._json(build_review(state.cfg, self._rec(q)))
                 elif u.path == "/api/clip":
@@ -529,11 +568,10 @@ def _handler(state: ReviewState, server_ref: dict):
                     name = (q.get("file") or [""])[0]
                     self._json({"file": name, "text": read_doc(rec, name)})
                 elif u.path == "/api/meeting/candidates":
-                    from datetime import datetime as _dt
                     from ..outlook import candidates_for
                     rec = self._rec(q)
                     start = rec.sidecar.get("start")
-                    self._json({"candidates": candidates_for(_dt.fromisoformat(start), 4 * 3600) if start and state.cfg.calendar_outlook else []})
+                    self._json({"candidates": candidates_for(datetime.fromisoformat(start), 4 * 3600) if start and state.cfg.calendar_outlook else []})
                 elif u.path == "/api/status":
                     self._json(state.status())
                 else:
@@ -555,12 +593,15 @@ def _handler(state: ReviewState, server_ref: dict):
                     if body.get("title") is not None:
                         rec = save_title(state.cfg, rec, str(body.get("title")))
                     written = save_names(state.cfg, rec, body.get("names") or {})
+                    state.event(f"{rec.stem}: uloženo {len(written)} jmen, přepis a titulky přegenerovány",
+                                "ok", rec.stem)
                     if body.get("summary"):
                         state.run_summary(rec)
                     self._json({"ok": True, "written": written, "stem": rec.stem, "title": rec.title,
                                 "status": state.status()})
                 elif u.path == "/api/people":
                     rows = save_people(state.cfg, body.get("people") or [], body.get("stem") or None)
+                    state.event(f"seznam lidí uložen ({len(rows)} osob)", "ok")
                     self._json({"ok": True, "people": rows})
                 elif u.path == "/api/process":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
@@ -569,30 +610,46 @@ def _handler(state: ReviewState, server_ref: dict):
                                 **({} if started else {"error": "another job is still running"})})
                 elif u.path == "/api/meeting":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    rec = set_meeting_link(state.cfg, rec, str(body.get("action") or ""), body.get("candidate"))
+                    action = str(body.get("action") or "")
+                    rec = set_meeting_link(state.cfg, rec, action, body.get("candidate"))
                     if rec.transcript_path.exists():
                         do_export(state.cfg, rec)
+                    state.event(f"{rec.stem}: schůzka z kalendáře – "
+                                f"{ {'confirm': 'spojení potvrzeno', 'detach': 'odpojeno', 'attach': 'spojeno s jinou'}.get(action, action)}",
+                                "ok", rec.stem, reload=True)
                     self._json({"ok": True, "stem": rec.stem, "meeting": meeting_info(state.cfg, rec)})
                 elif u.path == "/api/recognize":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
                     m = recognize_voices(state.cfg, rec)
+                    state.event(f"{rec.stem}: po hlase poznáno {len(m)} mluvčích"
+                                + (" (nepotvrzeno)" if m else ""), "ok" if m else "info", rec.stem, reload=True)
                     self._json({"ok": True, "matches": m})
                 elif u.path == "/api/speaker/remove":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    n = remove_speaker(state.cfg, rec, str(body.get("label") or ""))
+                    label = str(body.get("label") or "")
+                    n = remove_speaker(state.cfg, rec, label)
+                    state.event(f"{rec.stem}: smazáno {n} replik mluvčího {label}", "ok", rec.stem, reload=True)
                     self._json({"ok": True, "removed": n})
                 elif u.path == "/api/speakers/merge":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    self._json({"ok": True, **merge_same_person(state.cfg, rec)})
+                    res = merge_same_person(state.cfg, rec)
+                    state.event(f"{rec.stem}: sloučeno {res['merged']} označení, otisků přibylo {res['prints']}",
+                                "ok" if res["merged"] else "info", rec.stem, reload=True)
+                    self._json({"ok": True, **res})
                 elif u.path == "/api/speakers/unmerge":
                     rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    self._json({"ok": True, "restored": unmerge_speakers(state.cfg, rec)})
+                    n = unmerge_speakers(state.cfg, rec)
+                    state.event(f"{rec.stem}: sloučení vráceno, {n} replik zpět", "ok", rec.stem, reload=True)
+                    self._json({"ok": True, "restored": n})
                 elif u.path == "/api/person/forget":
-                    n = forget_print(state.cfg, str(body.get("id") or ""), body.get("stem"), body.get("label"))
+                    pid = str(body.get("id") or "")
+                    n = forget_print(state.cfg, pid, body.get("stem"), body.get("label"))
+                    state.event(f"{pid}: smazáno {n} hlasových otisků", "ok")
                     self._json({"ok": True, "removed": n})
                 elif u.path == "/api/people/merge":
-                    rows = merge_people(state.cfg, str(body.get("keep") or ""), str(body.get("drop") or ""),
-                                        body.get("stem") or None)
+                    keep, drop = str(body.get("keep") or ""), str(body.get("drop") or "")
+                    rows = merge_people(state.cfg, keep, drop, body.get("stem") or None)
+                    state.event(f"osoba {drop} sloučena do {keep} (ve všech nahrávkách)", "ok", reload=True)
                     self._json({"ok": True, "people": rows})
                 elif u.path == "/api/quit":
                     if state.status()["busy"]:
@@ -604,6 +661,7 @@ def _handler(state: ReviewState, server_ref: dict):
                 else:
                     self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
             except (RecordingError, ValueError) as e:
+                state.event(f"{u.path}: {e}", "err")
                 self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
     return Handler
 

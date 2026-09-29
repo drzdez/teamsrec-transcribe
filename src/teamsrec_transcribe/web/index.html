@@ -24,6 +24,15 @@
   header input#title { width: 26vw; min-width: 200px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; }
   header input#title:focus { outline: 2px solid var(--accent); border-color: transparent; }
   #status.busy { color: var(--warn); font-weight: 600; }
+  #events { position: fixed; right: 12px; bottom: 52px; width: min(640px, 92vw); max-height: 45vh; overflow-y: auto;
+            background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+            font-size: 13px; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
+  #events .ev { padding: 2px 0; border-bottom: 1px solid var(--line); }
+  #events .ev:last-child { border-bottom: 0; }
+  #events .at { color: var(--dim); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  #events .ev.err .tx { color: var(--err); }
+  #events .ev.busy .tx { color: var(--warn); }
+  #events .empty-ev { color: var(--dim); }
   #dirty.changed { color: var(--warn); font-weight: 600; }
   #dirty.clean { color: var(--ok); }
   .tabs { display: flex; gap: 2px; margin-left: auto; }
@@ -88,6 +97,14 @@
   main.doc .stamp { color: var(--muted); font-size: 12px; }
   .meeting { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 16px; margin: 4px 0 12px; font-size: 14px; }
   .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+  #filter { min-width: 160px; }
+  #filter.bad { border-color: var(--warn); }
+  .titles { display: flex; gap: 6px; flex-wrap: wrap; flex-basis: 100%; align-items: center; }
+  .titles .presetLabel { color: var(--muted); font-size: 12px; margin-right: 2px; }
+  .titles button { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px;
+                   padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .titles button:hover { color: var(--fg); }
+  .titles button.on { border-color: var(--accent); color: var(--accent); }
   .badge { display: inline-block; border-radius: 999px; padding: 0 8px; font-size: 12px; background: var(--chip); color: var(--muted); margin-left: 4px; }
   .badge.ok { color: var(--ok); } .badge.warn { color: var(--warn); }
   .meeting button.play { margin-left: 4px; }
@@ -110,9 +127,13 @@
 <header>
   <h1>teamsrec</h1>
   <select id="pick" title="nahrávka"></select>
+  <input id="filter" type="search" placeholder="filtr (text nebo regexp)"
+         title="Omezí seznam nahrávek: píšete text (nezáleží na velikosti písmen ani diakritice) nebo regulární výraz, třeba ^archi|standup$">
+  <span class="meta" id="filterCount"></span>
   <input id="title" type="text" placeholder="název schůzky" title="název schůzky – uloží se tlačítkem Uložit; složka i soubory nahrávky se přejmenují podle něj">
   <span class="meta" id="meta"></span>
   <span class="meta" id="scope" hidden>společný seznam lidí pro všechny nahrávky</span>
+  <div id="titles" class="titles"><span class="presetLabel">Předvolby:</span></div>
   <div class="tabs">
     <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
@@ -137,10 +158,12 @@
     <button id="addPerson">Přidat osobu</button>
   </span>
   <button id="quit">Zavřít</button>
+  <button id="histBtn" title="co server udělal, od spuštění stránky">Historie</button>
   <span id="dirty" class="meta"></span>
   <span class="meta" id="tip">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
   <span id="status"></span>
 </footer>
+<div id="events" hidden></div>
 <audio id="audio"></audio>
 
 <script>
@@ -149,7 +172,7 @@
  * @typedef {{start:number,end:number,at:string,text:string}} Sample
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
- * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
@@ -158,7 +181,7 @@
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
  * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean}} Review
- * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null}} RecordingRow
+ * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean}} RecordingRow
  */
 
 const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
@@ -228,20 +251,113 @@ function escapeHtml(/** @type {string} */ s) {
 
 // ---------------------------------------------------------------- recordings
 
-async function loadList() {
-  /** @type {RecordingRow[]} */
-  const rows = await api("/api/recordings");
+/** @type {RecordingRow[]} */
+let allRows = [];
+const filterInput = /** @type {HTMLInputElement} */ ($("filter"));
+
+/** lower case without diacritics, so "archi" finds "Archi board" and "Zdeněk" finds "Zdenek" */
+function foldText(/** @type {string} */ s) {
+  return s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/** the filter is a regular expression when it compiles, otherwise plain text */
+function rowMatcher(/** @type {string} */ text) {
+  const q = foldText(text.trim());
+  if (!q) return () => true;
+  let re = null;
+  try { re = new RegExp(q); } catch { re = null; }
+  filterInput.classList.toggle("bad", re === null && /[[\](){}*+?|\\^$]/.test(q));
+  return (/** @type {RecordingRow} */ r) => {
+    const hay = foldText(`${r.title} ${r.stem}`);
+    return re ? re.test(hay) : hay.includes(q);
+  };
+}
+
+/** @param {boolean} [jump] switch to the newest match instead of keeping what is open (preset filters) */
+/** what is done with a recording: the dropdown has no colours, so it says it in words */
+function rowState(/** @type {RecordingRow} */ r) {
+  if (!r.transcribed) return { key: "no-transcript", text: "○ bez přepisu" };
+  const missing = [];
+  if (r.summary === false) missing.push("bez zápisu");  // undefined = an older server that does not say
+  if (r.unresolved) missing.push(`${r.unresolved} nepojmenovaných`);
+  if (!missing.length) return { key: "done", text: "✓ hotovo" };
+  return { key: r.summary === false ? "no-summary" : "unresolved", text: `◐ ${missing.join(", ")}` };
+}
+
+/** @type {string} */
+let stateFilter = "";
+
+function renderPick(jump) {
+  const match = rowMatcher(filterInput.value);
+  const shown = allRows.filter(r => match(r) && (!stateFilter || rowState(r).key === stateFilter
+    || (stateFilter === "todo" && rowState(r).key !== "done")));
+  const hits = shown.length;
+  let current = pick.value;
+  if (jump && hits && !shown.some(r => r.stem === current)) current = shown[0].stem;
+  // never hide what is open - the select would jump to another recording - but say why it is there
+  const openOutside = current && !shown.some(r => r.stem === current)
+    ? allRows.find(r => r.stem === current) || null : null;
+  if (openOutside) shown.unshift(openOutside);
   pick.innerHTML = "";
-  for (const r of rows) {
+  for (const r of shown) {
     const o = document.createElement("option");
     o.value = r.stem;
-    const flag = !r.transcribed ? " (bez přepisu)" : r.unresolved ? ` (${r.unresolved} nepojmenovaných)` : "";
-    o.textContent = `${fmtDate(r.start)}  ${r.title}${flag}`;
+    o.textContent = `${fmtDate(r.start)}  ${r.title}  ${rowState(r).text}`
+      + (openOutside && r.stem === openOutside.stem ? "  · otevřená, mimo filtr" : "");
     pick.appendChild(o);
   }
+  if (current && shown.some(r => r.stem === current)) pick.value = current;
+  $("filterCount").textContent = filterInput.value.trim() || stateFilter ? `${hits} z ${allRows.length}` : "";
+  renderTitles();
+  return pick.value;
+}
+
+function renderTitles() {
+  const box = $("titles");
+  /** @type {Map<string, number>} */ const counts = new Map();
+  for (const r of allRows) {
+    const t = (r.title || "").trim();
+    if (t) counts.set(t, (counts.get(t) || 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "cs")).slice(0, 10);
+  const active = foldText(filterInput.value.trim());
+  box.innerHTML = '<span class="presetLabel">Předvolby:</span>';
+  const todo = allRows.filter(r => rowState(r).key !== "done").length;
+  if (todo) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `◐ nezpracované (${todo})`;
+    b.title = "nahrávky bez přepisu, bez zápisu nebo s nepojmenovanými mluvčími";
+    if (stateFilter === "todo") b.classList.add("on");
+    b.onclick = () => {
+      stateFilter = stateFilter === "todo" ? "" : "todo";
+      const stem = renderPick(true);
+      if (stem && (!review || stem !== review.stem)) loadRecording(stem);
+    };
+    box.appendChild(b);
+  }
+  for (const [title, n] of top) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = n > 1 ? `${title} (${n})` : title;
+    b.title = `zobrazit jen nahrávky „${title}“`;
+    if (active && foldText(title) === active) b.classList.add("on");
+    b.onclick = () => {
+      filterInput.value = b.classList.contains("on") ? "" : title;
+      const stem = renderPick(true);  // a preset shows its own recordings, so open the newest one
+      if (stem && (!review || stem !== review.stem)) loadRecording(stem);
+    };
+    box.appendChild(b);
+  }
+}
+
+async function loadList() {
+  allRows = await api("/api/recordings?limit=500");
   const wanted = location.hash.slice(1);
-  if (wanted && rows.some(r => r.stem === wanted)) pick.value = wanted;
-  else if (rows.length) pick.value = rows[0].stem;
+  if (wanted && allRows.some(r => r.stem === wanted)) pick.value = wanted;
+  renderPick();
+  if (wanted && allRows.some(r => r.stem === wanted)) pick.value = wanted;
+  else if (!pick.value && pick.options.length) pick.value = pick.options[0].value;
 }
 
 async function loadRecording(/** @type {string} */ stem) {
@@ -363,8 +479,9 @@ function renderSpeakers() {
     const b = document.createElement("button"); b.type = "button"; b.className = "play";
     const mins = Math.max(2, Math.round((review.duration_s || 0) / 60 / 6) + 3);
     b.textContent = "Přepsat znovu od nuly";
-    b.title = "Nový přepis i diarizace (transcribe --force): mluvčí se rozdělí znovu, ruční přiřazení jmen "
-      + "u této nahrávky se zahodí. Hodí se, když se do označení promíchali dva lidé.";
+    b.title = "Nový přepis, diarizace i analýza oken Teams (transcribe --force): mluvčí se rozdělí znovu, "
+      + "jmenovky z videa se přečtou znovu a ruční přiřazení jmen u této nahrávky se zahodí. "
+      + "Hodí se, když se do jednoho označení promíchali dva lidé.";
     armedButton(b, `Potvrdit nový přepis (~${mins} min, jména se zahodí)`, async () => {
       const stem = review ? review.stem : "";
       setStatus("spouštím nový přepis…");
@@ -482,6 +599,9 @@ function card(sp, i) {
   const named = sp.name && sp.name !== sp.label ? sp.name : "";
   left.innerHTML = `<span class="label ${sp.unresolved ? "" : "named"}">${escapeHtml(named || sp.label)}</span>` +
     (named ? `<span class="chip" title="označení v přepisu (z diarizace, videa nebo mikrofonu)">${escapeHtml(sp.label)}</span>` : "") +
+    (named && !sp.confirmed ? '<span class="chip" title="jméno odhadla aplikace (jmenovka z videa, mikrofonní stopa, '
+      + 'hlasový otisk). Uložením ho potvrdíte – teprve pak se hlasový vzorek uloží mezi otisky a osoba do '
+      + 'společného seznamu lidí.">nepotvrzeno</span>' : "") +
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
     (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
@@ -986,7 +1106,57 @@ $("quit").onclick = async () => {
 pick.onchange = () => { showTab("speakers", false); loadRecording(pick.value); };
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") stopAudio(); });
 // heartbeat: the server stops itself ~90 s after the last one, i.e. when this tab is closed
+filterInput.addEventListener("input", () => renderPick());
 setInterval(() => { fetch("/api/ping", { method: "POST" }).catch(() => {}); }, 15000);
+
+// ---- event log: the server says what it did, the page shows the newest line and reloads when needed
+/** @type {{n:number,at:string,text:string,level:string,stem:string,reload:boolean}[]} */
+let events = [];
+let lastSeq = -1;
+let wasBusy = false;
+
+function renderEvents() {
+  const box = $("events");
+  if (box.hidden) return;
+  box.innerHTML = events.length
+    ? events.slice().reverse().map(e =>
+        `<div class="ev ${escapeHtml(e.level)}"><span class="at">${escapeHtml(e.at)}</span>` +
+        `<span class="tx">${escapeHtml(e.text)}</span></div>`).join("")
+    : '<div class="empty-ev">Zatím se nic nestalo.</div>';
+}
+
+async function pollStatus() {
+  /** @type {any} */ let s;
+  try {
+    s = await api("/api/status");
+  } catch {
+    return;  // the server is gone or busy; the next tick tries again
+  }
+  events = s.events || [];
+  const fresh = events.filter(e => e.n > lastSeq);
+  const first = lastSeq < 0;
+  lastSeq = typeof s.seq === "number" ? s.seq : lastSeq;
+  const finished = wasBusy && !s.busy;   // a background job ended: what is on the screen is stale
+  wasBusy = !!s.busy;
+  if (first) { renderEvents(); return; }  // the page just opened: keep the old lines, do not shout them
+  if (!fresh.length && !finished) return;
+  const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
+  if (mine && review && !isDirty() && !busy) {
+    const stem = review.stem;
+    await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
+  }
+  const last = fresh[fresh.length - 1];
+  if (last) setStatus(`${last.at} · ${last.text}`, last.level === "err" ? "err" : last.level === "busy" ? "busy" : "ok");
+  renderEvents();
+}
+
+$("histBtn").addEventListener("click", () => {
+  const box = $("events");
+  box.hidden = !box.hidden;
+  renderEvents();
+});
+setInterval(() => { pollStatus().catch(() => {}); }, 5000);
+pollStatus().catch(() => {});
 
 (async () => {
   try {

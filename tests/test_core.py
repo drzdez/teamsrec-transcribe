@@ -441,7 +441,10 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls == [(rec.stem, False)] and st.status()["message"] == "processed" and st.status()["job"] == "process"
+    assert calls == [(rec.stem, False)] and st.status()["message"] == "zpracováno" and st.status()["job"] == "process"
+    ev = st.status()["events"]
+    assert [e["text"] for e in ev][-1].startswith("zpracováno") and ev[-1]["reload"] is True
+    assert any("zpracování spuštěno" in e["text"] for e in ev), "the page must see that a job started"
 
     # "přepsat znovu od nuly": the manual names must not survive a new diarization
     rec.write_json(rec.speakers_path, {"SPEAKER_00": "petr-svoboda"})
@@ -755,19 +758,47 @@ def test_config_calendar_flag(tmp_path):
     assert load_config(p).calendar_outlook is True and Config().calendar_outlook is False
 
 
-def test_video_names_are_registered_as_people(tmp_path):
+def test_automatic_names_do_not_reach_the_shared_registry(tmp_path, monkeypatch):
+    """A name from the video or from a voice match is a guess: no person, no voice print until it is saved."""
     from teamsrec_transcribe.people import People
-    from teamsrec_transcribe.pipeline import _register_video_names
+    from teamsrec_transcribe.pipeline import _voiceprints_step
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    cfg = Config(out_dir=tmp_path, user_name="Jan Novák")
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.save()
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll("petr-svoboda", [0.99, 0.1, 0.0], "older-recording", "X"); vp.save()
+    emb = {"SPEAKER_00": [1.0, 0.0, 0.0], "Jan Novák": [0.0, 1.0, 0.0], "Jana Nováková": [0.0, 0.0, 1.0]}
+    durations = {"SPEAKER_00": 120.0, "Jan Novák": 300.0, "Jana Nováková": 200.0}
+    matches = _voiceprints_step(cfg, rec, emb, durations, {"SPEAKER_02": "Jan Novák"}, "m")
+    assert list(matches) == ["SPEAKER_00"] and matches["SPEAKER_00"]["person"] == "petr-svoboda"
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "petr-svoboda"}  # shown on the page, undoable
+    after = Voiceprints.load(tmp_path)
+    assert after.count("petr-svoboda") == 1, "the match itself must not become a print"
+    assert after.count("jan-novak") == 0, "not even the user's own microphone label"
+    assert [p.id for p in People.load(tmp_path).people] == ["petr-svoboda"], "no people invented from labels"
+
+
+def test_saving_a_name_confirms_it_and_stores_the_print(tmp_path):
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import build_review, save_names
     cfg = Config(out_dir=tmp_path)
-    segs = [Segment(0, 5, "a", "Jana Nováková"), Segment(5, 9, "b", "SPEAKER_01"), Segment(9, 12, "c", "Petr Svoboda")]
-    _register_video_names(cfg, segs)
-    ppl = People.load(tmp_path)
-    assert [p.id for p in ppl.people] == ["jana-novakova", "petr-svoboda"]
-    _register_video_names(cfg, segs)  # idempotent
-    assert len(People.load(tmp_path).people) == 2
-    _register_video_names(cfg, [Segment(0, 5, "a", "Jana Novakowa")])  # OCR slip -> alias saved, no new person
-    ppl = People.load(tmp_path)
-    assert len(ppl.people) == 2 and "Jana Novakowa" in ppl.get("jana-novakova").aliases
+    rec = _make_transcribed(tmp_path)
+    data = rec.read_json(rec.transcript_path)
+    data["segments"][0]["end"] = 40  # long enough for a print
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0, 0.0]}
+    data["voice_matches"] = {"SPEAKER_00": {"person": "petr-svoboda", "score": 0.81}}
+    rec.write_json(rec.transcript_path, data)
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": "petr-svoboda"})
+    sp = {s["label"]: s for s in build_review(cfg, rec)["speakers"]}
+    assert sp["SPEAKER_00"]["confirmed"] is False  # recognised by voice, nobody has said yes yet
+    assert Voiceprints.load(tmp_path).count("petr-svoboda") == 0
+
+    save_names(cfg, rec, {"SPEAKER_00": {"first": "Petr", "last": "Svoboda", "nick": "", "display": ""}})
+    assert Voiceprints.load(tmp_path).count("petr-svoboda") == 1  # confirmed -> kept for the next meetings
+    sp = {s["label"]: s for s in build_review(cfg, rec)["speakers"]}
+    assert sp["SPEAKER_00"]["confirmed"] is True
+    assert rec.read_json(rec.transcript_path)["voice_matches"] == {}
 
 
 def test_rename_recording_moves_folder_and_fixes_references(tmp_path):

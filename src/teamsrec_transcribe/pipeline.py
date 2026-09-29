@@ -479,7 +479,6 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
         speaker_sources.append("video")
         apply_video_timeline(res.segments, timeline, fallback=False, keep_named=True)  # what the highlight covers
         apply_video_fallback(res.segments, timeline, labels_before)  # whole labels the video attributes clearly
-        _register_video_names(cfg, res.segments)
     embeddings = remap_embeddings(res.speaker_embeddings or {}, labels_before, [s.speaker for s in res.segments])
     durations = speech_seconds([{"start": s.start, "end": s.end, "speaker": s.speaker} for s in res.segments])
     voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
@@ -513,24 +512,12 @@ def _looks_like_a_name(text: str) -> bool:
     return bool(re.fullmatch(r"[^\W\d_](?:[^\W\d_]|['.-])+(?: [^\W\d_](?:[^\W\d_]|['.-])+){1,3}", text))
 
 
-def _register_video_names(cfg: Config, segments: list[Segment]) -> None:
-    """Names read from the Teams video are real display names: make sure each is in the people registry
-    (so they show up on the People tab and can collect voice prints)."""
-    people = People.load(cfg.out_dir, cfg.people_display)
-    before = len(people.people)
-    snapshot = json.dumps(people.to_json(), sort_keys=True)
-    for name in speaker_list(segments):
-        if name and not name.startswith("SPEAKER_") and name != "UNKNOWN" and _looks_like_a_name(name):
-            people.ensure(name)
-    if json.dumps(people.to_json(), sort_keys=True) != snapshot:  # new people, or new spelling aliases
-        people.save()
-        log.info("people registry: %d new from the video", len(people.people) - before)
-
-
 def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[float]], durations: dict[str, float],
                       mic_mapping: dict[str, str], model: str) -> dict:
-    """Name still-unknown labels by voice (writes speakers.json like a manual assignment) and store the user's
-    own print from the mic track. Returns {label: {"person", "score"}} for the transcript / review page."""
+    """Name still-unknown labels by voice, using the prints collected so far. Nothing is stored here: a print
+    only goes into the shared registry when a person confirms the name (the review page or `label-speakers`),
+    otherwise a wrong guess would teach the next recording the same mistake. The embeddings of this recording
+    stay in its own transcript, so confirming later still works. Returns {label: {"person", "score"}}."""
     if not cfg.voiceprints.enabled or not embeddings:
         return {}
     vp = Voiceprints.load(cfg.out_dir)
@@ -548,26 +535,6 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
         log.info("%s: %s recognised by voice as %s (%.2f)", rec.stem, label, person.full, score)
     if matches:
         rec.write_json(rec.speakers_path, names)
-    changed = 0
-    if mic_mapping and cfg.user_name:
-        me = people.find(cfg.user_name)
-        vec = embeddings.get(cfg.user_name)
-        if me and vec and durations.get(cfg.user_name, 0.0) >= cfg.voiceprints.min_seconds:
-            changed += vp.enroll(me.id, vec, rec.stem, cfg.user_name, model)
-    # names assigned by hand before a re-transcription (or by voice just now) are worth a print too,
-    # and so are names that came from the video / the mic and resolve to a registered person
-    manual = {lab: pid for lab, pid in names.items() if lab not in matches and people.get(pid)}
-    for key in embeddings:
-        if key not in manual and not key.startswith("SPEAKER_") and key != cfg.user_name:
-            p = people.find(key)
-            if p:
-                manual[key] = p.id
-    changed += enroll_from_recording(vp, {"speaker_embeddings": embeddings, "diarize_model": model,
-                                          "segments": [{"start": 0, "end": durations.get(lab, 0.0), "speaker": lab}
-                                                       for lab in embeddings]},
-                                     manual, rec.stem, cfg.voiceprints.min_seconds)
-    if changed:
-        vp.save()
     return matches
 
 

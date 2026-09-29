@@ -104,9 +104,16 @@ nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikro
 ### Hlasové otisky
 
 Koho jednou pojmenujete (na stránce nebo přes `label-speakers`), toho další nahrávky poznají po hlase samy:
-při pojmenování se uloží hlasový otisk z diarizace do `_speakers\voiceprints.json` (jen na tomto počítači,
-nejvýš 10 otisků na osobu, a jen takové, které přidají něco nového – skoro shodný vzorek se zahodí), váš vlastní otisk vzniká automaticky z mikrofonní stopy. U nové nahrávky se každý
-dosud neznámý řečník porovná s otisky a když je shoda dost vysoká a jasně nejlepší, dostane jméno rovnou.
+**potvrzením** jména se uloží hlasový otisk z diarizace do `_speakers\voiceprints.json` (jen na tomto počítači,
+nejvýš 10 otisků na osobu, a jen takové, které přidají něco nového – skoro shodný vzorek se zahodí).
+
+Co aplikace jen odhadla – jmenovku z videa, váš hlas z mikrofonní stopy, shodu s otiskem – **se nikam trvale
+neukládá**: zůstává to u té schůzky a karta má štítek „nepotvrzeno“. Do společného seznamu lidí ani mezi otisky
+se takové jméno nedostane, dokud ho neuložíte, aby se případný omyl neučil dál (špatně přečtená jmenovka z videa
+by jinak vyrobila osobu i otisk). Vzorek hlasu zůstává v přepisu nahrávky, takže potvrdit jde i později.
+
+U nové nahrávky se každý dosud neznámý řečník porovná s otisky a když je shoda dost vysoká a jasně nejlepší,
+dostane jméno rovnou.
 Na stránce to uvidíte zeleně jako „poznáno po hlase: Pavel Orosz (shoda 0.72) – zkontrolujte a uložte“;
 špatné rozpoznání opravíte přepsáním jména. Nastavení `[voiceprints]`: `enabled`, `threshold` (potřebná shoda),
 `margin` (odstup od druhého nejlepšího). Otisky jednoho člověka smažete příkazem
@@ -200,6 +207,17 @@ nahrávkách je přiřazena a tabulku uložených otisků – z které nahrávky
 nahrávkách a přenese přezdívku, aliasy i otisky. Totéž v terminálu: `teamsrec-transcribe people list` a
 `people merge <ponechat> <sloučit>`.
 
+Vlevo nahoře je výběr nahrávky a vedle něj **filtr**: co napíšete, omezí seznam (nezáleží na velikosti písmen
+ani diakritice, `archi` najde „Archi board“ i „Archi standup“). Když je text platný regulární výraz, použije se
+jako regulární výraz — `^archi` jen názvy začínající na archi, `board|standup` obojí, `2026-09-2` podle data ve
+jménu složky. U každé nahrávky je v seznamu vidět, jak daleko je: `✓ hotovo` (přepis i zápis, všichni
+pojmenovaní), `◐ bez zápisu`, `◐ 2 nepojmenovaných` (nebo obojí) a `○ bez přepisu`.
+
+Pod výběrem je řádek **Předvolby:** — první tlačítko `◐ nezpracované (N)` nechá jen ty, kde ještě něco chybí,
+za ním jsou názvy schůzek jako tlačítka, nejčastější s počtem. Jeden
+klik ukáže jen nahrávky té schůzky a rovnou otevře její nejnovější, druhý klik filtr zruší. Když filtr píšete
+ručně, otevřená nahrávka ze seznamu nezmizí (označí se „otevřená, mimo filtr“), aby vám výběr neuskočil.
+
 Horní záložky: **Schůzka** (vybraná nahrávka) a **Lidé (společné)**. Uvnitř Schůzky jsou podzáložky **Mluvčí**
 (přiřazení jmen), **Přepis** (čitelný přepis s časem a mluvčím) a **Zápis** (vyrenderovaný Markdown; když existuje i
 srovnávací zápis z Claude, vyberete ho vpravo). Úpravy textu se dělají v souborech, stránka je jen zobrazuje.
@@ -213,6 +231,11 @@ například ad-hoc hovor během naplánované schůzky nebo dvě schůzky najedn
 
 Když vybraná nahrávka ještě nemá přepis, stránka to řekne a nabídne tlačítko „Ano, přepsat a zpracovat“
 (přepis, export, zápis; průběh vidíte dole). Nic se nepíše do konzole.
+
+Dole v liště je poslední událost serveru (co se stalo a kdy), tlačítko **Historie** rozbalí celý seznam od
+spuštění serveru. Stránka se na server ptá každých pět vteřin, takže od přepisu klidně odejděte: až doběhne,
+objeví se to v liště a **karty se samy načtou znovu** — po přegenerování tedy nekoukáte na stará jména.
+Když máte neuložené změny, stránka se sama nepřenačte (nepřepsala by je); uložte a načtěte znovu.
 
 Klávesy: Enter = další mluvčí, Esc = zastavit přehrávání. Prázdné jméno znamená nechat označení.
 

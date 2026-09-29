@@ -397,12 +397,13 @@ def test_review_http_roundtrip(tmp_path):
         assert "teamsrec" in page and "@ts-check" in page
         rows = _json.loads(urllib.request.urlopen(base + "/api/recordings").read())
         assert rows[0]["stem"] == rec.stem
-        rv = _json.loads(urllib.request.urlopen(base + f"/api/recording?stem={rec.stem}").read())
+        rv = _json.loads(urllib.request.urlopen(base + f"/api/recordings/{rec.stem}").read())
         assert len(rv["speakers"]) == 3
-        wav = urllib.request.urlopen(base + f"/api/clip?stem={rec.stem}&start=0&end=2").read()
+        wav = urllib.request.urlopen(base + f"/api/recordings/{rec.stem}/clip?start=0&end=2").read()
         assert wav[:4] == b"RIFF"
-        body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_01": "Petr"}, "summary": False, "title": "Nový název"}).encode()
-        req = urllib.request.Request(base + "/api/save", data=body, headers={"Content-Type": "application/json"})
+        body = _json.dumps({"names": {"SPEAKER_01": "Petr"}, "summary": False, "title": "Nový název"}).encode()
+        req = urllib.request.Request(base + f"/api/recordings/{rec.stem}/names", data=body, method="PUT",
+                                     headers={"Content-Type": "application/json"})
         res = _json.loads(urllib.request.urlopen(req).read())
         assert res["ok"] and res["written"] == {"SPEAKER_01": "petr"}
         assert res["stem"] == "2026-09-04_1400_novy-nazev" and res["title"] == "Nový název"
@@ -413,18 +414,19 @@ def test_review_http_roundtrip(tmp_path):
         ppl = _json.loads(urllib.request.urlopen(base + "/api/people").read())
         assert ppl["people"][0]["first"] == "Petr" and ppl["modes"] == ["first", "full", "nick"]
         assert ppl["people"][0]["prints"] == 0
-        body = _json.dumps({"stem": rec.stem, "names": {"SPEAKER_00": "Peter Svoboda"}, "summary": False}).encode()
-        urllib.request.urlopen(urllib.request.Request(base + "/api/save", data=body, headers={"Content-Type": "application/json"})).read()
+        body = _json.dumps({"names": {"SPEAKER_00": "Peter Svoboda"}, "summary": False}).encode()
+        urllib.request.urlopen(urllib.request.Request(base + f"/api/recordings/{rec.stem}/names", data=body, method="PUT",
+                                                      headers={"Content-Type": "application/json"})).read()
         body = _json.dumps({"keep": "petr", "drop": "peter-svoboda", "stem": rec.stem}).encode()
         res = _json.loads(urllib.request.urlopen(urllib.request.Request(base + "/api/people/merge", data=body,
                                                                         headers={"Content-Type": "application/json"})).read())
         assert [p["id"] for p in res["people"]] == ["petr"] and "Peter Svoboda" in res["people"][0]["aliases"]
-        det = _json.loads(urllib.request.urlopen(base + "/api/person?id=petr").read())
+        det = _json.loads(urllib.request.urlopen(base + "/api/people/petr").read())
         assert det["id"] == "petr" and det["recordings"] == [rec.stem] and det["prints"] == []
         with pytest.raises(urllib.error.HTTPError):
-            urllib.request.urlopen(base + "/api/person?id=nobody")
+            urllib.request.urlopen(base + "/api/people/nobody")
         assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": "petr"}  # the page always sends the full mapping
-        bad = urllib.request.Request(base + "/api/recording?stem=nope")
+        bad = urllib.request.Request(base + "/api/recordings/nope")
         with pytest.raises(urllib.error.HTTPError):
             urllib.request.urlopen(bad)
     finally:
@@ -779,6 +781,113 @@ def test_purge_audio_deletes_only_finished_old_recordings(tmp_path):
         do_transcribe(cfg, Recording.load(done.stem_path.with_suffix(".json")), force=True)
     with pytest.raises(RecordingError):
         purge_audio(cfg, 0)
+
+
+def _serve(tmp_path):
+    import threading
+    from http.server import ThreadingHTTPServer
+    from teamsrec_transcribe.web.review import ReviewState, _handler
+    cfg = Config(out_dir=tmp_path)
+    state, ref = ReviewState(cfg), {}
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), _handler(state, ref))
+    ref["server"] = srv
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv, state, f"http://127.0.0.1:{srv.server_address[1]}"
+
+
+def _call(base, method, path, body=None):
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(base + path, method=method, data=None if body is None else json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return r.status, json.loads(r.read() or b"null")
+    except urllib.error.HTTPError as e:
+        return e.code, json.loads(e.read() or b"null")
+
+
+def test_rest_api_routes_errors_and_openapi(tmp_path):
+    from urllib.parse import quote
+    from teamsrec_transcribe.web.review import ROUTES
+    rec = _make_transcribed(tmp_path)
+    srv, state, base = _serve(tmp_path)
+    try:
+        code, rows = _call(base, "GET", "/api/recordings")
+        assert code == 200 and rows[0]["stem"] == rec.stem
+        code, r = _call(base, "GET", f"/api/recordings/{rec.stem}")
+        assert code == 200 and {s["label"] for s in r["speakers"]} >= {"SPEAKER_00", "Jana Nováková"}
+        code, r = _call(base, "PUT", f"/api/recordings/{rec.stem}/names",
+                        {"names": {"SPEAKER_00": {"first": "Petr", "last": "Svoboda", "nick": "", "display": ""}}})
+        assert code == 200 and r["written"] == {"SPEAKER_00": "petr-svoboda"}
+        # a label with a space and diacritics travels in the path
+        code, r = _call(base, "DELETE", f"/api/recordings/{rec.stem}/speakers/{quote('Jana Nováková')}")
+        assert code == 200 and r["removed"] == 1
+        code, r = _call(base, "GET", f"/api/recordings/{rec.stem}/docs/{rec.stem}.txt")
+        assert code == 200 and "Petr" in r["text"]
+        assert _call(base, "GET", "/api/nothing-here")[0] == 404
+        assert _call(base, "POST", f"/api/recordings/{rec.stem}")[0] == 405, "known path, wrong method"
+        code, r = _call(base, "GET", "/api/recordings/2026-01-01_0000_nic")
+        assert code == 400 and "not found" in r["error"]
+        code, spec = _call(base, "GET", "/api/openapi.json")
+        assert code == 200 and spec["openapi"].startswith("3.1")
+        documented = {path for path in spec["paths"]}
+        for method, pattern, name in ROUTES:
+            if pattern == r"/":
+                continue
+            as_doc = (pattern.replace("(?P<stem>[^/]+)", "{stem}").replace("(?P<file>[^/]+)", "{file}")
+                      .replace("(?P<label>[^/]+)", "{label}").replace("(?P<pid>[^/]+)", "{id}")
+                      .replace("(?P<doc>[^/]+)", "{doc}").replace("\\.", "."))
+            assert as_doc in documented, f"{method} {as_doc} missing in openapi.py"
+            assert method.lower() in spec["paths"][as_doc], f"{method} {as_doc} not documented"
+    finally:
+        srv.shutdown()
+
+
+def test_server_sent_events_stream_and_replay(tmp_path):
+    import http.client
+    rec = _make_transcribed(tmp_path)
+    srv, state, base = _serve(tmp_path)
+    port = srv.server_address[1]
+    state.event("dřívější událost", "ok")
+
+    def read_frames(resp, count):
+        frames, cur = [], {}
+        while len(frames) < count:
+            line = resp.fp.readline().decode("utf-8").rstrip("\n")
+            if not line:
+                if cur:
+                    frames.append(cur); cur = {}
+                continue
+            if line.startswith(":"):
+                continue
+            key, _, value = line.partition(": ")
+            cur[key] = value
+        return frames
+
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/api/events")
+        resp = conn.getresponse()
+        assert resp.status == 200 and resp.getheader("Content-Type").startswith("text/event-stream")
+        hello, old = read_frames(resp, 2)
+        assert hello["event"] == "hello" and json.loads(old["data"])["text"] == "dřívější událost"
+        assert json.loads(old["data"])["replay"] is True, "history on connect only fills the list"
+        _call(base, "PUT", f"/api/recordings/{rec.stem}/names", {"names": {}})
+        (live,) = read_frames(resp, 1)
+        data = json.loads(live["data"])
+        assert live["event"] == "log" and live["id"] == str(data["n"]) and "uloženo" in data["text"]
+        conn.close()
+        # a reconnect with Last-Event-ID gets only what it missed
+        state.event("zmeškaná", "ok")
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
+        conn.request("GET", "/api/events", headers={"Last-Event-ID": live["id"]})
+        resp = conn.getresponse()
+        hello, missed = read_frames(resp, 2)
+        assert json.loads(missed["data"])["text"] == "zmeškaná" and json.loads(missed["data"])["replay"] is False
+        conn.close()
+    finally:
+        srv.shutdown()
 
 
 def test_help_documents_come_from_the_docs_folder():

@@ -5,33 +5,28 @@ the machine. The page reads the same files the CLI uses and writes only `<stem>.
 regenerates the exports (and, on request, the summary). The API is the boundary: a native client could call
 it later without touching this module's data functions.
 
-API
-  GET  /                         the page
-  GET  /api/recordings?limit=    recent recordings: title, whether they have a transcript and a summary, and
-                                 how many speakers are still unnamed (default 30 newest)
-  GET  /api/recording?stem=      everything the page needs for one recording
-  GET  /api/clip?stem=&start=&end=   a WAV clip cut from the 16 kHz mix (max CLIP_MAX_S seconds)
-  POST /api/save                 {"stem", "names": {label: name}, "summary": bool, "title"?}; a name is either a string
-                                 ("Petr Svoboda") or {"first", "last", "nick", "display"}. speakers.json holds
-                                 person ids (people are created or updated from the fields), exports regenerated
-  GET  /api/people               the people registry (_speakers/people.json) with voice-print counts
-  POST /api/people               {"people": [...], "stem"?} -> replace the registry, re-export that recording
-  POST /api/people/merge         {"keep", "drop", "stem"?} -> fold one person into another everywhere
-  GET  /api/person?id=           one person with their voice prints (recording, label, when, sample to play)
-  POST /api/person/forget        {"id", "stem"?, "label"?} -> drop one print (stem+label) or all prints of the person
-  POST /api/speaker/remove       {"stem", "label"} -> drop that speaker's segments (noise turned into text)
-  POST /api/speakers/merge       {"stem"} -> labels that resolve to the same person become one speaker
-  POST /api/speakers/unmerge     {"stem"} -> put the merged labels back (only merges that recorded where from)
-  POST /api/process              {"stem", "force"?} -> transcribe + export + summarize in the background
-                                 (status polls it); force starts from scratch and drops the manual names
-  POST /api/recognize            {"stem"} -> match unnamed labels against the voice prints collected since
-  GET  /api/doc?stem=&file=      text of one document of the recording (transcript .txt, any .summary*.md)
-  GET  /api/help?doc=            user-guide | install | privacy: the Markdown from docs/ (or a link to GitHub)
-  GET  /api/meeting/candidates?stem=   nearby Outlook items to link instead
-  POST /api/meeting              {"stem", "action": confirm|detach|attach, "candidate"?} -> calendar link edits
-  GET  /api/status               background job state + the event log (what the server did, newest last)
-  POST /api/ping                 heartbeat from the page; the server exits IDLE_S after the last one
-  POST /api/quit                 stop the server
+REST API (described in web/openapi.py, served at /api/openapi.json)
+  GET    /api/recordings?limit=                        recordings with their processing state
+  GET    /api/recordings/{stem}                        everything the page needs for one recording
+  GET    /api/recordings/{stem}/clip?start=&end=       a WAV clip cut from the 16 kHz mix (max CLIP_MAX_S seconds)
+  GET    /api/recordings/{stem}/docs/{file}            a transcript .txt or a .summary*.md of the recording
+  PUT    /api/recordings/{stem}/names                  {"names": {label: name|fields}, "title"?, "summary"?}
+  POST   /api/recordings/{stem}/process                {"force"?} transcribe + export + summarize in the background
+  POST   /api/recordings/{stem}/recognize              match unnamed labels against the voice prints
+  POST   /api/recordings/{stem}/speakers/merge         fold the labels of one person into one speaker
+  POST   /api/recordings/{stem}/speakers/unmerge       undo the merges that remember their origin
+  DELETE /api/recordings/{stem}/speakers/{label}       drop that speaker's segments (noise turned into text)
+  POST   /api/recordings/{stem}/meeting                {"action": confirm|detach|attach, "candidate"?}
+  GET    /api/recordings/{stem}/meeting/candidates     nearby Outlook items to link instead
+  GET    /api/people / PUT /api/people                 the registry (PUT replaces it; opted-out people lose prints)
+  POST   /api/people/merge                             {"keep", "drop", "stem"?}
+  GET    /api/people/{id}                              one person with their voice prints
+  DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
+  GET    /api/help/{doc}                               user-guide | install | privacy
+  GET    /api/status                                   job state + recent events
+  GET    /api/events                                   Server-Sent Events (event: log), replayed after reconnects
+  GET    /api/openapi.json                             this API as OpenAPI 3.1
+  POST   /api/ping, /api/quit                          heartbeat (the server exits IDLE_S after the last), stop
 
 One server per machine: the running instance is recorded in a lock file in the temp folder, a second `review`
 just opens the existing page. Closing the browser tab ends the heartbeat, so the server (and its console window)
@@ -44,6 +39,7 @@ import io
 import json
 import logging
 import os
+import queue
 import re
 import tempfile
 import threading
@@ -55,7 +51,7 @@ from datetime import datetime
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from ..config import Config
 from ..people import DISPLAY_MODES, People, Person
@@ -475,23 +471,45 @@ class ReviewState:
         self.last_seen = 0.0  # time of the last request from the page (0 = no page yet)
         self.events: list[dict] = []
         self.seq = 0
+        self.subscribers: list[queue.Queue] = []  # one per open /api/events stream
 
     def seen(self) -> None:
         self.last_seen = time.monotonic()
 
-    def event(self, text: str, level: str = "ok", stem: str = "", reload: bool = False) -> int:
+    def event(self, text: str, level: str = "ok", stem: str = "", reload: bool = False, job_end: bool = False) -> int:
         """One line of history: what the server did, for the status bar and the list behind it. A long job is
-        started and forgotten, so the page has to be able to ask later what happened."""
+        started and forgotten, so the page has to be able to ask later what happened. job_end marks the line that
+        closes a background job (the page waiting for it wakes on that)."""
         with self.lock:
             self.seq += 1
-            self.events.append({"n": self.seq, "at": datetime.now().strftime("%H:%M:%S"), "text": text,
-                                "level": level, "stem": stem, "reload": reload})
+            e = {"n": self.seq, "at": datetime.now().strftime("%H:%M:%S"), "text": text,
+                 "level": level, "stem": stem, "reload": reload, "busy": self.busy, "job_end": job_end}
+            self.events.append(e)
             del self.events[:-MAX_EVENTS]
+            for q in self.subscribers:
+                q.put(e)
         log.info("%s", text)
         return self.seq
 
+    def subscribe(self) -> queue.Queue:
+        q: queue.Queue = queue.Queue()
+        with self.lock:
+            self.subscribers.append(q)
+        return q
+
+    def unsubscribe(self, q: queue.Queue) -> None:
+        with self.lock:
+            if q in self.subscribers:
+                self.subscribers.remove(q)
+
+    def events_since(self, n: int | None, last: int = 40) -> list[dict]:
+        """What a (re)connecting page missed: everything after event n, or the last few on a first connect."""
+        with self.lock:
+            return [e for e in self.events if e["n"] > n] if n is not None else self.events[-last:]
+
     def run_job(self, name: str, fn, done: str, stem: str = "", start: str = "") -> bool:
-        """Run fn() in a background thread; the page polls /api/status. One job at a time."""
+        """Run fn() in a background thread, one job at a time. Its end is an event with job_end (SSE to the page;
+        /api/status tells the same to a client without the stream)."""
         with self.lock:
             if self.busy:
                 return False
@@ -500,23 +518,25 @@ class ReviewState:
                 self.event(start, "busy", stem)  # logged before the work, so the order in the log is the real one
 
         def work():
+            outcome = (f"{done}: {stem}" if stem else done, "ok")
             try:
                 fn()
                 with self.lock:
                     self.message = done
-                self.event(f"{done}: {stem}" if stem else done, "ok", stem, reload=True)
             except Exception as e:  # shown on the page, not fatal
                 with self.lock:
                     self.error = str(e)
-                self.event(f"{name} selhalo: {e}", "err", stem, reload=True)
+                outcome = (f"{name} selhalo: {e}", "err")
             finally:
                 with self.lock:
                     self.busy = False
+            self.event(outcome[0], outcome[1], stem, reload=True, job_end=True)  # after busy clears: the page sees it idle
         threading.Thread(target=work, daemon=True).start()
         return True
 
     def run_summary(self, rec: Recording) -> None:
-        self.run_job("summary", lambda: do_summarize(self.cfg, rec, force=True), "summary regenerated")
+        self.run_job("summary", lambda: do_summarize(self.cfg, rec, force=True), "zápis přegenerován", rec.stem,
+                     start=f"{rec.stem}: zápis se generuje")
 
     def run_process(self, rec: Recording, force: bool = False) -> bool:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
@@ -542,8 +562,54 @@ class ReviewState:
                     "seq": self.seq, "events": self.events[-events:]}
 
 
+STEM_RE_PART = r"(?P<stem>[^/]+)"
+ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in step
+    ("GET", r"/", "page"),
+    ("GET", r"/api/recordings", "recordings"),
+    ("GET", rf"/api/recordings/{STEM_RE_PART}", "recording"),
+    ("GET", rf"/api/recordings/{STEM_RE_PART}/clip", "clip"),
+    ("GET", rf"/api/recordings/{STEM_RE_PART}/docs/(?P<file>[^/]+)", "doc"),
+    ("PUT", rf"/api/recordings/{STEM_RE_PART}/names", "save_names"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/process", "process"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/recognize", "recognize"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/merge", "merge"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/unmerge", "unmerge"),
+    ("DELETE", rf"/api/recordings/{STEM_RE_PART}/speakers/(?P<label>[^/]+)", "remove_speaker"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/meeting", "meeting"),
+    ("GET", rf"/api/recordings/{STEM_RE_PART}/meeting/candidates", "meeting_candidates"),
+    ("GET", r"/api/people", "people"),
+    ("PUT", r"/api/people", "save_people"),
+    ("POST", r"/api/people/merge", "merge_people"),
+    ("GET", r"/api/people/(?P<pid>[^/]+)", "person"),
+    ("DELETE", r"/api/people/(?P<pid>[^/]+)/voiceprints", "forget_prints"),
+    ("GET", r"/api/help/(?P<doc>[^/]+)", "help"),
+    ("GET", r"/api/status", "status"),
+    ("GET", r"/api/events", "events"),
+    ("GET", r"/api/openapi.json", "openapi"),
+    ("POST", r"/api/ping", "ping"),
+    ("POST", r"/api/quit", "quit"),
+]
+_COMPILED = [(m, re.compile(pat + "$"), name) for m, pat, name in ROUTES]
+MEETING_ACTIONS = {"confirm": "spojení potvrzeno", "detach": "odpojeno", "attach": "spojeno s jinou"}
+SSE_KEEPALIVE_S = 15.0
+
+
+def match_route(method: str, path: str) -> tuple[str | None, dict[str, str], bool]:
+    """(handler name, path parameters, path known under another method). Pure, testable."""
+    known = False
+    for m, rx, name in _COMPILED:
+        hit = rx.match(path)
+        if hit:
+            if m == method:
+                return name, {k: unquote(v) for k, v in hit.groupdict().items()}, True
+            known = True
+    return None, {}, known
+
+
 def _handler(state: ReviewState, server_ref: dict):
     class Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"  # keep-alive; every response carries Content-Length (SSE closes itself)
+
         def log_message(self, fmt, *args):  # quiet; the CLI log is enough
             log.debug("http " + fmt, *args)
 
@@ -565,139 +631,208 @@ def _handler(state: ReviewState, server_ref: dict):
             self.end_headers()
             self.wfile.write(data)
 
-        def _rec(self, q) -> Recording:
-            stem = (q.get("stem") or [""])[0]
-            if not stem:
-                raise RecordingError("missing stem")
-            return resolve_recording(stem, state.cfg.out_dir)
+        def _body(self) -> dict:
+            length = int(self.headers.get("Content-Length") or 0)
+            if not length:
+                return {}
+            data = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(data, dict):
+                raise ValueError("the request body must be a JSON object")
+            return data
 
-        # ---- routes
-        def do_GET(self):
+        def _dispatch(self, method: str):
             u = urlparse(self.path)
             q = parse_qs(u.query)
             state.seen()
+            name, params, known = match_route(method, u.path)
+            if name is None:
+                self._json({"error": "method not allowed" if known else "not found"},
+                           HTTPStatus.METHOD_NOT_ALLOWED if known else HTTPStatus.NOT_FOUND)
+                return
             try:
-                if u.path == "/":
-                    self._bytes(PAGE.read_bytes(), "text/html; charset=utf-8")
-                elif u.path == "/api/recordings":
-                    want = (q.get("limit") or [""])[0]
-                    limit = min(int(want), 2000) if want.isdigit() else RECENT_RECORDINGS
-                    self._json(list_recordings(state.cfg, limit))
-                elif u.path == "/api/recording":
-                    self._json(build_review(state.cfg, self._rec(q)))
-                elif u.path == "/api/clip":
-                    rec = self._rec(q)
-                    if not rec.mix_path or not rec.mix_path.exists():
-                        raise RecordingError("no mix audio")
-                    start = float(q.get("start", ["0"])[0])
-                    end = min(float(q.get("end", ["0"])[0]), start + CLIP_MAX_S)
-                    self._bytes(clip_wav(rec.mix_path, start, end), "audio/wav")
-                elif u.path == "/api/people":
-                    self._json(people_rows(state.cfg))
-                elif u.path == "/api/person":
-                    self._json(person_detail(state.cfg, (q.get("id") or [""])[0]))
-                elif u.path == "/api/help":
-                    self._json(help_doc((q.get("doc") or ["user-guide"])[0]))
-                elif u.path == "/api/doc":
-                    rec = self._rec(q)
-                    name = (q.get("file") or [""])[0]
-                    self._json({"file": name, "text": read_doc(rec, name)})
-                elif u.path == "/api/meeting/candidates":
-                    from ..outlook import candidates_for
-                    rec = self._rec(q)
-                    start = rec.sidecar.get("start")
-                    self._json({"candidates": candidates_for(datetime.fromisoformat(start), 4 * 3600) if start and state.cfg.calendar_outlook else []})
-                elif u.path == "/api/status":
-                    self._json(state.status())
-                else:
-                    self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-            except (RecordingError, ValueError) as e:
+                body = self._body() if method in ("POST", "PUT", "DELETE") else {}
+                getattr(self, "r_" + name)(q=q, body=body, **params)
+            except (RecordingError, ValueError, KeyError) as e:
+                if method != "GET":
+                    state.event(f"{method} {u.path}: {e}", "err")
                 self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
 
+        def do_GET(self):
+            self._dispatch("GET")
+
         def do_POST(self):
-            u = urlparse(self.path)
-            length = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(length) or b"{}") if length else {}
-            state.seen()
+            self._dispatch("POST")
+
+        def do_PUT(self):
+            self._dispatch("PUT")
+
+        def do_DELETE(self):
+            self._dispatch("DELETE")
+
+        def _recording(self, stem: str) -> Recording:
+            return resolve_recording(stem, state.cfg.out_dir)
+
+        # ---- recordings
+        def r_page(self, q, body):
+            self._bytes(PAGE.read_bytes(), "text/html; charset=utf-8")
+
+        def r_recordings(self, q, body):
+            want = (q.get("limit") or [""])[0]
+            limit = min(int(want), 2000) if want.isdigit() else RECENT_RECORDINGS
+            self._json(list_recordings(state.cfg, limit))
+
+        def r_recording(self, q, body, stem):
+            self._json(build_review(state.cfg, self._recording(stem)))
+
+        def r_clip(self, q, body, stem):
+            rec = self._recording(stem)
+            if not rec.mix_path or not rec.mix_path.exists():
+                raise RecordingError("no mix audio")
+            start = float(q.get("start", ["0"])[0])
+            end = min(float(q.get("end", ["0"])[0]), start + CLIP_MAX_S)
+            self._bytes(clip_wav(rec.mix_path, start, end), "audio/wav")
+
+        def r_doc(self, q, body, stem, file):
+            self._json({"file": file, "text": read_doc(self._recording(stem), file)})
+
+        def r_save_names(self, q, body, stem):
+            rec = self._recording(stem)
+            if body.get("title") is not None:
+                rec = save_title(state.cfg, rec, str(body.get("title")))
+            written = save_names(state.cfg, rec, body.get("names") or {})
+            state.event(f"{rec.stem}: uloženo {len(written)} jmen, přepis a titulky přegenerovány", "ok", rec.stem)
+            if body.get("summary"):
+                state.run_summary(rec)
+            self._json({"ok": True, "written": written, "stem": rec.stem, "title": rec.title,
+                        "status": state.status()})
+
+        def r_process(self, q, body, stem):
+            started = state.run_process(self._recording(stem), force=bool(body.get("force")))
+            if not started:
+                self._json({"error": "another job is still running", "status": state.status()}, HTTPStatus.CONFLICT)
+                return
+            self._json({"ok": True, "status": state.status()})
+
+        def r_recognize(self, q, body, stem):
+            rec = self._recording(stem)
+            m = recognize_voices(state.cfg, rec)
+            state.event(f"{rec.stem}: po hlase poznáno {len(m)} mluvčích" + (" (nepotvrzeno)" if m else ""),
+                        "ok" if m else "info", rec.stem, reload=True)
+            self._json({"ok": True, "matches": m})
+
+        def r_merge(self, q, body, stem):
+            rec = self._recording(stem)
+            res = merge_same_person(state.cfg, rec)
+            state.event(f"{rec.stem}: sloučeno {res['merged']} označení, otisků přibylo {res['prints']}",
+                        "ok" if res["merged"] else "info", rec.stem, reload=True)
+            self._json({"ok": True, **res})
+
+        def r_unmerge(self, q, body, stem):
+            rec = self._recording(stem)
+            n = unmerge_speakers(state.cfg, rec)
+            state.event(f"{rec.stem}: sloučení vráceno, {n} replik zpět", "ok", rec.stem, reload=True)
+            self._json({"ok": True, "restored": n})
+
+        def r_remove_speaker(self, q, body, stem, label):
+            rec = self._recording(stem)
+            n = remove_speaker(state.cfg, rec, label)
+            state.event(f"{rec.stem}: smazáno {n} replik mluvčího {label}", "ok", rec.stem, reload=True)
+            self._json({"ok": True, "removed": n})
+
+        def r_meeting(self, q, body, stem):
+            action = str(body.get("action") or "")
+            rec = set_meeting_link(state.cfg, self._recording(stem), action, body.get("candidate"))
+            if rec.transcript_path.exists():
+                do_export(state.cfg, rec)
+            state.event(f"{rec.stem}: schůzka z kalendáře – {MEETING_ACTIONS.get(action, action)}", "ok", rec.stem,
+                        reload=True)
+            self._json({"ok": True, "stem": rec.stem, "meeting": meeting_info(state.cfg, rec)})
+
+        def r_meeting_candidates(self, q, body, stem):
+            from ..outlook import candidates_for
+            start = self._recording(stem).sidecar.get("start")
+            self._json({"candidates": candidates_for(datetime.fromisoformat(start), 4 * 3600)
+                        if start and state.cfg.calendar_outlook else []})
+
+        # ---- people
+        def r_people(self, q, body):
+            self._json(people_rows(state.cfg))
+
+        def r_save_people(self, q, body):
+            rows = save_people(state.cfg, body.get("people") or [], body.get("stem") or None)
+            state.event(f"seznam lidí uložen ({len(rows)} osob)", "ok")
+            self._json({"ok": True, "people": rows})
+
+        def r_merge_people(self, q, body):
+            keep, drop = str(body.get("keep") or ""), str(body.get("drop") or "")
+            rows = merge_people(state.cfg, keep, drop, body.get("stem") or None)
+            state.event(f"osoba {drop} sloučena do {keep} (ve všech nahrávkách)", "ok", reload=True)
+            self._json({"ok": True, "people": rows})
+
+        def r_person(self, q, body, pid):
+            self._json(person_detail(state.cfg, pid))
+
+        def r_forget_prints(self, q, body, pid):
+            n = forget_print(state.cfg, pid, (q.get("stem") or [None])[0], (q.get("label") or [None])[0])
+            state.event(f"{pid}: smazáno {n} hlasových otisků", "ok")
+            self._json({"ok": True, "removed": n})
+
+        # ---- server
+        def r_help(self, q, body, doc):
+            self._json(help_doc(doc))
+
+        def r_status(self, q, body):
+            self._json(state.status())
+
+        def r_openapi(self, q, body):
+            from .openapi import spec
+            from .. import __version__
+            self._json(spec(__version__))
+
+        def r_ping(self, q, body):
+            self._json({"ok": True})
+
+        def r_quit(self, q, body):
+            if state.status()["busy"]:
+                self._json({"error": "a job is still running, wait for it to finish"}, HTTPStatus.CONFLICT)
+                return
+            self._json({"ok": True})
+            threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
+
+        def r_events(self, q, body):
+            """Server-Sent Events: every state.event() as `event: log`; on connect the recent history (or what
+            was missed since Last-Event-ID), then a comment every SSE_KEEPALIVE_S so dead streams are noticed."""
+            last = self.headers.get("Last-Event-ID") or (q.get("since") or [""])[0]
+            since = int(last) if str(last).isdigit() else None
+            self.send_response(HTTPStatus.OK)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            sub = state.subscribe()
             try:
-                if u.path == "/api/ping":
-                    self._json({"ok": True})
-                    return
-                if u.path == "/api/save":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    if body.get("title") is not None:
-                        rec = save_title(state.cfg, rec, str(body.get("title")))
-                    written = save_names(state.cfg, rec, body.get("names") or {})
-                    state.event(f"{rec.stem}: uloženo {len(written)} jmen, přepis a titulky přegenerovány",
-                                "ok", rec.stem)
-                    if body.get("summary"):
-                        state.run_summary(rec)
-                    self._json({"ok": True, "written": written, "stem": rec.stem, "title": rec.title,
-                                "status": state.status()})
-                elif u.path == "/api/people":
-                    rows = save_people(state.cfg, body.get("people") or [], body.get("stem") or None)
-                    state.event(f"seznam lidí uložen ({len(rows)} osob)", "ok")
-                    self._json({"ok": True, "people": rows})
-                elif u.path == "/api/process":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    started = state.run_process(rec, force=bool(body.get("force")))
-                    self._json({"ok": started, "status": state.status(),
-                                **({} if started else {"error": "another job is still running"})})
-                elif u.path == "/api/meeting":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    action = str(body.get("action") or "")
-                    rec = set_meeting_link(state.cfg, rec, action, body.get("candidate"))
-                    if rec.transcript_path.exists():
-                        do_export(state.cfg, rec)
-                    state.event(f"{rec.stem}: schůzka z kalendáře – "
-                                f"{ {'confirm': 'spojení potvrzeno', 'detach': 'odpojeno', 'attach': 'spojeno s jinou'}.get(action, action)}",
-                                "ok", rec.stem, reload=True)
-                    self._json({"ok": True, "stem": rec.stem, "meeting": meeting_info(state.cfg, rec)})
-                elif u.path == "/api/recognize":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    m = recognize_voices(state.cfg, rec)
-                    state.event(f"{rec.stem}: po hlase poznáno {len(m)} mluvčích"
-                                + (" (nepotvrzeno)" if m else ""), "ok" if m else "info", rec.stem, reload=True)
-                    self._json({"ok": True, "matches": m})
-                elif u.path == "/api/speaker/remove":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    label = str(body.get("label") or "")
-                    n = remove_speaker(state.cfg, rec, label)
-                    state.event(f"{rec.stem}: smazáno {n} replik mluvčího {label}", "ok", rec.stem, reload=True)
-                    self._json({"ok": True, "removed": n})
-                elif u.path == "/api/speakers/merge":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    res = merge_same_person(state.cfg, rec)
-                    state.event(f"{rec.stem}: sloučeno {res['merged']} označení, otisků přibylo {res['prints']}",
-                                "ok" if res["merged"] else "info", rec.stem, reload=True)
-                    self._json({"ok": True, **res})
-                elif u.path == "/api/speakers/unmerge":
-                    rec = resolve_recording(body.get("stem", ""), state.cfg.out_dir)
-                    n = unmerge_speakers(state.cfg, rec)
-                    state.event(f"{rec.stem}: sloučení vráceno, {n} replik zpět", "ok", rec.stem, reload=True)
-                    self._json({"ok": True, "restored": n})
-                elif u.path == "/api/person/forget":
-                    pid = str(body.get("id") or "")
-                    n = forget_print(state.cfg, pid, body.get("stem"), body.get("label"))
-                    state.event(f"{pid}: smazáno {n} hlasových otisků", "ok")
-                    self._json({"ok": True, "removed": n})
-                elif u.path == "/api/people/merge":
-                    keep, drop = str(body.get("keep") or ""), str(body.get("drop") or "")
-                    rows = merge_people(state.cfg, keep, drop, body.get("stem") or None)
-                    state.event(f"osoba {drop} sloučena do {keep} (ve všech nahrávkách)", "ok", reload=True)
-                    self._json({"ok": True, "people": rows})
-                elif u.path == "/api/quit":
-                    if state.status()["busy"]:
-                        self._json({"error": "the summary is still being generated, wait for it to finish"},
-                                   HTTPStatus.CONFLICT)
-                        return
-                    self._json({"ok": True})
-                    threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
-                else:
-                    self._json({"error": "not found"}, HTTPStatus.NOT_FOUND)
-            except (RecordingError, ValueError) as e:
-                state.event(f"{u.path}: {e}", "err")
-                self._json({"error": str(e)}, HTTPStatus.BAD_REQUEST)
+                self._sse("hello", {"seq": state.seq, "busy": state.busy, "replay": since is None})
+                for e in state.events_since(since):
+                    self._sse("log", {**e, "replay": since is None}, e["n"])
+                while not getattr(server_ref.get("server"), "_teamsrec_stopping", False):
+                    try:
+                        e = sub.get(timeout=SSE_KEEPALIVE_S)
+                    except queue.Empty:
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        continue
+                    self._sse("log", e, e["n"])
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
+                pass  # the page went away
+            finally:
+                state.unsubscribe(sub)
+
+        def _sse(self, event: str, data: dict, eid: int | None = None):
+            frame = (f"id: {eid}\n" if eid is not None else "") + f"event: {event}\n" \
+                    + f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            self.wfile.write(frame.encode("utf-8"))
+            self.wfile.flush()
     return Handler
 
 

@@ -59,6 +59,16 @@ user's own tile: while the user talks, the outline stays on whoever spoke before
 window count only when they match a participant of the meeting - OCR of a tile label invents people, and an
 anonymous `SPEAKER_03` that voice prints or one click can name is worth more than a made-up one.
 
+## Review page API
+
+The review page (`teamsrec-transcribe review`, 127.0.0.1 only) talks to its server over a REST API: resources in
+the path (`/api/recordings/{stem}`, `/api/recordings/{stem}/speakers/{label}`, `/api/people/{id}` ...), proper methods
+(GET / PUT / POST / DELETE), errors as `{"error": ...}` with 400/404/405/409. The whole API is described as OpenAPI 3.1
+at `/api/openapi.json` (source: `web/openapi.py`) - the contract a different client, or a .NET server replacing this
+one, is built against. What the server does (jobs started and finished, names saved, merges, errors) streams to the
+page as **Server-Sent Events** on `/api/events`; the browser reconnects by itself and gets what it missed
+(`Last-Event-ID`), with polling of `/api/status` only as a fallback.
+
 ## Privacy
 
 Voice prints are biometric data of colleagues: they are **off by default** (`config --init` asks), stored only
@@ -135,7 +145,8 @@ on first use into the HuggingFace cache.
 
 `bin\teamsrec-transcribe.cmd` runs the checkout's venv and finds the WinGet ffmpeg by itself; add `bin` to PATH to use the command from anywhere.
 
-Tests: `uv run pytest`.
+Tests: `uv run pytest`. The review page is tested too (`tests/web/*.test.mjs`: the page in jsdom against the real
+review server); that needs Node.js and a one-time `npm ci` in `tests/web`, otherwise those tests are skipped.
 
 ## Lab scripts
 
@@ -170,9 +181,9 @@ WinGet ffmpeg is not on Git Bash's PATH; see `lab/README.md`.
 - `mic_speakers`: the diarization label that coincides with microphone activity becomes the user (`[user] name`)
 - `people.py`: registry `<OUT_DIR>/_speakers/people.json` (first, last, nick, per-person display override);
   `speakers.json` stores person ids, the display form is applied at export/summary time
-- `web/`: the review page. `review.py` = data functions + a stdlib HTTP server on 127.0.0.1 with a small JSON API
-  (documented in the module docstring); `index.html` = one page of vanilla JS (`@ts-check` + JSDoc types), no build
-  step, no framework. Writes only `<stem>.speakers.json`, then regenerates exports and (on request) the summary.
+- `web/`: the review page. `review.py` = data functions + a stdlib HTTP server on 127.0.0.1 with a REST API and
+  Server-Sent Events (see "Review page API"; OpenAPI in `openapi.py`); `index.html` = one page of vanilla JS
+  (`@ts-check` + JSDoc types), no build step, no framework. Writes only `<stem>.speakers.json`, then regenerates exports and (on request) the summary.
 - `voiceprints.py`: the diarization embeddings (pyannote community-1 via whisperx `return_embeddings`) are stored
   under a person when a label gets a name (`_speakers/voiceprints.json`, max 10 per person, the user's own from
   the mic track); unnamed labels of new recordings are named when cosine similarity >= `[voiceprints] threshold`

@@ -1901,6 +1901,7 @@ dependencies = [
     { name = "anthropic" },
     { name = "numpy" },
     { name = "pywin32", marker = "sys_platform == 'win32'" },
+    { name = "requests" },
     { name = "typer" },
 ]
 
@@ -1944,6 +1945,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26" },
     { name = "opencv-python-headless", marker = "extra == 'video'", specifier = ">=4.9" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=306" },
+    { name = "requests", specifier = ">=2.31" },
     { name = "scipy", marker = "extra == 'video'", specifier = ">=1.11" },
     { name = "teamsrec-transcribe", extras = ["whisperx", "video"], marker = "extra == 'all'" },
     { name = "torch", marker = "(sys_platform == 'linux' and extra == 'whisperx') or (sys_platform == 'win32' and extra == 'whisperx')", specifier = "==2.8.0", index = "https://download.pytorch.org/whl/cu128" },

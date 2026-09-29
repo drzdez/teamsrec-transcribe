@@ -228,6 +228,15 @@ let displayDefault = "nick";
 let loadSeq = 0;  // guards against a slower, older recording load overwriting the newer one
 
 /** @param {string} url @param {RequestInit=} init */
+/** /api/recordings/<stem>/<rest> with the stem and every path part escaped */
+function recUrl(/** @type {string} */ stem, /** @type {string[]} */ ...parts) {
+  return ["/api/recordings", stem, ...parts].map((x, i) => i ? encodeURIComponent(x) : x).join("/");
+}
+/** @param {string} method @param {any=} body */
+function send(method, body) {
+  return { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) };
+}
+
 async function api(url, init) {
   const r = await fetch(url, init);
   const j = await r.json();
@@ -385,7 +394,7 @@ async function loadRecording(/** @type {string} */ stem) {
   main.innerHTML = '<div class="empty">Načítám…</div>';
   /** @type {Review} */ let r;
   try {
-    r = await api(`/api/recording?stem=${encodeURIComponent(stem)}`);
+    r = await api(recUrl(stem));
   } catch (e) {
     if (seq === loadSeq) { main.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; review = null; }
     return;
@@ -429,21 +438,20 @@ function renderNotTranscribed(r) {
 
 async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonElement} */ btn) {
   btn.disabled = true;
+  const since = finishes;
   try {
-    const r = await api("/api/process", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stem }) });
+    const r = await api(recUrl(stem, "process"), send("POST"));
     if (!r.ok) throw new Error(r.error || "nelze spustit");
   } catch (e) { setStatus(String(e), "err"); btn.disabled = false; return; }
   setBusy(true);
-  try {
-    for (;;) {
-      await new Promise(res => setTimeout(res, 3000));
-      const s = await api("/api/status");
-      if (s.error) { setStatus(`zpracování selhalo: ${s.error}`, "err"); break; }
-      if (!s.busy) { setStatus("hotovo: přepis, titulky i zápis", "ok"); break; }
-      setStatus("zpracovávám: přepis, export, zápis… nezavírejte stránku ani okno konzole", "busy");
-    }
-  } finally { setBusy(false); }
-  await loadList(); pick.value = stem; await loadRecording(stem);
+  setStatus("zpracovávám: přepis, export, zápis… nezavírejte stránku ani okno konzole", "busy");
+  let error = "";
+  try { error = await waitForJob(since); }
+  catch (e) { error = String(e); }
+  finally { setBusy(false); }
+  await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
+  if (error) setStatus(`zpracování selhalo: ${error}`, "err");
+  else setStatus("hotovo: přepis, titulky i zápis", "ok");
 }
 
 // ---------------------------------------------------------------- speakers tab
@@ -460,7 +468,7 @@ function renderSpeakers() {
     b.onclick = async () => {
       b.disabled = true; setStatus("porovnávám s otisky…");
       try {
-        const r = await api("/api/recognize", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stem: review ? review.stem : "" }) });
+        const r = await api(recUrl(review ? review.stem : "", "recognize"), send("POST"));
         const n = Object.keys(r.matches).length;
         if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
         setStatus(n ? `poznáno ${n} mluvčích, uloženo do přepisu a titulků; zápis přegenerujte tlačítkem dole` : "nikdo nepoznán (shoda pod prahem nebo příliš krátká promluva)", n ? "ok" : "");
@@ -482,8 +490,7 @@ function renderSpeakers() {
       b.disabled = true; setStatus("slučuji…");
       try {
         const stem = review ? review.stem : "";
-        const r = await api("/api/speakers/merge", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stem }) });
+        const r = await api(recUrl(stem, "speakers", "merge"), send("POST"));
         await loadList(); pick.value = stem; await loadRecording(stem);
         setStatus(r.merged ? `sloučeno ${r.merged} označení, přepis a titulky přegenerovány`
                              + (r.prints ? `; hlasových otisků přibylo ${r.prints}` : "; nové otisky nepřibyly (vzorky byly skoro stejné)")
@@ -524,8 +531,7 @@ function renderSpeakers() {
       u.disabled = true; setStatus("vracím…");
       try {
         const stem = review ? review.stem : "";
-        const r = await api("/api/speakers/unmerge", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stem }) });
+        const r = await api(recUrl(stem, "speakers", "unmerge"), send("POST"));
         await loadList(); pick.value = stem; await loadRecording(stem);
         setStatus(`vráceno ${r.restored} replik pod původní označení`, "ok");
       } catch (e) { setStatus(String(e), "err"); u.disabled = false; }
@@ -581,7 +587,7 @@ function meetingPanel(m) {
     sel.onfocus = async () => {
       if (loaded || !review) return; loaded = true;
       try {
-        const r = await api(`/api/meeting/candidates?stem=${encodeURIComponent(review.stem)}`);
+        const r = await api(recUrl(review.stem, "meeting", "candidates"));
         for (const c of r.candidates) {
           const o = document.createElement("option"); o.value = JSON.stringify({ subject: c.subject, start: c.start });
           o.textContent = `${c.start.slice(11, 16)}–${c.end.slice(11, 16)} ${c.subject}${c.teams ? " (Teams)" : ""}, ${(c.attendees || []).length} lidí`;
@@ -601,8 +607,7 @@ async function meetingAction(/** @type {string} */ action, /** @type {any=} */ c
   if (!review) return;
   setStatus(action === "attach" ? "spojuji se schůzkou (přejmenuje se složka)…" : "ukládám…");
   try {
-    const r = await api("/api/meeting", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stem: review.stem, action, candidate: candidate || null }) });
+    const r = await api(recUrl(review.stem, "meeting"), send("POST", { action, candidate: candidate || null }));
     await loadList(); pick.value = r.stem; await loadRecording(r.stem);
     setStatus({ confirm: "spojení potvrzeno", detach: "odpojeno; účastníci z kalendáře odebráni, název zůstal (upravte nahoře)",
                 attach: "spojeno s vybranou schůzkou: název, účastníci a složka" }[action] || "hotovo", "ok");
@@ -721,8 +726,7 @@ function card(sp, i) {
   armedButton(rm, `Potvrdit smazání ${sp.count} replik mluvčího ${sp.label}`, async () => {
     setStatus("mažu…");
     try {
-      const r = await api("/api/speaker/remove", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ stem: review ? review.stem : "", label: sp.label }) });
+      const r = await api(recUrl(review ? review.stem : "", "speakers", sp.label), send("DELETE"));
       if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
       setStatus(`smazáno ${r.removed} replik a rovnou uloženo (přepis a titulky přegenerovány); zápis je beze změny, přegenerujte ho tlačítkem dole, pokud chcete`, "ok");
     } catch (e) { setStatus(String(e), "err"); }
@@ -751,7 +755,7 @@ function play(btn, s, stem) {
   stopAudio();
   const which = stem || (review ? review.stem : "");
   if (!which) return;
-  audio.src = `/api/clip?stem=${encodeURIComponent(which)}&start=${s.start}&end=${s.end}`;
+  audio.src = `${recUrl(which, "clip")}?start=${s.start}&end=${s.end}`;
   audio.play().catch(e => setStatus(`přehrávání selhalo: ${e}`, "err"));
   btn.classList.add("playing"); playingBtn = btn;
 }
@@ -777,12 +781,13 @@ async function save(/** @type {boolean} */ withSummary) {
   const buttons = [$("save"), $("saveSum")].map(b => /** @type {HTMLButtonElement} */ (b));
   buttons.forEach(b => b.disabled = true);
   setStatus("ukládám…");
+  const since = finishes;
   try {
-    const r = await api("/api/save", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ stem: review.stem, names: collectNames(), summary: withSummary, title: titleInput.value }) });
+    const r = await api(recUrl(review.stem, "names"),
+      send("PUT", { names: collectNames(), summary: withSummary, title: titleInput.value }));
     const n = Object.keys(r.written).length;
     setStatus(`uloženo (${n} jmen), přepis a titulky přegenerovány${withSummary ? ", zápis se generuje…" : ""}`, "ok");
-    if (withSummary) { setBusy(true); try { await waitForSummary(); } finally { setBusy(false); } }
+    if (withSummary) { setBusy(true); try { await waitForSummary(since); } finally { setBusy(false); } }
     const stem = r.stem || review.stem;  // a new title renames the folder, so the stem may have changed
     await loadList(); pick.value = stem;
     await loadRecording(stem);  // people may have been created; refresh the "v zápisu" previews
@@ -795,13 +800,33 @@ async function save(/** @type {boolean} */ withSummary) {
   }
 }
 
-async function waitForSummary() {
+async function waitForSummary(/** @type {number} */ since) {
+  setStatus("zápis se generuje (lokální model, 1–3 min) – nezavírejte tuto stránku ani okno konzole, jinak se přeruší", "busy");
+  const error = await waitForJob(since);
+  if (error) setStatus(`zápis se nepodařil: ${error}`, "err");
+}
+
+// a background job (processing, minutes) ended: the event stream says so at once, polling when it is down
+let finishes = 0;
+/** @type {{text:string,level:string}|null} */ let lastFinish = null;  // the event with job_end
+/** @type {(() => void)[]} */ let finishWaiters = [];
+function noteFinish(/** @type {{text:string,level:string}|undefined} */ ev) {
+  finishes += 1;
+  lastFinish = ev || null;
+  finishWaiters.splice(0).forEach(wake => wake());
+}
+/** Wait until a job that started after `since` finishes; the error text, or "" when it went well. The event
+ * stream wakes this at once; without it a status check every 10 s notices the end. */
+async function waitForJob(/** @type {number} */ since) {
   for (;;) {
-    await new Promise(res => setTimeout(res, 2000));
+    if (finishes > since) return lastFinish && lastFinish.level === "err" ? lastFinish.text : "";
+    const woken = await new Promise(res => {
+      finishWaiters.push(() => res(true));
+      setTimeout(() => res(false), 10000);
+    });
+    if (woken) continue;
     const s = await api("/api/status");
-    if (s.error) { setStatus(`zápis se nepodařil: ${s.error}`, "err"); return; }
-    if (!s.busy) return;
-    setStatus("zápis se generuje (lokální model, 1–3 min) – nezavírejte tuto stránku ani okno konzole, jinak se přeruší", "busy");
+    if (!s.busy) return s.error || "";
   }
 }
 
@@ -898,8 +923,7 @@ async function savePeople() {
   const btn = /** @type {HTMLButtonElement} */ ($("savePeople"));
   btn.disabled = true; setStatus("ukládám lidi…");
   try {
-    const r = await api("/api/people", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ people: collectPeople(), stem: review ? review.stem : null }) });
+    const r = await api("/api/people", send("PUT", { people: collectPeople(), stem: review ? review.stem : null }));
     people = r.people; renderPeople();
     setStatus(`uloženo (${people.length} osob)${review ? ", přepis a titulky přegenerovány" : ""}`, "ok");
   } catch (e) { setStatus(String(e), "err"); }
@@ -914,7 +938,7 @@ async function openPerson(/** @type {string} */ id) {
   stopAudio(); setStatus("");
   peopleMain.innerHTML = '<div class="empty">Načítám…</div>';
   /** @type {PersonDetail} */ let d;
-  try { d = await api(`/api/person?id=${encodeURIComponent(id)}`); }
+  try { d = await api(`/api/people/${encodeURIComponent(id)}`); }
   catch (e) { setStatus(String(e), "err"); renderPeople(); return; }
   peopleMain.innerHTML = "";
   const back = document.createElement("button"); back.type = "button"; back.className = "link"; back.textContent = "← Lidé";
@@ -956,8 +980,7 @@ async function openPerson(/** @type {string} */ id) {
       const tdX = document.createElement("td"); tdX.className = "act";
       const del = document.createElement("button"); del.type = "button"; del.textContent = "✕"; del.title = "smazat tento otisk (potvrdit druhým klikem)";
       armedButton(del, "Potvrdit smazání otisku", async () => {
-        try { await api("/api/person/forget", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: d.id, stem: pr.stem, label: pr.label }) }); openPerson(d.id); }
+        try { await api(`/api/people/${encodeURIComponent(d.id)}/voiceprints?stem=${encodeURIComponent(pr.stem)}&label=${encodeURIComponent(pr.label)}`, send("DELETE")); openPerson(d.id); }
         catch (e) { setStatus(String(e), "err"); }
       });
       tdX.appendChild(del); tr.appendChild(tdX);
@@ -966,8 +989,7 @@ async function openPerson(/** @type {string} */ id) {
     t.appendChild(tb); peopleMain.appendChild(t);
     const all = document.createElement("button"); all.type = "button"; all.className = "link danger"; all.textContent = "smazat všechny otisky této osoby";
     armedButton(all, "opravdu smazat všechny otisky? (klikněte znovu)", async () => {
-      try { await api("/api/person/forget", { method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: d.id }) }); openPerson(d.id); }
+      try { await api(`/api/people/${encodeURIComponent(d.id)}/voiceprints`, send("DELETE")); openPerson(d.id); }
       catch (e) { setStatus(String(e), "err"); }
     });
     peopleMain.appendChild(all);
@@ -979,8 +1001,7 @@ async function mergePerson(/** @type {string} */ keep, /** @type {string} */ dro
   if (!k || !d) return;
   setStatus(`slučuji ${`${d.first} ${d.last}`.trim()} do ${`${k.first} ${k.last}`.trim()}…`);
   try {
-    const r = await api("/api/people/merge", { method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keep, drop, stem: review ? review.stem : null }) });
+    const r = await api("/api/people/merge", send("POST", { keep, drop, stem: review ? review.stem : null }));
     people = r.people; await loadPeople();
     setStatus("sloučeno, přiřazení v nahrávkách přepsána", "ok");
   } catch (e) { setStatus(String(e), "err"); }
@@ -1047,7 +1068,7 @@ async function renderDoc() {
   if (!file) { docMain.innerHTML = `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vytvoříte ho tlačítkem „Uložit a přegenerovat zápis“ na záložce Mluvčí."}</div>`; return; }
   docMain.innerHTML = '<div class="empty">Načítám…</div>';
   try {
-    const r = await api(`/api/doc?stem=${encodeURIComponent(review.stem)}&file=${encodeURIComponent(file)}`);
+    const r = await api(recUrl(review.stem, "docs", file));
     docMain.innerHTML = subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text);
   } catch (e) { docMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
 }
@@ -1066,13 +1087,20 @@ function renderTranscript(/** @type {string} */ text) {
   return out.join("");
 }
 
+/** Links in the minutes come from an LLM that read what people said, so only web, mail and relative targets
+ * become links; `javascript:` and other schemes stay plain text. */
+function safeHref(/** @type {string} */ href) {
+  const scheme = href.match(/^([a-z][a-z0-9+.-]*):/i);
+  return !scheme || ["http", "https", "mailto"].includes(scheme[1].toLowerCase());
+}
+
 /** minimal Markdown: headings, paragraphs, bullet/numbered lists, tables, bold/italic/code, HTML comments as a stamp */
 function renderMarkdown(/** @type {string} */ md) {
   const inline = (/** @type {string} */ s) => escapeHtml(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
     .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, text, href) => safeHref(href) ? `<a href="${href}">${text}</a>` : text)
     .replace(/&lt;(https?:\/\/[^\s&]+)&gt;/g, '<a href="$1">$1</a>');
   const lines = md.split(/\r?\n/);
   const out = [];
@@ -1151,7 +1179,7 @@ async function openHelp(/** @type {string} */ doc) {
   helpPick.value = doc;
   helpMain.innerHTML = '<div class="empty">Načítám…</div>';
   /** @type {any} */ let r;
-  try { r = await api(`/api/help?doc=${encodeURIComponent(doc)}`); }
+  try { r = await api(`/api/help/${encodeURIComponent(doc)}`); }
   catch (e) { helpMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; return; }
   if (r.url) {  // no local docs folder (installed package): the same page on GitHub
     helpMain.innerHTML = `<p>Nápověda k této instalaci je na webu: <a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.url)}</a></p>`;
@@ -1178,7 +1206,7 @@ document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !helpBox
 setInterval(() => { fetch("/api/ping", { method: "POST" }).catch(() => {}); }, 15000);
 
 // ---- event log: the server says what it did, the page shows the newest line and reloads when needed
-/** @type {{n:number,at:string,text:string,level:string,stem:string,reload:boolean}[]} */
+/** @type {{n:number,at:string,text:string,level:string,stem:string,reload:boolean,job_end?:boolean}[]} */
 let events = [];
 let lastSeq = -1;
 let wasBusy = false;
@@ -1206,6 +1234,7 @@ async function pollStatus() {
   lastSeq = typeof s.seq === "number" ? s.seq : lastSeq;
   const finished = wasBusy && !s.busy;   // a background job ended: what is on the screen is stale
   wasBusy = !!s.busy;
+  for (const e of fresh) if (e.job_end && !first) noteFinish(e);
   if (first) { renderEvents(); return; }  // the page just opened: keep the old lines, do not shout them
   if (!fresh.length && !finished) return;
   const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
@@ -1223,8 +1252,54 @@ $("histBtn").addEventListener("click", () => {
   box.hidden = !box.hidden;
   renderEvents();
 });
-setInterval(() => { pollStatus().catch(() => {}); }, 5000);
-pollStatus().catch(() => {});
+/** one event from the server (SSE or a poll), in order; replayed ones only fill the history */
+async function onEvents(/** @type {any[]} */ fresh, /** @type {boolean} */ busyNow, /** @type {boolean} */ replay) {
+  for (const e of fresh) if (!events.some(x => x.n === e.n)) events.push(e);
+  events.sort((a, b) => a.n - b.n);
+  if (events.length > 200) events = events.slice(-200);
+  if (fresh.length) lastSeq = Math.max(lastSeq, ...fresh.map(e => e.n));
+  const finished = wasBusy && !busyNow;
+  wasBusy = busyNow;
+  if (!replay) for (const e of fresh) if (e.job_end) noteFinish(e);
+  if (replay) { renderEvents(); return; }
+  const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
+  if (mine && review && !isDirty() && !busy) {
+    const stem = review.stem;
+    await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
+  }
+  const last = fresh[fresh.length - 1];
+  if (last) setStatus(`${last.at} · ${last.text}`, last.level === "err" ? "err" : last.level === "busy" ? "busy" : "ok");
+  renderEvents();
+}
+
+let pollTimer = 0;
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = window.setInterval(() => { pollStatus().catch(() => {}); }, 5000);
+  pollStatus().catch(() => {});
+}
+
+/** Server-Sent Events: the browser reconnects by itself and asks for what it missed (Last-Event-ID) */
+function startEvents() {
+  if (typeof EventSource === "undefined") { startPolling(); return; }
+  const es = new EventSource("/api/events");
+  let failures = 0;
+  es.addEventListener("hello", ev => {
+    failures = 0;
+    const h = JSON.parse(/** @type {MessageEvent} */ (ev).data);
+    wasBusy = !!h.busy;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
+  });
+  es.addEventListener("log", ev => {
+    const e = JSON.parse(/** @type {MessageEvent} */ (ev).data);
+    onEvents([e], !!e.busy, !!e.replay).catch(() => {});
+  });
+  es.onerror = () => {
+    failures += 1;
+    if (failures >= 3) { es.close(); startPolling(); }  // a proxy or an old server: fall back to polling
+  };
+}
+startEvents();
 
 (async () => {
   try {

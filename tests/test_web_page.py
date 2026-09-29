@@ -1,0 +1,81 @@
+"""The review page (web/index.html) in a headless DOM (jsdom) against the real review server: every
+tests/web/*.test.mjs gets a fresh server on the recordings folder built here. Needs Node.js and `npm ci` in
+tests/web; skipped without them."""
+import json
+import os
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+import pytest
+
+from teamsrec_transcribe.people import People
+from teamsrec_transcribe.recording import Recording
+from test_core import _make_recording, _make_transcribed, _serve
+
+WEB = Path(__file__).parent / "web"
+NODE = shutil.which("node")
+pytestmark = pytest.mark.skipif(not NODE or not (WEB / "node_modules" / "jsdom").is_dir(),
+                                reason="page tests need Node.js and `npm ci` in tests/web")
+
+SUMMARY = """<!-- teamsrec-transcribe summary | ollama: test -->
+# Týdenní sync
+
+## Shrnutí
+Krátká schůzka o **rozpočtu** a `termínech`. Podklady: [plán](https://example.org/plan),
+[klikni sem](javascript:alert(1)) a [data](data:text/html,x).
+
+## Úkoly
+| Kdo | Úkol | Termín |
+|---|---|---|
+| Petr | Poslat rozpočet | zítra |
+
+## Mluvčí
+| Označení | Jméno | Poznámka |
+|---|---|---|
+| SPEAKER_00 | ? | vedl schůzku |
+| SPEAKER_01 | ? | pravděpodobně Petr: osloven |
+"""
+
+
+def _folder(out: Path) -> None:
+    """Three recordings (two of the same meeting, one of them not transcribed yet) and two known people."""
+    rec = _make_transcribed(out)
+    rec.summary_path.write_text(SUMMARY, encoding="utf-8")
+    rec.file(".txt").write_text("# Týdenní sync\n\n[00:00:00] SPEAKER_00: Dobrý den, začneme <b>programem</b>.\n"
+                                "[00:00:12] Jana Nováková: Rozpočet je hotový.\n", encoding="utf-8")
+    _make_recording(out, stem="2026-09-03_0900_archi-board", title="Archi board", start="2026-09-03T09:00:00")
+    old = _make_transcribed(out, stem="2026-09-02_0900_archi-board")
+    sc = old.dir / f"{old.stem}.json"
+    sidecar = json.loads(sc.read_text(encoding="utf-8"))
+    sidecar.update(title="Archi board", slug="archi-board", start="2026-09-02T09:00:00", end="2026-09-02T09:30:00")
+    sc.write_text(json.dumps(sidecar), encoding="utf-8")
+    people = People.load(out, "nick")
+    people.ensure("Petr Svoboda").nick = "Péťa"
+    people.ensure("Jana Nováková")
+    people.save()
+
+
+def _fake_process(cfg, rec: Recording, force: bool = False) -> None:
+    """Stands in for transcription: a short job that leaves a transcript, so the page sees busy -> done."""
+    time.sleep(0.6)
+    rec.write_json(rec.transcript_path, {
+        "format": 1, "language": "cs", "speaker_sources": ["diarization"], "speakers": ["SPEAKER_00"],
+        "segments": [{"start": 0, "end": 5, "text": "Nová nahrávka je přepsaná.", "speaker": "SPEAKER_00"}]})
+
+
+@pytest.mark.parametrize("script", sorted(p.name for p in WEB.glob("*.test.mjs")))
+def test_review_page(script, tmp_path, monkeypatch):
+    from teamsrec_transcribe.web import review
+    _folder(tmp_path)
+    monkeypatch.setattr(review, "do_process", _fake_process)
+    monkeypatch.setattr(review, "do_summarize", lambda cfg, rec, force=False: time.sleep(0.3))
+    srv, _state, base = _serve(tmp_path)
+    try:
+        run = subprocess.run([NODE, "--test", "--test-reporter=spec", str(WEB / script)], cwd=WEB,
+                             env={**os.environ, "TEAMSREC_REVIEW_URL": base}, capture_output=True,
+                             text=True, encoding="utf-8", errors="replace", timeout=120)
+    finally:
+        srv.shutdown()
+    assert run.returncode == 0, run.stdout + run.stderr

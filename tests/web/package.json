@@ -1,0 +1,9 @@
+{
+  "name": "teamsrec-review-page-tests",
+  "private": true,
+  "description": "The review page in jsdom against the real review server; run through pytest (tests/test_web_page.py)",
+  "type": "module",
+  "devDependencies": {
+    "jsdom": "^30.0.1"
+  }
+}

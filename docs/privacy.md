@@ -31,7 +31,11 @@ ta volba na stránce). Celý soubor `voiceprints.json` lze kdykoli smazat, aplik
 
 ## Co opouští počítač
 
-- **Zvuk a otisky nikdy.** Přepis (WhisperX) i rozpoznávání mluvčích běží lokálně na grafické kartě.
+- **Otisky nikdy.** Rozpoznávání mluvčích po hlase běží jen lokálně.
+- **Zvuk jen s cloudovým přepisem.** Ve výchozím stavu (`[transcribe] provider = "whisperx"`) běží přepis lokálně
+  na grafické kartě a zvuk počítač neopouští. S `provider = "openai"` nebo `"elevenlabs"` – nebo příkazem
+  `compare-transcribe --provider …` – se **zvuk celé schůzky** (zkomprimovaný) posílá službě OpenAI nebo
+  ElevenLabs. To je třeba vědomě zvolit a kolegům říct.
 - **Text přepisu jen při zápisu přes Claude**: když je v `[summarize]` nastaven `provider = "anthropic"` nebo
   je Claude v `compare`, pošle se text přepisu (se jmény mluvčích) do Claude API společnosti Anthropic, aby
   z něj vznikl zápis. S `provider = "ollama"` a prázdným `compare` nic neodchází.
@@ -43,4 +47,5 @@ ta volba na stránce). Celý soubor `voiceprints.json` lze kdykoli smazat, aplik
 > v něm byla jména, pamatuje si aplikace hlasové otisky lidí, které jsem u nahrávky ručně pojmenoval –
 > 256 čísel popisujících hlas, žádný zvuk, uložené jen u mě a nikam se neposílají.
 > [Zápis z přepisu nechávám napsat i přes Claude API, tam jde text přepisu.]
+> [Přepis dělá služba OpenAI / ElevenLabs, tam jde i zvuk schůzky.]
 > Kdybys nechtěl/a být poznáván/a po hlase, dej mi vědět – otisky smažu a nové už nevzniknou.

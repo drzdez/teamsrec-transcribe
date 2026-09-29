@@ -133,7 +133,7 @@ Requirements: Python 3.12 (uv fetches it), NVIDIA driver 570+ for the CUDA 12.8 
 (`hf auth login`) with the terms of `pyannote/speaker-diarization-community-1` accepted. Models (~5 GB) download
 on first use into the HuggingFace cache.
 
-`bin	eamsrec-transcribe.cmd` runs the checkout's venv and finds the WinGet ffmpeg by itself; add `bin` to PATH to use the command from anywhere.
+`bin\teamsrec-transcribe.cmd` runs the checkout's venv and finds the WinGet ffmpeg by itself; add `bin` to PATH to use the command from anywhere.
 
 Tests: `uv run pytest`.
 

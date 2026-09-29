@@ -333,6 +333,39 @@ def unmerge_speakers(cfg: Config, rec: Recording) -> int:
     return back
 
 
+def do_transcribe_compare(cfg: Config, rec: Recording, provider_name: str) -> Path:
+    """Transcribe with another provider into side files - <stem>.transcript.<provider>.json and
+    <stem>.<provider>.txt - to compare it with the main transcript, which stays untouched. The user is named
+    from the microphone track like in a real run, so the texts read alike."""
+    from dataclasses import replace
+    from .export import write_exports
+    audio = _ensure_mix(rec)
+    ts = replace(cfg.transcribe, provider=provider_name)
+    lang = rec.sidecar.get("language") or ts.language
+    language = None if lang in ("auto", "", None) else lang
+    provider = get_provider(provider_name)
+    log.info("%s: comparison transcript with %s", rec.stem, provider_name)
+    res = provider.transcribe(audio, language=language, prompt=build_prompt(rec, ts.glossary), settings=ts,
+                              diarize=True)
+    mic = rec.track_path("mic")
+    named = {}
+    if cfg.user_name and mic and mic.exists() and rec.source != "onsite":
+        named = apply_mic_track(res.segments, mic, cfg.user_name)
+    out = rec.file(f".transcript.{provider_name}.json")
+    rec.write_json(out, {"format": 1, "provider": res.provider, "provider_version": res.provider_version,
+                         "model": res.model, "language": res.language, "created": utc_now_iso(),
+                         "timings": res.timings, "comparison": True,
+                         "languages": sorted({s.language or res.language for s in res.segments} | {res.language}),
+                         "speaker_sources": (["mic"] if named else []) + ["diarization"],
+                         "speakers": speaker_list(res.segments), "segments": [s.to_json() for s in res.segments]})
+    header = {"start": rec.sidecar.get("start"), "duration": f"{rec.sidecar.get('duration_s', 0) // 60} min",
+              "language": res.language, "provider": f"{res.provider} {res.model}",
+              "speakers": ", ".join(speaker_list(res.segments))}
+    write_exports(res.segments, rec.file(f".{provider_name}.txt"), None, title=f"{rec.title} ({provider_name})",
+                  header=header)
+    return out
+
+
 def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
     """Drop every segment of one speaker label from the transcript (typing, mouse clicks, breathing that the
     ASR turned into invented sentences). Recorded in `removed_speakers`; `transcribe --force` brings it back.
@@ -421,7 +454,9 @@ def _ensure_mix(rec: Recording) -> Path:
         return mix
     tracks = [p for p in (rec.track_path("sys"), rec.track_path("mic")) if p and p.exists()]
     if not tracks:
-        raise RecordingError(f"{rec.stem}: no audio (mix and tracks missing; audio purged?)")
+        purged = rec.sidecar.get("audio_purged")
+        raise RecordingError(f"{rec.stem}: no audio" + (f" (deleted by purge-audio on {purged}; the texts are kept)"
+                                                        if purged else " (mix and tracks missing)"))
     mix = rec.file("_mix.wav")
     log.info("%s: building mix from %d track(s)", rec.stem, len(tracks))
     mix_tracks(tracks, mix)
@@ -499,6 +534,7 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
         "speaker_sources": speaker_sources,
         "speakers": speaker_list(res.segments),
         "diarize_model": res.diarize_model,
+        "languages": sorted({s.language or res.language for s in res.segments} | {res.language}),
         "speaker_embeddings": embeddings,  # keyed by the final speaker names, unit vectors
         "voice_matches": voice_matches,
         "segments": [s.to_json() for s in res.segments],
@@ -689,6 +725,51 @@ def do_process_inbox(cfg: Config) -> list[Recording]:
     return imported
 
 
+AUDIO_PATTERNS = ("_sys.wav", "_mic.wav", "_mix.wav", "_screen*.mp4")  # what purge_audio deletes
+
+
+def audio_files(rec: Recording) -> list[Path]:
+    return sorted(p for pat in AUDIO_PATTERNS for p in rec.dir.glob(f"{rec.stem}{pat}") if p.is_file())
+
+
+def is_finished(rec: Recording) -> bool:
+    """Transcript, summary and every speaker named: nothing left that would need to hear the audio again."""
+    if not (rec.transcript_path.exists() and rec.summary_path.exists()):
+        return False
+    labels = rec.read_json(rec.transcript_path).get("speakers", [])
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    return not any((l.startswith("SPEAKER_") or l == "UNKNOWN") and not names.get(l) for l in labels)
+
+
+def purge_audio(cfg: Config, days: int, *, dry_run: bool = False, now: datetime | None = None) -> list[dict]:
+    """Delete the WAVs and window videos of recordings older than `days` that are finished (is_finished).
+    Transcript, exports, summary, names and the sidecar stay; the sidecar records `audio_purged`. Unfinished
+    recordings are left alone - naming a speaker needs the audio samples. Returns what was (or would be) freed."""
+    if days <= 0:
+        raise RecordingError("purge-audio needs a positive number of days")
+    now = now or datetime.now()
+    out = []
+    for rec in iter_recordings(cfg.out_dir):
+        start = rec.sidecar.get("start")
+        try:
+            age = (now - datetime.fromisoformat(start)).days if start else -1
+        except ValueError:
+            age = -1
+        files = audio_files(rec)
+        if age < days or not files or not is_finished(rec):
+            continue
+        size = sum(p.stat().st_size for p in files)
+        out.append({"stem": rec.stem, "age_days": age, "files": [p.name for p in files], "bytes": size})
+        if dry_run:
+            continue
+        for p in files:
+            p.unlink(missing_ok=True)
+        rec.sidecar["audio_purged"] = now.date().isoformat()
+        rec.save_sidecar()
+        log.info("%s: audio purged (%d files, %.0f MB)", rec.stem, len(files), size / 1e6)
+    return out
+
+
 def reset_names(rec: Recording) -> dict:
     """Forget the manual label -> person assignment of one recording (the labels change with a new transcript,
     and a wrong assignment must not survive the re-run). The old mapping goes to the log, nowhere else."""
@@ -697,6 +778,17 @@ def reset_names(rec: Recording) -> dict:
         log.info("%s: dropping the manual speaker names before a fresh transcript: %s", rec.stem, old)
         rec.speakers_path.unlink()
     return old
+
+
+def auto_purge(cfg: Config) -> list[dict]:
+    """[retention] audio_days > 0: run purge_audio after processing. 0 (default) keeps everything."""
+    if cfg.retention.audio_days <= 0:
+        return []
+    try:
+        return purge_audio(cfg, cfg.retention.audio_days)
+    except Exception as e:  # housekeeping must never fail a processing run
+        log.error("purge-audio: %s", e)
+        return []
 
 
 def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:

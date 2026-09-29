@@ -26,6 +26,7 @@ API
                                  (status polls it); force starts from scratch and drops the manual names
   POST /api/recognize            {"stem"} -> match unnamed labels against the voice prints collected since
   GET  /api/doc?stem=&file=      text of one document of the recording (transcript .txt, any .summary*.md)
+  GET  /api/help?doc=            user-guide | install | privacy: the Markdown from docs/ (or a link to GitHub)
   GET  /api/meeting/candidates?stem=   nearby Outlook items to link instead
   POST /api/meeting              {"stem", "action": confirm|detach|attach, "candidate"?} -> calendar link edits
   GET  /api/status               background job state + the event log (what the server did, newest last)
@@ -237,7 +238,10 @@ def recording_docs(rec: Recording) -> dict:
         summaries.append({"file": rec.summary_path.name, "label": "zápis (lokální model)"})
     for p in sorted(rec.dir.glob(f"{rec.stem}.summary.*.md")):
         summaries.append({"file": p.name, "label": f"zápis ({p.name[len(rec.stem) + 9:-3]})"})
-    return {"transcript": rec.file(".txt").name if rec.file(".txt").exists() else None, "summaries": summaries}
+    others = [{"file": p.name, "label": f"přepis ({p.name[len(rec.stem) + 1:-4]})"}
+              for p in sorted(rec.dir.glob(f"{rec.stem}.*.txt"))]
+    return {"transcript": rec.file(".txt").name if rec.file(".txt").exists() else None, "summaries": summaries,
+            "transcripts": others}
 
 
 def read_doc(rec: Recording, name: str) -> str:
@@ -248,6 +252,22 @@ def read_doc(rec: Recording, name: str) -> str:
     if not path.exists():
         raise RecordingError(f"{name} does not exist")
     return path.read_text(encoding="utf-8")
+
+
+HELP_DOCS = {"user-guide": "user-guide.md", "install": "install.md", "privacy": "privacy.md"}
+DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"  # the source checkout; an installed wheel has no docs
+DOCS_URL = "https://github.com/drzdez/teamsrec-transcribe/blob/main/docs/"
+
+
+def help_doc(name: str) -> dict:
+    """One of the guides for the page's help: the local file of this version, else its page on GitHub."""
+    fname = HELP_DOCS.get(name)
+    if not fname:
+        raise RecordingError(f"unknown help document {name!r} (available: {', '.join(HELP_DOCS)})")
+    path = DOCS_DIR / fname
+    if path.exists():
+        return {"doc": name, "text": path.read_text(encoding="utf-8")}
+    return {"doc": name, "url": DOCS_URL + fname}
 
 
 def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
@@ -576,6 +596,8 @@ def _handler(state: ReviewState, server_ref: dict):
                     self._json(people_rows(state.cfg))
                 elif u.path == "/api/person":
                     self._json(person_detail(state.cfg, (q.get("id") or [""])[0]))
+                elif u.path == "/api/help":
+                    self._json(help_doc((q.get("doc") or ["user-guide"])[0]))
                 elif u.path == "/api/doc":
                     rec = self._rec(q)
                     name = (q.get("file") or [""])[0]

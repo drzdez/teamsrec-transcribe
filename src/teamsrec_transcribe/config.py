@@ -19,6 +19,8 @@ class TranscribeSettings:
     provider: str = "whisperx"
     language: str = "auto"  # auto | BCP-47 code
     languages: tuple[str, ...] = ("cs", "sk", "en")  # with auto: detect only among these, on several 30 s windows
+    per_speaker_language: bool = True  # with auto: a speaker whose own speech is in another of `languages` is
+                                       # transcribed again in that language (mixed cs/sk meetings)
     model: str = "large-v3"
     compute_type: str = "float16"
     batch_size: int = 16
@@ -26,6 +28,8 @@ class TranscribeSettings:
     align: bool = True
     diarize: bool = True
     diarize_model: str = "pyannote/speaker-diarization-community-1"
+    openai_model: str = "gpt-4o-transcribe-diarize"  # provider = "openai" (cloud: the audio goes to OpenAI)
+    elevenlabs_model: str = "scribe_v2"                # provider = "elevenlabs" (cloud: the audio goes to ElevenLabs)
     glossary: tuple[str, ...] = ()
     device: str = "cuda"
 
@@ -42,6 +46,11 @@ class VoiceprintSettings:
     threshold: float = 0.55  # cosine similarity needed to name a label by voice (calibrated 2026-09-11, lab/FINDINGS.md)
     margin: float = 0.10  # ... and how far ahead of the runner-up person it must be
     min_seconds: float = 30.0  # labels with less speech are neither recognised nor enrolled
+
+
+@dataclass(frozen=True)
+class RetentionSettings:
+    audio_days: int = 0  # delete the audio + window videos of finished recordings older than this; 0 = keep
 
 
 @dataclass(frozen=True)
@@ -68,6 +77,7 @@ class Config:
     video: VideoSettings = field(default_factory=VideoSettings)
     voiceprints: VoiceprintSettings = field(default_factory=VoiceprintSettings)
     summarize: SummarizeSettings = field(default_factory=SummarizeSettings)
+    retention: RetentionSettings = field(default_factory=RetentionSettings)
     source_path: Path | None = None  # where the config was loaded from, None = defaults
 
     @property
@@ -120,6 +130,7 @@ def load_config(path: Path | None = None) -> Config:
         video=_build(VideoSettings, _section(data, "video")),
         voiceprints=_build(VoiceprintSettings, _section(data, "voiceprints")),
         summarize=_build(SummarizeSettings, _section(data, "summarize")),
+        retention=_build(RetentionSettings, _section(data, "retention")),
         source_path=path,
     )
 
@@ -187,4 +198,7 @@ language = "cs"              # language of the minutes
 ollama_think = false         # thinking mode for local models: slower, sometimes better
 ollama_max_ctx = 20480       # keep the whole model on the GPU (24 GB); longer transcripts are summarized in parts
 compare = []                 # e.g. ["anthropic:claude-opus-5"] -> extra <stem>.summary.claude-opus-5.md for comparison
+
+[retention]
+audio_days = 0               # delete audio + window videos of finished recordings after N days (0 = keep); texts stay
 """

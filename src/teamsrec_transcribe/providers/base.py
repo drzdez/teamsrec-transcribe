@@ -47,6 +47,7 @@ class ProviderResult:
     model: str
     timings: dict[str, float] = field(default_factory=dict)
     speaker_embeddings: dict[str, list[float]] | None = None  # per diarization label, for voice prints
+    speaker_languages: dict[str, str] = field(default_factory=dict)  # label -> language where it differs
     diarize_model: str = ""
 
 

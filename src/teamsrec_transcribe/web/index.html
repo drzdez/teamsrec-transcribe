@@ -33,6 +33,10 @@
   #events .ev.err .tx { color: var(--err); }
   #events .ev.busy .tx { color: var(--warn); }
   #events .empty-ev { color: var(--dim); }
+  #help { position: fixed; inset: 0; background: var(--bg); overflow-y: auto; z-index: 30; padding: 16px 20px 0; }
+  #help .helpBar { max-width: 1000px; margin: 0 auto 10px; display: flex; gap: 12px; align-items: center; }
+  #help main.doc { border-radius: 10px; }
+  main.doc a { color: var(--accent); }
   #dirty.changed { color: var(--warn); font-weight: 600; }
   #dirty.clean { color: var(--ok); }
   .tabs { display: flex; gap: 2px; margin-left: auto; }
@@ -138,6 +142,7 @@
   <div class="tabs">
     <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
+    <button id="helpBtn" type="button" title="uživatelská příručka, instalace a konfigurace, soukromí">Nápověda</button>
   </div>
 </header>
 <nav id="subtabs" class="subtabs">
@@ -165,6 +170,18 @@
   <span id="status"></span>
 </footer>
 <div id="events" hidden></div>
+<div id="help" hidden>
+  <div class="helpBar">
+    <strong>Nápověda</strong>
+    <select id="helpPick">
+      <option value="user-guide">Uživatelská příručka</option>
+      <option value="install">Instalace a konfigurace</option>
+      <option value="privacy">Soukromí a hlasové otisky</option>
+    </select>
+    <button id="helpClose" type="button" class="play">✕ Zavřít (Esc)</button>
+  </div>
+  <main id="helpMain" class="doc"></main>
+</div>
 <audio id="audio"></audio>
 
 <script>
@@ -303,8 +320,8 @@ function renderPick(jump) {
   for (const r of shown) {
     const o = document.createElement("option");
     o.value = r.stem;
-    o.textContent = `${fmtDate(r.start)}  ${r.title}  ${rowState(r).text}`
-      + (openOutside && r.stem === openOutside.stem ? "  · otevřená, mimo filtr" : "");
+    o.textContent = `${fmtDate(r.start)} – ${r.title} [${rowState(r).text}]`
+      + (openOutside && r.stem === openOutside.stem ? " (otevřená, mimo filtr)" : "");
     pick.appendChild(o);
   }
   if (current && shown.some(r => r.stem === current)) pick.value = current;
@@ -1001,23 +1018,31 @@ function showSub(/** @type {"speakers"|"transcript"|"summary"} */ which, render 
   main.hidden = !sp; docMain.hidden = sp;
   $("speakerButtons").hidden = !sp; $("tip").hidden = !sp; $("dirty").hidden = !sp;
   for (const b of $("subtabs").querySelectorAll("button")) b.classList.toggle("active", b.dataset.sub === which);
-  docPick.hidden = which !== "summary" || !review || !review.docs || review.docs.summaries.length < 2;
+  docPick.hidden = sp || docList().length < 2;
   if (render && !sp) renderDoc();
+}
+
+/** the documents of the open sub-tab: the transcript and comparison transcripts, or the summaries */
+function docList() {
+  if (!review || !review.docs) return [];
+  if (subTab === "transcript") {
+    const main = review.docs.transcript ? [{ file: review.docs.transcript, label: "přepis (hlavní)" }] : [];
+    return main.concat(review.docs.transcripts || []);
+  }
+  return subTab === "summary" ? review.docs.summaries : [];
 }
 
 async function renderDoc() {
   if (!review || !review.docs) { docMain.innerHTML = '<div class="empty">Nahrávka ještě nemá přepis.</div>'; return; }
   let file = null;
-  if (subTab === "transcript") file = review.docs.transcript;
-  else {
-    const list = review.docs.summaries;
-    if (list.length) {
-      if (!docPick.options.length || docPick.dataset.stem !== review.stem) {
-        docPick.innerHTML = list.map(d => `<option value="${escapeHtml(d.file)}">${escapeHtml(d.label)}</option>`).join("");
-        docPick.dataset.stem = review.stem;
-      }
-      file = docPick.value || list[0].file;
+  const list = docList();
+  if (list.length) {
+    const key = `${review.stem}:${subTab}`;
+    if (!docPick.options.length || docPick.dataset.stem !== key) {
+      docPick.innerHTML = list.map(d => `<option value="${escapeHtml(d.file)}">${escapeHtml(d.label)}</option>`).join("");
+      docPick.dataset.stem = key;
     }
+    file = docPick.value || list[0].file;
   }
   if (!file) { docMain.innerHTML = `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vytvoříte ho tlačítkem „Uložit a přegenerovat zápis“ na záložce Mluvčí."}</div>`; return; }
   docMain.innerHTML = '<div class="empty">Načítám…</div>';
@@ -1046,7 +1071,9 @@ function renderMarkdown(/** @type {string} */ md) {
   const inline = (/** @type {string} */ s) => escapeHtml(s)
     .replace(/`([^`]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>");
+    .replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, "$1<em>$2</em>")
+    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/&lt;(https?:\/\/[^\s&]+)&gt;/g, '<a href="$1">$1</a>');
   const lines = md.split(/\r?\n/);
   const out = [];
   let i = 0;
@@ -1115,6 +1142,39 @@ pick.onchange = () => { showTab("speakers", false); loadRecording(pick.value); }
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") stopAudio(); });
 // heartbeat: the server stops itself ~90 s after the last one, i.e. when this tab is closed
 filterInput.addEventListener("input", () => renderPick());
+
+// ---- help: the guides from docs/, shown over the page; links between them stay inside
+const helpBox = $("help"), helpMain = $("helpMain"), helpPick = /** @type {HTMLSelectElement} */ ($("helpPick"));
+
+async function openHelp(/** @type {string} */ doc) {
+  helpBox.hidden = false;
+  helpPick.value = doc;
+  helpMain.innerHTML = '<div class="empty">Načítám…</div>';
+  /** @type {any} */ let r;
+  try { r = await api(`/api/help?doc=${encodeURIComponent(doc)}`); }
+  catch (e) { helpMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; return; }
+  if (r.url) {  // no local docs folder (installed package): the same page on GitHub
+    helpMain.innerHTML = `<p>Nápověda k této instalaci je na webu: <a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.url)}</a></p>`;
+    return;
+  }
+  helpMain.innerHTML = renderMarkdown(r.text);
+  helpBox.scrollTop = 0;
+  for (const a of helpMain.querySelectorAll("a")) {
+    const href = a.getAttribute("href") || "";
+    const local = href.match(/(?:^|\/)(user-guide|install|privacy)\.md(?:#.*)?$/);
+    if (local) {
+      a.addEventListener("click", ev => { ev.preventDefault(); openHelp(local[1]); });
+    } else if (/^https?:/.test(href)) {
+      a.target = "_blank"; a.rel = "noopener";
+    }
+  }
+}
+
+function closeHelp() { helpBox.hidden = true; }
+$("helpBtn").onclick = () => openHelp(helpPick.value || "user-guide");
+$("helpClose").onclick = closeHelp;
+helpPick.onchange = () => openHelp(helpPick.value);
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !helpBox.hidden) closeHelp(); });
 setInterval(() => { fetch("/api/ping", { method: "POST" }).catch(() => {}); }, 15000);
 
 // ---- event log: the server says what it did, the page shows the newest line and reloads when needed

@@ -101,6 +101,59 @@ jména z obrazu. Váš hlas dostane jméno z `[user] name` v konfiguraci: ta č�
 diarizace, která se kryje s aktivitou mikrofonu, jste vy. Ostatní účastníci zůstávají `SPEAKER_XX`, dokud je
 nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikrofonní stopa není, jméno se nepoužije.
 
+### Jazyk podle mluvčího a vymyšlené věty
+
+Smíšená schůzka (vy česky, kolegové slovensky) dřív dostala jeden jazyk pro všechny a vaše čeština vyšla napůl
+slovensky („Tak ja bych možná začal“). Teď se po rozdělení mluvčích zjistí jazyk každého mluvčího z jeho vlastních
+replik (kdo mluví aspoň 20 s) a kdo jasně mluví jiným jazykem z `[transcribe] languages` než schůzka, toho
+repliky se přepíšou znovu v jeho jazyce. V přepisu má taková replika `language: cs`. Vypnout:
+`[transcribe] per_speaker_language = false`; platí jen s `language = "auto"`. Stojí to zhruba půl minuty navíc.
+
+Whisper občas „slyší“ větu v tichu, cvaknutí nebo hudbě – typicky „Ďakujem za pozornosť.“, „Titulky vytvořil…“
+nebo adresu webu. Takové repliky se vyhazují, stejně jako krátké repliky mnohem tišší než zbytek nahrávky
+(v logu: `dropped N invented replies`).
+
+### Mazání zvuku po čase
+
+Zvuk zabírá ~0,5 GB za hodinu (mikrofon, zvuk systému, mix, videa oken). Když je schůzka hotová – má přepis,
+zápis a všichni mluvčí jsou pojmenovaní –, zvuk už potřeba není:
+
+```
+teamsrec-transcribe purge-audio --older-than 90 --dry-run   # jen vypíše, co by se smazalo a kolik místa uvolní
+teamsrec-transcribe purge-audio --older-than 90             # smaže (zeptá se)
+```
+
+Smažou se `_sys.wav`, `_mic.wav`, `_mix.wav` a `_screen*.mp4`; přepis, titulky, zápisy, jména i sidecar
+zůstanou a sidecar si poznamená `audio_purged`. Nahrávky, kde někdo ještě není pojmenovaný, zůstávají celé
+(na stránce k nim potřebujete ukázky hlasu). Automaticky po každém `process`: `[retention] audio_days = 90`
+(výchozí `0` = nemazat). Smazaný zvuk už nejde znovu přepsat.
+
+### Přepis v cloudu (OpenAI, ElevenLabs)
+
+Výchozí přepis je lokální WhisperX na grafické kartě. Vedle něj jsou dva cloudové:
+
+| `[transcribe] provider` | model (`openai_model` / `elevenlabs_model`) | co umí |
+|---|---|---|
+| `whisperx` | `large-v3` | lokálně, slovník pojmů v nápovědě, detekce jazyka, hlasové otisky |
+| `openai` | `gpt-4o-transcribe-diarize` | mluvčí A/B/…, bez slovníku, bez jazyka, bez časů slov, bez otisků |
+| `elevenlabs` | `scribe_v2` | mluvčí, časy slov, jazyk; bez slovníku a bez otisků |
+
+**Cloud posílá zvuk schůzky ven** (viz [privacy.md](privacy.md)). Klíč se čte z proměnné prostředí
+`TEAMSREC_OPENAI_API_KEY` / `TEAMSREC_ELEVENLABS_API_KEY`, jinak z obvyklé `OPENAI_API_KEY` /
+`ELEVENLABS_API_KEY`. Zvuk se před odesláním zkomprimuje (Opus, OpenAI má limit 25 MB).
+
+Na zkoušku bez změny nastavení: `teamsrec-transcribe compare-transcribe <nahrávka> --provider openai` zapíše
+`<stem>.openai.txt` vedle hlavního přepisu (ten se nemění) a na stránce ho najdete v záložce Přepis ve výběru
+vpravo. První srovnání (standup 29. 9., slovenština, 16 min):
+
+| | čas | ukázka („Zdeněk, ty tam asi nemáš updates…“, „v štvrtok ste mali Archiboard?“, „mrknem“) |
+|---|---|---|
+| WhisperX (lokálně) | ~1,5 min | jméno ✓, „Štátok ste mali Archiboard?“ ✗, „mrknem“ ✓ |
+| ElevenLabs `scribe_v2` | 37 s | „Zdenek“ ✓, „v štvrtok ste mali Archibord?“ ✓, „mrknem“ ✓; zapisuje i „uhm“ a opakování, delší repliky |
+| OpenAI `gpt-4o-transcribe-diarize` | 3 min | „Zdaj niekdy“ ✗, „čo tak ste mali ArchiveBot“ ✗, „mrtnem“ ✗ |
+
+Nejpřesnější byl ElevenLabs, WhisperX těsně za ním a zdarma a bez odesílání zvuku; OpenAI výrazně horší.
+
 ### Hlasové otisky
 
 Otisky jsou biometrický údaj kolegů: ve výchozím stavu jsou **vypnuté** (`[voiceprints] enabled`, `config --init`

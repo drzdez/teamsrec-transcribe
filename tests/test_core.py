@@ -654,6 +654,142 @@ def test_voice_prints_are_off_unless_switched_on(tmp_path):
     assert not (tmp_path / "_speakers" / "voiceprints.json").exists()
 
 
+class _FakeResponse:
+    def __init__(self, body, status=200):
+        self.status_code, self._body, self.text = status, body, json.dumps(body)
+
+    def json(self):
+        return self._body
+
+
+def _cloud_setup(monkeypatch, tmp_path, env):
+    import requests
+    from teamsrec_transcribe.providers import cloud
+    monkeypatch.setenv(*env)
+    fake = tmp_path / "upload.webm"
+
+    def compress(audio, max_bytes, **k):  # the provider deletes the upload afterwards, so make a new one each time
+        fake.write_bytes(b"x")
+        return fake
+    monkeypatch.setattr(cloud, "compress_for_upload", compress)
+    for mod in ("teamsrec_transcribe.providers.openai_provider", "teamsrec_transcribe.providers.elevenlabs_provider"):
+        import importlib
+        monkeypatch.setattr(importlib.import_module(mod), "compress_for_upload", compress)
+    sent = {}
+
+    def post(url, headers=None, data=None, files=None, timeout=None):
+        sent.update(url=url, headers=headers, data=data, file=files["file"][0])
+        return sent["reply"]
+    monkeypatch.setattr(requests, "post", post)
+    return sent
+
+
+def test_elevenlabs_words_become_segments_with_speakers(monkeypatch, tmp_path):
+    from teamsrec_transcribe.providers import get_provider
+    sent = _cloud_setup(monkeypatch, tmp_path, ("ELEVENLABS_API_KEY", "k-el"))
+    words = [{"text": "Dobrý", "start": 0.0, "end": 0.4, "type": "word", "speaker_id": "speaker_1"},
+             {"text": " ", "start": 0.4, "end": 0.45, "type": "spacing", "speaker_id": "speaker_1"},
+             {"text": "den.", "start": 0.45, "end": 0.9, "type": "word", "speaker_id": "speaker_1"},
+             {"text": "(smích)", "start": 1.0, "end": 1.2, "type": "audio_event", "speaker_id": "speaker_2"},
+             {"text": "Ahoj", "start": 1.3, "end": 1.6, "type": "word", "speaker_id": "speaker_2"}]
+    sent["reply"] = _FakeResponse({"language_code": "ces", "language_probability": 0.97, "words": words})
+    res = get_provider("elevenlabs").transcribe(tmp_path / "a.wav", language=None, prompt=None,
+                                                settings=TranscribeSettings(), diarize=True)
+    assert sent["headers"] == {"xi-api-key": "k-el"} and sent["data"]["model_id"] == "scribe_v2"
+    assert sent["data"]["diarize"] == "true" and "language_code" not in sent["data"]
+    assert res.language == "cs" and res.speaker_embeddings is None
+    assert [(s.speaker, s.text) for s in res.segments] == [("SPEAKER_00", "Dobrý den."), ("SPEAKER_01", "Ahoj")]
+    assert [w.word for w in res.segments[0].words] == ["Dobrý", "den."]
+
+
+def test_openai_diarized_segments_and_errors(monkeypatch, tmp_path):
+    from teamsrec_transcribe.providers import ProviderError, get_provider
+    sent = _cloud_setup(monkeypatch, tmp_path, ("TEAMSREC_OPENAI_API_KEY", "k-oa"))
+    monkeypatch.setenv("OPENAI_API_KEY", "not-this-one")
+    sent["reply"] = _FakeResponse({"segments": [
+        {"id": "1", "start": 0.0, "end": 2.0, "text": "Ahoj všichni.", "speaker": "A", "type": "transcript.text.segment"},
+        {"id": "2", "start": 2.1, "end": 3.0, "text": "Čau.", "speaker": "B", "type": "transcript.text.segment"},
+        {"id": "3", "start": 3.1, "end": 4.0, "text": "Jdeme na to.", "speaker": "A", "type": "transcript.text.segment"}],
+        "usage": {"type": "duration", "seconds": 4}})
+    res = get_provider("openai").transcribe(tmp_path / "a.wav", language="cs", prompt="glosář",
+                                            settings=TranscribeSettings(), diarize=True)
+    assert sent["headers"] == {"Authorization": "Bearer k-oa"}, "the teamsrec-specific key wins"
+    assert sent["data"] == {"model": "gpt-4o-transcribe-diarize", "response_format": "diarized_json",
+                            "chunking_strategy": "auto"}, "the diarize model takes neither language nor prompt"
+    assert [s.speaker for s in res.segments] == ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00"]
+    assert res.language == "cs" and res.segments[1].text == "Čau."
+    sent["reply"] = _FakeResponse({"error": {"message": "bad key"}}, status=401)
+    with pytest.raises(ProviderError, match="OpenAI 401"):
+        get_provider("openai").transcribe(tmp_path / "a.wav", language=None, prompt=None,
+                                          settings=TranscribeSettings(), diarize=True)
+
+
+def test_cloud_provider_without_a_key_says_which_variable(monkeypatch, tmp_path):
+    from teamsrec_transcribe.providers import ProviderError, get_provider
+    for v in ("TEAMSREC_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY"):
+        monkeypatch.delenv(v, raising=False)
+    with pytest.raises(ProviderError, match="TEAMSREC_ELEVENLABS_API_KEY"):
+        get_provider("elevenlabs").transcribe(tmp_path / "a.wav", language=None, prompt=None,
+                                              settings=TranscribeSettings(), diarize=True)
+
+
+def test_invented_replies_are_recognised():
+    from teamsrec_transcribe.providers.whisperx_provider import is_hallucination
+    for junk in ("Ďakujem za pozornosť.", "Děkuji za pozornost!", "Dakujem vám za pozornost", "Konec.",
+                 "www.hradeckralove.org", "Titulky vytvořil JohnyX", "Thank you for watching!"):
+        assert is_hallucination(junk), junk
+    for real in ("Ďakujem za pozornosť, a teraz k rozpočtu na budúci rok.", "Konec sprintu je v piatok.",
+                 "Dobrý ráno.", "A to znamená, že já ten princip budu rolovat na všechny repa."):
+        assert not is_hallucination(real), real
+    assert is_hallucination("Pojmy ČNES, ÚJKN 2016", level_db=-36.4, median_db=-26.6), "short and far too quiet"
+    assert not is_hallucination("Pojmy ČNES, ÚJKN 2016", level_db=-19.0, median_db=-26.6)
+    assert not is_hallucination("A tohle je dlouhá věta, kterou někdo řekl hodně potichu do mikrofonu.",
+                                level_db=-40.0, median_db=-26.6), "long replies are speech even when quiet"
+
+
+def test_speaker_language_choice():
+    from teamsrec_transcribe.providers.whisperx_provider import choose_speaker_languages
+    votes = {"SPEAKER_00": [{"sk": .7, "cs": .25}], "SPEAKER_01": [{"cs": 1.0}, {"cs": .9, "sk": .1}],
+             "SPEAKER_02": [{"cs": .45, "sk": .4}], "SPEAKER_03": []}
+    assert choose_speaker_languages(votes, "sk", ("cs", "sk", "en")) == {"SPEAKER_01": "cs"}
+    assert choose_speaker_languages(votes, "cs", ("cs", "sk", "en")) == {"SPEAKER_00": "sk"}
+
+
+def test_purge_audio_deletes_only_finished_old_recordings(tmp_path):
+    from teamsrec_transcribe.pipeline import do_transcribe, purge_audio
+    cfg = Config(out_dir=tmp_path)
+    done = _make_transcribed(tmp_path)                                  # 2026-09-04, speakers unnamed so far
+    rec2 = _make_transcribed(tmp_path, stem="2026-09-05_1000_dalsi")    # stays unfinished
+    for r in (done, rec2):
+        r.summary_path.write_text("# zápis\n", encoding="utf-8")
+        r.file("_screen1.mp4").write_bytes(b"v" * 10)
+    done.write_json(done.speakers_path, {"SPEAKER_00": "petr", "SPEAKER_01": "jana"})
+    now = datetime(2026, 12, 31)
+    assert [r["stem"] for r in purge_audio(cfg, 90, dry_run=True, now=now)] == [done.stem]
+    assert done.mix_path.exists(), "a dry run deletes nothing"
+    assert purge_audio(cfg, 200, now=now) == [], "younger than the limit"
+    out = purge_audio(cfg, 90, now=now)
+    assert out[0]["files"] == [f"{done.stem}_mix.wav", f"{done.stem}_screen1.mp4"] and out[0]["bytes"] > 0
+    assert not done.mix_path.exists() and not done.file("_screen1.mp4").exists()
+    for kept in (done.transcript_path, done.summary_path, done.speakers_path, done.stem_path.with_suffix(".json")):
+        assert kept.exists(), kept.name
+    assert Recording.load(done.stem_path.with_suffix(".json")).sidecar["audio_purged"] == "2026-12-31"
+    assert rec2.mix_path.exists(), "unnamed speakers still need their audio samples"
+    with pytest.raises(RecordingError, match="purge-audio"):
+        do_transcribe(cfg, Recording.load(done.stem_path.with_suffix(".json")), force=True)
+    with pytest.raises(RecordingError):
+        purge_audio(cfg, 0)
+
+
+def test_help_documents_come_from_the_docs_folder():
+    from teamsrec_transcribe.web.review import help_doc
+    for name in ("user-guide", "install", "privacy"):
+        d = help_doc(name)
+        assert d["doc"] == name and d["text"].startswith("#"), name
+    with pytest.raises(RecordingError, match="unknown help document"):
+        help_doc("../README")
+
+
 def test_voiceprint_skips_a_print_that_adds_nothing(tmp_path):
     from teamsrec_transcribe.voiceprints import Voiceprints
     vp = Voiceprints.load(tmp_path)
@@ -887,7 +1023,11 @@ def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
 def test_recording_docs_and_read_doc(tmp_path):
     from teamsrec_transcribe.web.review import read_doc, recording_docs
     rec = _make_transcribed(tmp_path)
-    assert recording_docs(rec) == {"transcript": None, "summaries": [{"file": f"{rec.stem}.summary.md", "label": "zápis (lokální model)"}]}
+    assert recording_docs(rec) == {"transcript": None, "summaries": [{"file": f"{rec.stem}.summary.md", "label": "zápis (lokální model)"}],
+                                   "transcripts": []}
+    (rec.dir / f"{rec.stem}.elevenlabs.txt").write_text("x", encoding="utf-8")
+    assert recording_docs(rec)["transcripts"] == [{"file": f"{rec.stem}.elevenlabs.txt", "label": "přepis (elevenlabs)"}]
+    (rec.dir / f"{rec.stem}.elevenlabs.txt").unlink()
     rec.file(".txt").write_text("# T\n[00:00:00] Jana: Ahoj\n", encoding="utf-8")
     (rec.dir / f"{rec.stem}.summary.claude-opus-5.md").write_text("# T\n", encoding="utf-8")
     d = recording_docs(rec)

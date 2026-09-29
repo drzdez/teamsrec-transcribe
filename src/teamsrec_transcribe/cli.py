@@ -140,6 +140,48 @@ def export(ctx: typer.Context, target: str, txt: bool = typer.Option(True), srt:
         typer.echo(p)
 
 
+@app.command("purge-audio")
+@_errors
+def purge_audio_cmd(ctx: typer.Context,
+                    older_than: Optional[int] = typer.Option(None, help="days; default [retention] audio_days"),
+                    dry_run: bool = typer.Option(False, "--dry-run", help="only list what would be deleted"),
+                    yes: bool = typer.Option(False, "--yes", help="do not ask")):
+    """Delete the audio and window videos of finished recordings (transcript + summary + all speakers named)
+    older than N days. Transcripts, summaries and names stay."""
+    from .pipeline import purge_audio
+    cfg = _cfg(ctx)
+    days = older_than if older_than is not None else cfg.retention.audio_days
+    if days <= 0:
+        raise typer.BadParameter("give --older-than DAYS or set [retention] audio_days")
+    plan = purge_audio(cfg, days, dry_run=True)
+    total = sum(r["bytes"] for r in plan)
+    for r in plan:
+        typer.echo(f"{r['stem']:60s} {r['age_days']:4d} d  {r['bytes'] / 1e6:8.0f} MB  {len(r['files'])} files")
+    typer.echo(f"{len(plan)} recordings, {total / 1e9:.2f} GB")
+    if dry_run or not plan:
+        return
+    if not yes and not typer.confirm("Delete this audio for good?", default=False):
+        raise typer.Exit(1)
+    done = purge_audio(cfg, days)
+    typer.echo(f"deleted: {len(done)} recordings, {sum(r['bytes'] for r in done) / 1e9:.2f} GB freed")
+
+
+@app.command("compare-transcribe")
+@_errors
+def compare_transcribe(ctx: typer.Context,
+                       target: str = typer.Argument(..., help="stem or recording file"),
+                       provider: str = typer.Option(..., help="openai | elevenlabs | whisperx")):
+    """Transcribe with another provider into <stem>.transcript.<provider>.json + <stem>.<provider>.txt, to compare
+    with the main transcript (which is not touched). Cloud providers send the audio to their service."""
+    from .pipeline import do_transcribe_compare, resolve_target
+    _require_ffmpeg()
+    cfg = _cfg(ctx)
+    rec = resolve_target(cfg, target)
+    out = do_transcribe_compare(cfg, rec, provider)
+    typer.echo(out)
+    typer.echo(rec.file(f".{provider}.txt"))
+
+
 @app.command("label-speakers")
 @_errors
 def label_speakers(ctx: typer.Context, target: str):
@@ -307,6 +349,7 @@ def process(ctx: typer.Context, target: Optional[str] = typer.Argument(None, hel
         rec = resolve_target(cfg, target)
         do_process(cfg, rec, force=force)
         typer.echo(rec.stem_path)
+        _auto_purge(cfg)
         return
     imported = do_process_inbox(cfg)
     for r in imported:
@@ -320,6 +363,15 @@ def process(ctx: typer.Context, target: Optional[str] = typer.Argument(None, hel
             typer.echo(f"done {rec.stem}")
         except Exception as e:
             log.error("%s failed: %s", rec.stem, e)
+    _auto_purge(cfg)
+
+
+def _auto_purge(cfg) -> None:
+    from .pipeline import auto_purge
+    freed = auto_purge(cfg)
+    if freed:
+        typer.echo(f"purge-audio: {len(freed)} recordings older than {cfg.retention.audio_days} days, "
+                   f"{sum(r['bytes'] for r in freed) / 1e9:.2f} GB freed")
 
 
 @app.command("list")

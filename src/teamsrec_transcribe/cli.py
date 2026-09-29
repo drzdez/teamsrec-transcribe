@@ -347,10 +347,14 @@ def config_cmd(ctx: typer.Context, init: bool = typer.Option(False, help="write 
                                 default="", show_default=False).strip()
             outlook = typer.confirm("Read meeting titles and participants from the classic Outlook calendar on this PC "
                                     "(local COM access, nothing leaves the machine)?", default=False)
+            voice = typer.confirm("Recognise people by voice? This stores voice prints of your colleagues on this PC "
+                                  "(biometric data - tell them, see docs/privacy.md; each person can opt out later)",
+                                  default=False)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(DEFAULT_TOML.format(out_dir=str(cfg.out_dir).replace("\\", "/"),
                                                 user_name=name.replace('"', "'"),
-                                                outlook="true" if outlook else "false"), encoding="utf-8")
+                                                outlook="true" if outlook else "false",
+                                                voiceprints="true" if voice else "false"), encoding="utf-8")
             typer.echo(f"written: {path}")
         return
     typer.echo(f"config file: {cfg.source_path or f'(none, defaults; would read {path})'}")

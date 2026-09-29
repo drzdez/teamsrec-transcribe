@@ -103,6 +103,10 @@ nepojmenujete přes `label-speakers`. U přehrávání (*Record playback*) mikro
 
 ### Hlasové otisky
 
+Otisky jsou biometrický údaj kolegů: ve výchozím stavu jsou **vypnuté** (`[voiceprints] enabled`, `config --init`
+se zeptá) a kdo nechce být poznáván po hlase, tomu v záložce Lidé zrušte zaškrtnutí ve sloupci Hlas – otisky se
+hned smažou a nové nevzniknou. Co se ukládá, kam, co opouští počítač a text pro kolegy: [privacy.md](privacy.md).
+
 Koho jednou pojmenujete (na stránce nebo přes `label-speakers`), toho další nahrávky poznají po hlase samy:
 **potvrzením** jména se uloží hlasový otisk z diarizace do `_speakers\voiceprints.json` (jen na tomto počítači,
 nejvýš 10 otisků na osobu, a jen takové, které přidají něco nového – skoro shodný vzorek se zahodí).

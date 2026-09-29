@@ -5,7 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from teamsrec_transcribe.config import Config, TranscribeSettings, load_config, with_overrides
+from teamsrec_transcribe.config import (Config, TranscribeSettings, VoiceprintSettings, load_config,
+                                        with_overrides)
+
+VP_ON = VoiceprintSettings(enabled=True)  # voice prints are opt-in; tests that need them say so
 from teamsrec_transcribe.export import to_srt, to_txt
 from teamsrec_transcribe.importer import derive_metadata
 from teamsrec_transcribe.prompt import build_prompt
@@ -208,7 +211,9 @@ def test_config_user_name(tmp_path):
     p = tmp_path / "t.toml"
     p.write_text('[user]\nname = " Jan Novák "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
     assert load_config(p).user_name == "Jan Novák"
-    assert Config().user_name == "" and Config().voiceprints.enabled and 0 < Config().voiceprints.threshold < 1
+    assert Config().user_name == "" and not Config().voiceprints.enabled and 0 < Config().voiceprints.threshold < 1
+    p.write_text('[voiceprints]\nenabled = true\n', encoding="utf-8")
+    assert load_config(p).voiceprints.enabled  # opt in in the config
     p.write_text('[voiceprints]\nenabled = false\nthreshold = 0.7\n', encoding="utf-8")
     v = load_config(p).voiceprints
     assert (v.enabled, v.threshold, v.margin, v.min_seconds) == (False, 0.7, 0.1, 30)
@@ -506,7 +511,7 @@ def test_recognize_voices_from_stored_embeddings(tmp_path):
     from teamsrec_transcribe.people import People
     from teamsrec_transcribe.pipeline import recognize_voices
     from teamsrec_transcribe.voiceprints import Voiceprints
-    cfg = Config(out_dir=tmp_path)
+    cfg = Config(out_dir=tmp_path, voiceprints=VP_ON)
     rec = _make_transcribed(tmp_path)
     with pytest.raises(Exception):
         recognize_voices(cfg, rec)  # no embeddings stored
@@ -538,7 +543,7 @@ def test_merge_same_person_folds_labels_and_keeps_distinct_prints(tmp_path):
     from teamsrec_transcribe.people import People
     from teamsrec_transcribe.pipeline import merge_same_person, same_person_groups
     from teamsrec_transcribe.voiceprints import Voiceprints
-    cfg = Config(out_dir=tmp_path)
+    cfg = Config(out_dir=tmp_path, voiceprints=VP_ON)
     rec = _make_transcribed(tmp_path)
     ppl = People.load(tmp_path); ppl.ensure("Jana Nováková"); ppl.save()
     data = rec.read_json(rec.transcript_path)
@@ -604,6 +609,49 @@ def test_video_names_that_match_no_participant_are_dropped():
     # without somebody to compare against there is nothing better to go on)
     kept = keep_video_names(found, [])
     assert list(kept) == ["Marián Bobrík", "Miory Baotnbnsc", "onen Boork"]
+
+
+def test_a_person_can_opt_out_of_voice_recognition(tmp_path):
+    """Voice prints are biometric data: whoever does not want them gets none, and the old ones go right away."""
+    from teamsrec_transcribe.pipeline import enroll_names
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import save_people
+    cfg = Config(out_dir=tmp_path, voiceprints=VP_ON)
+    rec = _make_transcribed(tmp_path)
+    data = rec.read_json(rec.transcript_path)
+    data["segments"][0]["end"] = 40
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0, 0.0]}
+    rec.write_json(rec.transcript_path, data)
+    ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.save()
+    assert enroll_names(cfg, rec, {"SPEAKER_00": "petr-svoboda"}) == 1
+
+    rows = People.load(tmp_path).to_json()
+    rows[0]["voiceprint"] = False                      # Petr said no
+    out = save_people(cfg, rows)
+    assert out[0]["voiceprint"] is False and out[0]["prints"] == 0
+    assert Voiceprints.load(tmp_path).count("petr-svoboda") == 0, "his prints are deleted at once"
+    assert People.load(tmp_path).get("petr-svoboda").voiceprint is False, "and the wish is remembered"
+    other = _make_transcribed(tmp_path, stem="2026-09-05_1000_dalsi")
+    d2 = other.read_json(other.transcript_path)
+    d2["segments"][0]["end"] = 40
+    d2["speaker_embeddings"] = {"SPEAKER_00": [0.9, 0.1, 0.0]}
+    other.write_json(other.transcript_path, d2)
+    assert enroll_names(cfg, other, {"SPEAKER_00": "petr-svoboda"}) == 0, "no new prints either"
+
+
+def test_voice_prints_are_off_unless_switched_on(tmp_path):
+    from teamsrec_transcribe.pipeline import enroll_names
+    from teamsrec_transcribe.people import People
+    cfg = Config(out_dir=tmp_path)                     # a fresh install that was not asked
+    rec = _make_transcribed(tmp_path)
+    data = rec.read_json(rec.transcript_path)
+    data["segments"][0]["end"] = 40
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0, 0.0]}
+    rec.write_json(rec.transcript_path, data)
+    ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.save()
+    assert enroll_names(cfg, rec, {"SPEAKER_00": "petr-svoboda"}) == 0
+    assert not (tmp_path / "_speakers" / "voiceprints.json").exists()
 
 
 def test_voiceprint_skips_a_print_that_adds_nothing(tmp_path):
@@ -763,7 +811,7 @@ def test_automatic_names_do_not_reach_the_shared_registry(tmp_path, monkeypatch)
     from teamsrec_transcribe.people import People
     from teamsrec_transcribe.pipeline import _voiceprints_step
     from teamsrec_transcribe.voiceprints import Voiceprints
-    cfg = Config(out_dir=tmp_path, user_name="Jan Novák")
+    cfg = Config(out_dir=tmp_path, user_name="Jan Novák", voiceprints=VP_ON)
     rec = _make_transcribed(tmp_path)
     ppl = People.load(tmp_path); ppl.ensure("Petr Svoboda"); ppl.save()
     vp = Voiceprints.load(tmp_path)
@@ -782,7 +830,7 @@ def test_automatic_names_do_not_reach_the_shared_registry(tmp_path, monkeypatch)
 def test_saving_a_name_confirms_it_and_stores_the_print(tmp_path):
     from teamsrec_transcribe.voiceprints import Voiceprints
     from teamsrec_transcribe.web.review import build_review, save_names
-    cfg = Config(out_dir=tmp_path)
+    cfg = Config(out_dir=tmp_path, voiceprints=VP_ON)
     rec = _make_transcribed(tmp_path)
     data = rec.read_json(rec.transcript_path)
     data["segments"][0]["end"] = 40  # long enough for a print

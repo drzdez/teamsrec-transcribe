@@ -419,15 +419,28 @@ def people_rows(cfg: Config) -> dict:
             "path": str(people.path)}
 
 
+def _drop_opted_out_prints(cfg: Config, people: People) -> list[str]:
+    """Somebody opted out of voice recognition: their prints go right away, not at the next enrolment."""
+    vp = Voiceprints.load(cfg.out_dir)
+    gone = [pid for pid in people.no_voiceprint() if vp.count(pid)]
+    for pid in gone:
+        vp.forget(pid)
+    if gone:
+        vp.save()
+        log.info("voice prints deleted on request: %s", ", ".join(gone))
+    return gone
+
+
 def save_people(cfg: Config, rows: list[dict], stem: str | None = None) -> list[dict]:
     people = People.load(cfg.out_dir, cfg.people_display)
     people.replace_all(rows)
     people.save()
+    _drop_opted_out_prints(cfg, people)
     if stem:
         rec = resolve_recording(stem, cfg.out_dir)
         if rec.transcript_path.exists():
             do_export(cfg, rec)
-    return people.to_json()
+    return people_rows(cfg)["people"]  # with the print counts, so the page shows what is left
 
 
 # ---------------------------------------------------------------- server

@@ -174,7 +174,7 @@
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
  * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
- * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number}} Person
+ * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number,voiceprint?:boolean}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
  * @typedef {{subject:string,start:string,end:string,teams:boolean,attendees?:string[],organizer?:string}} Candidate
@@ -801,7 +801,9 @@ function renderPeople() {
   peopleMain.innerHTML = `<p class="people-help">Co se píše do přepisu a zápisu: výchozí volba je <b>${MODE_LABEL[displayDefault] || displayDefault}</b>
     (nastavení <code>[people] display</code> v konfiguraci); u osoby ji lze změnit. Přezdívka bez vyplnění znamená jméno.
     Aliasy jsou další podoby jména, třeba jak ho ukazuje Teams. Sloupec Hlas = počet uložených hlasových otisků
-    (vznikají při pojmenování; podle nich se lidé poznají v dalších nahrávkách). „Sloučit do…“ spojí dva zápisy téhož člověka.</p>`;
+    (vznikají až potvrzením jména; podle nich se lidé poznají v dalších nahrávkách). Kdo si nepřeje být poznáván
+    po hlase, tomu zrušte zaškrtnutí – po Uložit lidi se jeho otisky smažou a nové nevzniknou.
+    „Sloučit do…“ spojí dva zápisy téhož člověka.</p>`;
   const t = document.createElement("table");
   t.innerHTML = `<thead><tr><th>Jméno</th><th>Příjmení</th><th>Přezdívka</th><th>V zápisu</th><th>Aliasy</th><th>Hlas</th><th>Sloučit</th><th></th></tr></thead>`;
   const tb = document.createElement("tbody");
@@ -834,9 +836,13 @@ function personRow(p) {
   const al = document.createElement("input"); al.type = "text"; al.value = (p.aliases || []).join(", "); al.placeholder = "Petr Svoboda (NG)"; al.dataset.key = "aliases";
   tdAl.appendChild(al); tr.appendChild(tdAl);
   const tdPr = document.createElement("td");
+  const ok = document.createElement("input"); ok.type = "checkbox"; ok.dataset.key = "voiceprint";
+  ok.checked = p.voiceprint !== false;
+  ok.title = "poznávat po hlase (ukládat hlasový otisk); zrušení smaže jeho otisky při Uložit lidi";
+  tdPr.appendChild(ok);
   if (p.id) {
     const b = document.createElement("button"); b.type = "button"; b.className = "link";
-    b.textContent = `${p.prints || 0} · detail`; b.title = "uložené hlasové otisky a ukázky";
+    b.textContent = ` ${p.prints || 0} · detail`; b.title = "uložené hlasové otisky a ukázky";
     b.onclick = () => openPerson(p.id);
     tdPr.appendChild(b);
   }
@@ -865,7 +871,8 @@ function collectPeople() {
     const get = (/** @type {string} */ k) => /** @type {HTMLInputElement|HTMLSelectElement|null} */ (row.querySelector(`[data-key="${k}"]`));
     out.push({ id: row.dataset.id || "", first: get("first")?.value.trim() || "", last: get("last")?.value.trim() || "",
       nick: get("nick")?.value.trim() || "", display: get("display")?.value || "",
-      aliases: (get("aliases")?.value || "").split(",").map(s => s.trim()).filter(Boolean) });
+      aliases: (get("aliases")?.value || "").split(",").map(s => s.trim()).filter(Boolean),
+      voiceprint: /** @type {HTMLInputElement|null} */ (get("voiceprint"))?.checked !== false });
   }
   return out;
 }

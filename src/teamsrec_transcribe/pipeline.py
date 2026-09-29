@@ -268,7 +268,8 @@ def merge_same_person(cfg: Config, rec: Recording) -> dict:
     for pid, labels in groups.items():
         keep = max(labels, key=lambda l: (secs.get(l, 0.0), l))
         gone = [l for l in labels if l != keep]
-        if vp is not None and people.get(pid):  # an unregistered literal name has nowhere to store prints
+        person = people.get(pid)
+        if vp is not None and person and person.voiceprint:  # unregistered names / opted-out people: no prints
             for label in [keep, *gone]:
                 vec = emb.get(label)
                 if vec and secs.get(label, 0.0) >= cfg.voiceprints.min_seconds:
@@ -562,6 +563,8 @@ def enroll_names(cfg: Config, rec: Recording, names: dict[str, str]) -> int:
     """Store voice prints for labels that just got a person (review page, label-speakers)."""
     if not cfg.voiceprints.enabled or not rec.transcript_path.exists():
         return 0
+    opted_out = People.load(cfg.out_dir, cfg.people_display).no_voiceprint()
+    names = {lab: pid for lab, pid in names.items() if pid not in opted_out}
     vp = Voiceprints.load(cfg.out_dir)
     added = enroll_from_recording(vp, rec.read_json(rec.transcript_path), names, rec.stem, cfg.voiceprints.min_seconds)
     if added:

@@ -38,7 +38,7 @@ class VideoSettings:
 
 @dataclass(frozen=True)
 class VoiceprintSettings:
-    enabled: bool = True  # store prints when labels get names, recognise unnamed labels on new recordings
+    enabled: bool = False  # voice prints are biometric data of colleagues: opt in (config --init asks)
     threshold: float = 0.55  # cosine similarity needed to name a label by voice (calibrated 2026-09-11, lab/FINDINGS.md)
     margin: float = 0.10  # ... and how far ahead of the runner-up person it must be
     min_seconds: float = 30.0  # labels with less speech are neither recognised nor enrolled
@@ -174,7 +174,7 @@ enabled = true
 fps = 2
 
 [voiceprints]
-enabled = true               # recognise people by voice from earlier named recordings (local file _speakers/voiceprints.json)
+enabled = {voiceprints}              # recognise people by voice (biometric data of colleagues, local file _speakers/voiceprints.json; docs/privacy.md)
 threshold = 0.55             # cosine similarity needed; margin = lead over the runner-up
 margin = 0.10
 min_seconds = 30             # a speaker must talk this long before their voice is compared or stored

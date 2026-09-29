@@ -42,6 +42,7 @@ class Person:
     nick: str = ""
     display: str = ""  # "" = use the default from the config
     aliases: list[str] = field(default_factory=list)  # other spellings, e.g. how Teams shows the name
+    voiceprint: bool = True  # False = this person asked not to be recognised by voice: no prints are kept
 
     @property
     def full(self) -> str:
@@ -86,7 +87,8 @@ class People:
             for p in data.get("people", []):
                 self.people.append(Person(id=p["id"], first=p.get("first", ""), last=p.get("last", ""),
                                           nick=p.get("nick", ""), display=p.get("display", ""),
-                                          aliases=list(p.get("aliases", []))))
+                                          aliases=list(p.get("aliases", [])),
+                                          voiceprint=bool(p.get("voiceprint", True))))
 
     @classmethod
     def load(cls, out_dir: Path, default_mode: str = "nick") -> "People":
@@ -194,6 +196,10 @@ class People:
     def to_json(self) -> list[dict]:
         return [asdict(p) for p in self.people]
 
+    def no_voiceprint(self) -> set[str]:
+        """Ids of the people who opted out of voice recognition."""
+        return {p.id for p in self.people if not p.voiceprint}
+
     def replace_all(self, rows: list[dict]) -> None:
         """Bulk update from the page: keeps ids, drops rows without any name."""
         out: list[Person] = []
@@ -209,5 +215,6 @@ class People:
             display = str(r.get("display") or "")
             aliases = [a.strip() for a in (r.get("aliases") or []) if str(a).strip()]
             out.append(Person(id=pid, first=first, last=last, nick=nick,
-                              display=display if display in DISPLAY_MODES else "", aliases=aliases))
+                              display=display if display in DISPLAY_MODES else "", aliases=aliases,
+                              voiceprint=bool(r.get("voiceprint", True))))
         self.people = out

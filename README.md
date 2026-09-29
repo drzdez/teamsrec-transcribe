@@ -59,6 +59,13 @@ user's own tile: while the user talks, the outline stays on whoever spoke before
 window count only when they match a participant of the meeting - OCR of a tile label invents people, and an
 anonymous `SPEAKER_03` that voice prints or one click can name is worth more than a made-up one.
 
+## Privacy
+
+Voice prints are biometric data of colleagues: they are **off by default** (`config --init` asks), stored only
+after a person confirms a name, kept only on this machine, and anyone can opt out (the People tab deletes their
+prints at once and no new ones are made). What leaves the machine: nothing, except the transcript text when a
+summary is written through the Claude API. Details and a note to send to the team: [docs/privacy.md](docs/privacy.md).
+
 ## Configuration
 
 One TOML file shared with teamsrec-capture: `%APPDATA%\teamsrec\teamsrec.toml` (`~/.config/teamsrec/teamsrec.toml`

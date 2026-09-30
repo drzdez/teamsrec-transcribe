@@ -14,6 +14,8 @@ test("naming speakers: heading follows the fields, a known person fills them, sa
   await waitFor(() => cards(p).length === 3, "three speaker cards");
   const clean = () => p.$("dirty").classList.contains("clean");
   assert.ok(clean(), "nothing changed yet");
+  assert.match(p.doc.querySelector(".langLine").textContent, /Jazyk přepisu: čeština/);
+  assert.equal(cardOf(p, "SPEAKER_00").querySelector(".chip.lang").textContent, "čeština");
 
   const s0 = cardOf(p, "SPEAKER_00");
   const first = s0.querySelector('[data-key="first"]');

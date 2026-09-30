@@ -1,0 +1,18 @@
+[package]
+name = "teamsrec-review"
+version = "0.1.0"
+description = "teamsrec review page as a desktop window (Tauri shell around the same page and server)"
+edition = "2021"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+serde_json = "1"
+
+[profile.release]
+strip = true
+lto = true

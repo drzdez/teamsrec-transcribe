@@ -138,9 +138,10 @@ Výchozí přepis je lokální WhisperX na grafické kartě. Vedle něj jsou dva
 | `openai` | `gpt-4o-transcribe-diarize` | mluvčí A/B/…, bez slovníku, bez jazyka, bez časů slov, bez otisků |
 | `elevenlabs` | `scribe_v2` | mluvčí, časy slov, jazyk; bez slovníku a bez otisků |
 
-**Cloud posílá zvuk schůzky ven** (viz [privacy.md](privacy.md)). Klíč se čte z proměnné prostředí
-`TEAMSREC_OPENAI_API_KEY` / `TEAMSREC_ELEVENLABS_API_KEY`, jinak z obvyklé `OPENAI_API_KEY` /
-`ELEVENLABS_API_KEY`. Zvuk se před odesláním zkomprimuje (Opus, OpenAI má limit 25 MB).
+**Cloud posílá zvuk schůzky ven** (viz [privacy.md](privacy.md)). Klíč zadejte v **Nastavení** na stránce
+kontroly (uloží se do Správce přihlašovacích údajů Windows), nebo do proměnné prostředí
+`TEAMSREC_OPENAI_API_KEY` / `TEAMSREC_ELEVENLABS_API_KEY` (případně obvyklé `OPENAI_API_KEY` /
+`ELEVENLABS_API_KEY`), která má přednost. Zvuk se před odesláním zkomprimuje (Opus, OpenAI má limit 25 MB).
 
 Na zkoušku bez změny nastavení: `teamsrec-transcribe compare-transcribe <nahrávka> --provider openai` zapíše
 `<stem>.openai.txt` vedle hlavního přepisu (ten se nemění) a na stránce ho najdete v záložce Přepis ve výběru
@@ -349,7 +350,17 @@ Cloudový model dostane celý přepis najednou.
 
 ## 5. Konfigurace
 
-Soubor `%APPDATA%\teamsrec\teamsrec.toml`. Aktuální hodnoty zobrazí `teamsrec-transcribe config`.
+Nejjednodušší je tlačítko **Nastavení** vpravo nahoře na stránce kontroly (`teamsrec-transcribe review`): všechno
+nastavení přepisu, zápisu, hlasových otisků, uchování i nahrávání na jednom místě, s popisem a výchozí hodnotou
+u každé položky. Uloží se jen to, co jste změnili, a komentáře v souboru zůstanou. Aplikace pro nahrávání si
+změny načte sama; jen nová složka nahrávek platí až po restartu aplikací.
+
+Nahoře v Nastavení jsou i **klíče API** (Claude, OpenAI, ElevenLabs). Vložený klíč se uloží šifrovaně do Správce
+přihlašovacích údajů Windows (jen pro váš účet, služba `teamsrec`) a platí hned. Zobrazit ho už nejde, jen přepsat
+nebo smazat. Klíč v proměnné prostředí má přednost, takže klíče nastavené přes `setx` dál fungují. Když zvolíte
+cloudovou službu bez klíče, stránka na to upozorní.
+
+Pod tím je soubor `%APPDATA%\teamsrec\teamsrec.toml`. Aktuální hodnoty zobrazí `teamsrec-transcribe config`.
 
 ```toml
 [recordings]
@@ -383,7 +394,7 @@ Každé nastavení jde jednorázově přepsat z příkazové řádky, např.
 | `CUDA is not available to torch` | Starý NVIDIA driver (potřeba 570+), nebo se nainstaloval CPU torch. `uv sync --extra all` znovu; ověření `uv run python -c "import torch;print(torch.cuda.is_available())"`. |
 | `ollama: cannot reach` / `model not found` | Ollama neběží nebo model není stažený: `ollama pull gemma4:31b`. Přepis a export fungují i bez zápisu. |
 | přepis je v nesmyslném jazyce | Automatická detekce jazyka se dřív dívala jen na prvních 30 s; teď hlasuje mezi jazyky z `[transcribe] languages` (výchozí cs, sk, en) na několika hlasitých úsecích. Jazyk lze i vynutit: `transcribe <stem> --language sk --force`. |
-| `no valid Claude credentials` | `provider = "anthropic"` bez `TEAMSREC_ANTHROPIC_API_KEY`. Krok 4 instalace. |
+| `no valid Claude credentials` | `provider = "anthropic"` bez klíče: zadejte ho v Nastavení na stránce kontroly (nebo `TEAMSREC_ANTHROPIC_API_KEY`). |
 | `GatedRepoError` / 403 u pyannote | Nepřijaté podmínky modelu nebo chybí přihlášení. Krok 3 instalace. |
 | Jména z videa jsou zkomolená | OCR nezná diakritiku. Zadejte `--participants` při importu; jména se dohledají podle podobnosti. `teamsrec-transcribe video <stem> --participants "..."` analýzu zopakuje. |
 | Video nedalo žádné mluvčí | Záznam nemá rozložení Teams se jmenovkami (jiný nástroj, jen sdílený obsah). Mluvčí dá diarizace, pojmenujte je ručně. |

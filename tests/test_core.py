@@ -207,6 +207,29 @@ def test_mic_track_names_the_user(tmp_path):
     assert [s.speaker for s in segs] == ["Jan Novák", "SPEAKER_01", "Jan Novák", "SPEAKER_01", "Jan Novák", "Jana", "Jan Novák"]
 
 
+def test_mic_residue_of_a_gated_headset_is_not_the_user(tmp_path):
+    """A headset with a noise gate sends digital silence between words and a faint residue (-85 dBFS) while
+    the others talk: that residue is far above the floor but must not count as the user speaking."""
+    import wave
+    import numpy as np
+    from teamsrec_transcribe.mic_speakers import apply_mic_track
+    sr = 16000
+    t = np.arange(sr * 60) / sr
+    sig = np.zeros_like(t)
+    for a, b in [(0, 10), (30, 40)]:  # the user
+        sig[a * sr:b * sr] = 0.3 * np.sin(2 * np.pi * 220 * t[a * sr:b * sr])
+    for a, b in [(10, 30), (40, 60)]:  # the others: only a gated residue reaches the mic
+        sig[a * sr:b * sr] = 10 ** (-85 / 20) * np.sin(2 * np.pi * 330 * t[a * sr:b * sr])
+    wav = tmp_path / "mic.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(4); w.setframerate(sr)  # 32-bit: the residue survives quantisation
+        w.writeframes((sig * 2147483647).astype(np.int32).tobytes())
+    segs = [Segment(0, 10, "a", "SPEAKER_00"), Segment(10, 30, "b", "SPEAKER_01"),
+            Segment(30, 40, "c", "SPEAKER_00"), Segment(40, 60, "d", "SPEAKER_02")]
+    assert apply_mic_track(segs, wav, "Jan Novák") == {"SPEAKER_00": "Jan Novák"}
+    assert [s.speaker for s in segs] == ["Jan Novák", "SPEAKER_01", "Jan Novák", "SPEAKER_02"]
+
+
 def test_config_user_name(tmp_path):
     p = tmp_path / "t.toml"
     p.write_text('[user]\nname = " Jan Novák "\n[recordings]\nout_dir = "D:/m"\n', encoding="utf-8")
@@ -837,7 +860,7 @@ def test_rest_api_routes_errors_and_openapi(tmp_path):
                 continue
             as_doc = (pattern.replace("(?P<stem>[^/]+)", "{stem}").replace("(?P<file>[^/]+)", "{file}")
                       .replace("(?P<label>[^/]+)", "{label}").replace("(?P<pid>[^/]+)", "{id}")
-                      .replace("(?P<doc>[^/]+)", "{doc}").replace("\\.", "."))
+                      .replace("(?P<doc>[^/]+)", "{doc}").replace("(?P<name>[^/]+)", "{name}").replace("\\.", "."))
             assert as_doc in documented, f"{method} {as_doc} missing in openapi.py"
             assert method.lower() in spec["paths"][as_doc], f"{method} {as_doc} not documented"
     finally:
@@ -1132,15 +1155,27 @@ def test_rename_recording_moves_folder_and_fixes_references(tmp_path):
 def test_recording_docs_and_read_doc(tmp_path):
     from teamsrec_transcribe.web.review import read_doc, recording_docs
     rec = _make_transcribed(tmp_path)
-    assert recording_docs(rec) == {"transcript": None, "summaries": [{"file": f"{rec.stem}.summary.md", "label": "zápis (lokální model)"}],
-                                   "transcripts": []}
+    assert recording_docs(rec) == {"transcript": None, "summaries": [
+        {"file": f"{rec.stem}.summary.md", "label": "hlavní", "provider": "", "model": "", "created": "", "main": True}],
+        "transcripts": []}
     (rec.dir / f"{rec.stem}.elevenlabs.txt").write_text("x", encoding="utf-8")
     assert recording_docs(rec)["transcripts"] == [{"file": f"{rec.stem}.elevenlabs.txt", "label": "přepis (elevenlabs)"}]
     (rec.dir / f"{rec.stem}.elevenlabs.txt").unlink()
     rec.file(".txt").write_text("# T\n[00:00:00] Jana: Ahoj\n", encoding="utf-8")
-    (rec.dir / f"{rec.stem}.summary.claude-opus-5.md").write_text("# T\n", encoding="utf-8")
+    (rec.dir / f"{rec.stem}.summary.claude-opus-5-5.md").write_text(
+        "<!-- teamsrec-transcribe summary | anthropic: claude-opus-5-5 | created: 2026-09-30T10:00:00 | tokens: 1 in / 2 out -->\n# T\n",
+        encoding="utf-8")
     d = recording_docs(rec)
-    assert d["transcript"] == f"{rec.stem}.txt" and [s["label"] for s in d["summaries"]] == ["zápis (lokální model)", "zápis (claude-opus-5)"]
+    assert d["transcript"] == f"{rec.stem}.txt" and [s["label"] for s in d["summaries"]] == ["hlavní", "claude-opus-5-5"]
+    assert d["summaries"][1] == {"file": f"{rec.stem}.summary.claude-opus-5-5.md", "label": "claude-opus-5-5",
+                                 "provider": "anthropic", "model": "claude-opus-5-5", "created": "2026-09-30T10:00:00",
+                                 "main": False}
+    from teamsrec_transcribe.web.review import delete_summary
+    for bad in (f"{rec.stem}.txt", f"{rec.stem}.json", "../x.summary.md", f"{rec.stem}.summary.nothere.md"):
+        with pytest.raises(Exception):
+            delete_summary(rec, bad)
+    delete_summary(rec, f"{rec.stem}.summary.claude-opus-5-5.md")
+    assert [s["label"] for s in recording_docs(rec)["summaries"]] == ["hlavní"] and rec.file(".txt").exists()
     assert "Jana: Ahoj" in read_doc(rec, f"{rec.stem}.txt")
     for bad in ("../x.md", "other.md", f"{rec.stem}.json", f"{rec.stem}.nothere.md"):
         with pytest.raises(Exception):
@@ -1274,3 +1309,39 @@ def test_anthropic_key_comes_from_teamsrec_variable(monkeypatch):
     with pytest.raises(LLMError):
         complete("sys", "user", SummarizeSettings(provider="anthropic", model="claude-opus-5"))
     assert seen["key"] == "sk-ant-ours"
+
+
+def test_speaker_languages_show_a_second_pass_in_another_language():
+    from teamsrec_transcribe.web.review import speaker_languages
+    segs = [Segment(0, 20, "Dobrý den", "SPEAKER_00", language="cs"), Segment(20, 30, "Ahoj", "SPEAKER_00", language="cs"),
+            Segment(30, 60, "Dobrý deň", "SPEAKER_01"), Segment(60, 62, "ok", "SPEAKER_01", language="en"),
+            Segment(62, 80, "Takže", "SPEAKER_02", language="sk"), Segment(80, 90, "So", "SPEAKER_02", language="en")]
+    langs = speaker_languages(segs, "sk")
+    assert langs["SPEAKER_00"] == {"language": "cs", "own": True, "mixed": False}
+    assert langs["SPEAKER_01"] == {"language": "sk", "own": False, "mixed": False}, "2 s of English is not mixed"
+    assert langs["SPEAKER_02"] == {"language": "sk", "own": False, "mixed": True}
+    assert speaker_languages([Segment(0, 5, "x", "A")], None)["A"] == {"language": "?", "own": False, "mixed": False}
+
+
+def test_errors_logged_during_a_job_reach_the_page_history(tmp_path):
+    import logging
+    import time as _time
+    from teamsrec_transcribe.web.review import ReviewState
+    state = ReviewState(Config(out_dir=tmp_path))
+    plog = logging.getLogger("teamsrec_transcribe.pipeline")
+
+    def job():
+        plog.error("%s: compare summary %s failed: %s", "s1", "anthropic:claude-x", "model not found")
+        plog.info("not an error")
+
+    assert state.run_job("process", job, "zpracováno", "s1")
+    for _ in range(100):
+        if not state.busy and any(e["job_end"] for e in state.events):
+            break
+        _time.sleep(0.02)
+    texts = [(e["level"], e["text"]) for e in state.events]
+    assert ("err", "s1: compare summary anthropic:claude-x failed: model not found") in texts
+    assert not any("not an error" in t for _, t in texts)
+    assert texts[-1] == ("ok", "zpracováno: s1"), "the job itself still finished"
+    plog.error("after the job")  # the handler is gone
+    assert not any("after the job" in t for _, t in [(e["level"], e["text"]) for e in state.events])

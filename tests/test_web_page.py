@@ -67,14 +67,37 @@ def _fake_process(cfg, rec: Recording, force: bool = False) -> None:
 
 @pytest.mark.parametrize("script", sorted(p.name for p in WEB.glob("*.test.mjs")))
 def test_review_page(script, tmp_path, monkeypatch):
+    from teamsrec_transcribe import pipeline, settings
     from teamsrec_transcribe.web import review
+    from test_settings import TOML, FakeVault
     _folder(tmp_path)
+    # the settings page edits a throw-away config and a fake key vault, never the real ones
+    cfg_file = tmp_path / "teamsrec.toml"
+    cfg_file.write_text(TOML, encoding="utf-8")
+    monkeypatch.setenv("TEAMSREC_CONFIG", str(cfg_file))
+    vault = FakeVault()
+    monkeypatch.setattr(settings, "_keyring", lambda: vault)
+    monkeypatch.setattr(settings, "ollama_models", lambda url: ["gemma4:31b"])  # no network in page tests
+    monkeypatch.setattr(settings, "claude_models", lambda: ["claude-opus-5-5"])
+    for secret in settings.SECRETS.values():
+        for var in secret.env:
+            monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(review, "do_process", _fake_process)
     monkeypatch.setattr(review, "do_summarize", lambda cfg, rec, force=False: time.sleep(0.3))
+    monkeypatch.setattr(review, "do_summarize_compare", lambda cfg, rec, force=False: [])
+
+    def fake_summarize_as(cfg, rec, provider, model):
+        time.sleep(0.3)
+        path = pipeline.summary_path_for(cfg, rec, provider, model)
+        stamp = f"<!-- teamsrec-transcribe summary | {provider}: {model} | created: 2026-09-30T10:00:00 -->"
+        path.write_text(stamp + "\n# Zápis od " + model + "\n\nText.\n", encoding="utf-8")
+        return path
+    monkeypatch.setattr(review, "summarize_as", fake_summarize_as)
     srv, _state, base = _serve(tmp_path)
     try:
         run = subprocess.run([NODE, "--test", "--test-reporter=spec", str(WEB / script)], cwd=WEB,
-                             env={**os.environ, "TEAMSREC_REVIEW_URL": base}, capture_output=True,
+                             env={**os.environ, "TEAMSREC_REVIEW_URL": base, "TEAMSREC_TEST_CONFIG": str(cfg_file)},
+                             capture_output=True,
                              text=True, encoding="utf-8", errors="replace", timeout=120)
     finally:
         srv.shutdown()

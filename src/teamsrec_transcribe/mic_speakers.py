@@ -6,6 +6,12 @@ coincides with mic activity gets the name from the config (`[user] name`). No mo
 
 Calibrated on a real 29-minute Teams call (headset over a Bluetooth dongle): the user's label had the mic
 active 88 % of its time, the other three labels 13-21 % (cross-talk, "mhm", room noise while others spoke).
+
+"Active" also needs an absolute level (ACTIVE_MIN_DB). A headset with its own noise gate (Sony WH-1000XM6
+connected directly over Bluetooth, 2026-09-30) sends almost digital silence between words: the floor was
+-104 dBFS, so floor + 10 dB counted its -80..-90 dB residue while the others talked as speech, and the others'
+segments had the mic "active" 61 % of the time; all three people ended up under the user's name. With the
+absolute minimum it is 5 % (user 92 %); on the dongle recordings 11-12 % (was 28-34 %), user 86-88 %.
 """
 
 from __future__ import annotations
@@ -24,6 +30,7 @@ log = logging.getLogger(__name__)
 FRAME_S = 0.1
 FLOOR_PERCENTILE = 20      # the quiet part of the track defines the noise floor
 ACTIVE_ABOVE_FLOOR_DB = 10  # a frame is "speech" this far above the floor
+ACTIVE_MIN_DB = -55.0       # ... and at least this loud: residue of a noise-gated headset is not speech
 LABEL_MIN_ACTIVE = 0.6      # a diarization label is the user when >= 60 % of its time has the mic active
 LABEL_MIN_SECONDS = 10      # ... and it spoke at least this long
 SEGMENT_MIN_ACTIVE = 0.8    # a single segment of an unmapped label is the user when >= 80 % mic-active
@@ -59,7 +66,7 @@ def mic_activity(mic_wav: Path) -> tuple[np.ndarray, float] | None:
     if len(db) < 10 / frame_s:  # under 10 s
         return None
     floor = float(np.percentile(db, FLOOR_PERCENTILE))
-    active = db > floor + ACTIVE_ABOVE_FLOOR_DB
+    active = db > max(floor + ACTIVE_ABOVE_FLOOR_DB, ACTIVE_MIN_DB)
     share = float(active.mean())
     if share < 0.01 or share > 0.97:
         log.info("mic track: %.0f%% active frames, not usable for speaker naming", share * 100)

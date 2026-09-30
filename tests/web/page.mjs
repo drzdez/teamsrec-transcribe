@@ -86,12 +86,12 @@ function eventSourceFor(streams) {
  * window, the document, every request the page made and its open event streams. The page is closed when the test ends, pass or fail, and
  * the test fails on any JS error the page raised.
  */
-export async function openPage(t, stem = "") {
+export async function openPage(t, stem = "", { desktop = false } = {}) {
   const errors = [], requests = [], streams = [];
   const vc = new VirtualConsole();
   vc.on("jsdomError", e => errors.push(e.message));
   const dom = new JSDOM(HTML, {
-    runScripts: "dangerously", url: `${BASE}/${stem ? "#" + stem : ""}`, virtualConsole: vc,
+    runScripts: "dangerously", url: `${BASE}/${desktop ? "?app=desktop" : ""}${stem ? "#" + stem : ""}`, virtualConsole: vc,
     beforeParse(window) {
       window.fetch = (url, init) => {
         requests.push(`${(init && init.method) || "GET"} ${url}`);

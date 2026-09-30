@@ -69,6 +69,13 @@ one, is built against. What the server does (jobs started and finished, names sa
 page as **Server-Sent Events** on `/api/events`; the browser reconnects by itself and gets what it missed
 (`Last-Event-ID`), with polling of `/api/status` only as a fallback.
 
+## Desktop app
+
+The same review page also runs as a desktop window (Tauri, `desktop/`): it finds or starts the review server and
+shows the very same page, so the browser and the app share everything - page, API, server - and differ only in how
+links out and closing work. Build: `cd desktop && npm install && npm run build`; details in
+[desktop/README.md](desktop/README.md).
+
 ## Privacy
 
 Voice prints are biometric data of colleagues: they are **off by default** (`config --init` asks), stored only
@@ -119,10 +126,16 @@ ollama_think = false             # thinking mode for local models: slower, somet
 compare = ["anthropic:claude-opus-5"]   # optional: extra summaries for comparison -> <stem>.summary.claude-opus-5.md
 ```
 
-Secrets are never in the config file:
+Most of this can be edited on the review page (**Nastavení**): every field with its meaning and default, written
+back into the TOML with comments kept (`settings.py`, `GET/PUT /api/settings`). teamsrec-capture reloads its keys
+from the file by itself; a new `out_dir` applies after a restart.
+
+Secrets are never in the config file. API keys (Claude, OpenAI, ElevenLabs) are read from the environment first,
+then from the Windows Credential Manager (service `teamsrec`, via `keyring`), where the settings page stores them;
+the page shows only whether a key is set:
 
 - HuggingFace (pyannote models): `hf auth login` once; accept the terms of `pyannote/speaker-diarization-community-1`.
-- Claude API (only with `provider = "anthropic"`): `TEAMSREC_ANTHROPIC_API_KEY` environment variable. The
+- Claude API (only with `provider = "anthropic"`): the settings page, or the `TEAMSREC_ANTHROPIC_API_KEY` environment variable. The
   tool-specific name keeps the key away from other Anthropic software on the machine (Claude Code would otherwise
   offer to bill against a plain `ANTHROPIC_API_KEY`); without it the SDK defaults apply.
 - Ollama (default): install Ollama, `ollama pull gemma4:31b`; no keys, the transcript never leaves the machine.

@@ -2,7 +2,8 @@
 
 A cloud provider sends the recording's audio to a third party - that only happens when `[transcribe] provider`
 names one of them (docs/privacy.md). Keys come from the environment: `TEAMSREC_<VENDOR>_API_KEY` first, then
-the vendor's usual name (`OPENAI_API_KEY`, `ELEVENLABS_API_KEY`).
+the vendor's usual name (`OPENAI_API_KEY`, `ELEVENLABS_API_KEY`), then the Windows Credential Manager where the
+settings page stores them (settings.get_secret).
 """
 
 from __future__ import annotations
@@ -24,12 +25,13 @@ LANG_2 = {"ces": "cs", "cze": "cs", "czech": "cs", "slk": "sk", "slo": "sk", "sl
 
 
 def api_key(vendor: str, fallback: str) -> str:
-    """TEAMSREC_<VENDOR>_API_KEY, else the vendor's usual variable. Never logged."""
-    for name in (f"TEAMSREC_{vendor.upper()}_API_KEY", fallback):
-        value = os.environ.get(name, "").strip()
-        if value:
-            return value
-    raise ProviderError(f"no API key: set TEAMSREC_{vendor.upper()}_API_KEY (or {fallback}) in the environment")
+    """TEAMSREC_<VENDOR>_API_KEY, else the vendor's usual variable, else the stored key. Never logged."""
+    from ..settings import get_secret
+    value = get_secret(vendor)
+    if value:
+        return value
+    raise ProviderError(f"no API key for {vendor}: enter it in Settings on the review page, or set "
+                        f"TEAMSREC_{vendor.upper()}_API_KEY (or {fallback}) in the environment")
 
 
 def lang2(code: str | None) -> str:

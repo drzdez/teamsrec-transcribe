@@ -52,6 +52,16 @@ def spec(version: str) -> dict:
                 params=[STEM], body=_obj(force=b))},
             "/api/recordings/{stem}/recognize": {"post": _op("Match unnamed speakers against the voice prints",
                                                              params=[STEM])},
+            "/api/recordings/{stem}/summaries": {"post": _op(
+                "Write a summary with this provider/model in the background (the configured one = the main "
+                "summary, any other = <stem>.summary.<model>.md); the end is an event with job_end",
+                params=[STEM], body=_obj(provider={"enum": ["ollama", "anthropic"]}, model=s))},
+            "/api/recordings/{stem}/summaries/{file}": {"delete": _op(
+                "Delete one summary of the recording (<stem>.summary*.md only)",
+                params=[STEM, {"name": "file", "in": "path", "required": True, "schema": s}])},
+            "/api/summary-models": {"get": _op(
+                "Models for summaries: {ollama: [...], anthropic: [...], default: {provider, model}}; each entry "
+                "{value, note, local}", tags=("settings",))},
             "/api/recordings/{stem}/speakers/merge": {"post": _op("Fold the labels of one person into one speaker",
                                                                   params=[STEM])},
             "/api/recordings/{stem}/speakers/unmerge": {"post": _op("Undo the merges that remember their origin",
@@ -76,6 +86,20 @@ def spec(version: str) -> dict:
                 "Delete one print (stem + label) or all prints of the person", tags=("people",), params=[
                     {"name": "id", "in": "path", "required": True, "schema": s},
                     {"name": "stem", "in": "query", "schema": s}, {"name": "label", "in": "query", "schema": s}])},
+            "/api/settings": {
+                "get": _op("Settings of both apps: sections with fields (type, choices, value, default), the state "
+                           "of the API keys (env | vault | missing, never the value), the audio inputs of this PC",
+                           tags=("settings",)),
+                "put": _op("Validate and write changed values into teamsrec.toml (comments kept); returns the changed "
+                           "keys, whether a restart is needed, and the settings again", tags=("settings",),
+                           body=_obj(values={"type": "object", "description": "{\"section.key\": value}"}))},
+            "/api/secrets/{name}": {
+                "put": _op("Store an API key in the Windows Credential Manager", tags=("settings",),
+                           params=[{"name": "name", "in": "path", "required": True,
+                                    "schema": {"enum": ["anthropic", "openai", "elevenlabs"]}}], body=_obj(value=s)),
+                "delete": _op("Remove a stored API key (a key in the environment stays)", tags=("settings",),
+                              params=[{"name": "name", "in": "path", "required": True,
+                                       "schema": {"enum": ["anthropic", "openai", "elevenlabs"]}}])},
             "/api/help/{doc}": {"get": _op("A guide: user-guide | install | privacy", tags=("server",), params=[
                 {"name": "doc", "in": "path", "required": True, "schema": {"enum": ["user-guide", "install", "privacy"]}}])},
             "/api/status": {"get": _op("Background job state and the recent events", tags=("server",))},

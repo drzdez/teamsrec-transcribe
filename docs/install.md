@@ -99,7 +99,9 @@ stránce **Settings…** z ikony v liště (zapisuje do stejného souboru, komen
 
 ## 5. Klíče ke službám
 
-Jen v proměnných prostředí uživatele, nikdy v konfiguraci ani v repozitáři:
+Nikdy v konfiguraci ani v repozitáři. Nejjednodušší je vložit je v **Nastavení** na stránce kontroly
+(`teamsrec-transcribe review` → Nastavení → Klíče API): uloží se šifrovaně do Správce přihlašovacích údajů Windows
+pro váš účet a platí hned, bez restartu. Jde to i proměnnými prostředí uživatele, které mají přednost:
 
 | proměnná | k čemu |
 |---|---|
@@ -107,7 +109,7 @@ Jen v proměnných prostředí uživatele, nikdy v konfiguraci ani v repozitář
 | `TEAMSREC_OPENAI_API_KEY` (nebo `OPENAI_API_KEY`) | přepis `provider = "openai"` |
 | `TEAMSREC_ELEVENLABS_API_KEY` (nebo `ELEVENLABS_API_KEY`) | přepis `provider = "elevenlabs"`; klíč musí mít oprávnění Speech to Text |
 
-Nastavení: Start → „Upravit proměnné prostředí pro váš účet“ → Nová. Běžící aplikace je uvidí až po restartu.
+Proměnná: Start → „Upravit proměnné prostředí pro váš účet“ → Nová. Běžící aplikace ji uvidí až po restartu.
 
 ## 6. První nahrávka
 

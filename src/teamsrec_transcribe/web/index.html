@@ -25,14 +25,77 @@
   header input#title:focus { outline: 2px solid var(--accent); border-color: transparent; }
   #status.busy { color: var(--warn); font-weight: 600; }
   #events { position: fixed; right: 12px; bottom: 52px; width: min(640px, 92vw); max-height: 45vh; overflow-y: auto;
-            background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
+            background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
             font-size: 13px; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
   #events .ev { padding: 2px 0; border-bottom: 1px solid var(--line); }
   #events .ev:last-child { border-bottom: 0; }
-  #events .at { color: var(--dim); font-variant-numeric: tabular-nums; margin-right: 8px; }
+  #events .at { color: var(--muted); font-variant-numeric: tabular-nums; margin-right: 8px; }
   #events .ev.err .tx { color: var(--err); }
   #events .ev.busy .tx { color: var(--warn); }
-  #events .empty-ev { color: var(--dim); }
+  #events .empty-ev { color: var(--muted); }
+  #settings { position: fixed; inset: 0; background: var(--bg); overflow-y: auto; z-index: 30; padding: 16px 20px 40px; }
+  #settings .setBar { position: sticky; top: -16px; z-index: 1; background: var(--bg); max-width: 1000px; margin: 0 auto 10px;
+                      padding: 10px 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  #settings .setBar .meta { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+  #settingsMain { max-width: 1000px; margin: 0 auto; }
+  .card.setSec { display: block; padding: 16px 20px; }  /* not the two-column grid of a speaker card */
+  .setSec h2 { font-size: 16px; margin: 0 0 4px; }
+  .setSec .note { color: var(--muted); font-size: 13px; margin: 0 0 8px; max-width: 80ch; }
+  .setRow { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 4px 20px; align-items: start;
+            padding: 10px 0; border-top: 1px solid var(--line); }
+  .setSec h2 + .setRow, .setSec .note + .setRow { border-top: 0; }
+  .setRow label { font-weight: 600; padding-top: 7px; }
+  .setRow > input[type=text], .setRow > select, .setRow > textarea, .setCtl > input[type=text], .setCtl textarea { width: 100%; max-width: 620px; }
+  .setCtl { display: flex; flex-direction: column; gap: 6px; max-width: 620px; min-width: 0; }
+  .setCtl select.adder, .setCtl select.combo { width: auto; align-self: flex-start; min-width: 260px; max-width: 100%; }
+  .setCtl input.comboOther { max-width: 620px; }
+  .modelNote { font-size: 13px; color: var(--muted); }
+  .modelNote:empty { display: none; }
+  .modelNote.here { color: var(--ok); }
+  .modelNote.down { color: var(--warn); }
+  .setRow > select { width: auto; min-width: 260px; justify-self: start; }  /* a grid item would stretch */
+  .setRow .help { grid-column: 2; color: var(--muted); font-size: 13px; max-width: 620px; }
+  .setRow.changed label { color: var(--warn); }
+  .setRow textarea { min-height: 64px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px;
+                     background: var(--bg); color: var(--fg); font: inherit; resize: vertical; }
+  .setRow input[type=checkbox] { width: 18px; height: 18px; margin: 8px 0 0; justify-self: start; }
+  .keyRow { display: grid; grid-template-columns: 260px 190px minmax(160px, 1fr) auto auto; gap: 8px 12px; align-items: center;
+            padding: 10px 0; border-top: 1px solid var(--line); }
+  .setSec .note + .keyRow, .setSec .setWarn + .keyRow { border-top: 0; }
+  .keyRow button { white-space: nowrap; }
+  .keyRow .cancel { grid-column: 5; }
+  .keyRow input[type=password] { width: 100%; max-width: 360px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+                                background: var(--bg); color: var(--fg); font: inherit; }
+  .keyState { font-size: 13px; padding: 2px 10px; border-radius: 999px; background: var(--chip); white-space: nowrap;
+              justify-self: start; }
+  .keyState.missing { color: var(--warn); }
+  .keyState.vault, .keyState.env { color: var(--ok); }
+  .setWarn { color: var(--warn); font-size: 13px; margin: 6px 0 0; }
+  @media (max-width: 700px) {
+    #settings { padding: 12px 16px 32px; }
+    .card.setSec { padding: 12px 14px; }
+    .setRow, .keyRow { grid-template-columns: minmax(0, 1fr); }
+    .setRow .help { grid-column: 1; }
+    .setRow > select { min-width: 0; max-width: 100%; }
+    .keyRow button { justify-self: start; }
+    .keyRow .cancel { grid-column: 1; }
+  }
+  .langLine { margin: 4px 0 10px; font-size: 14px; }
+  .chip.lang.own { color: var(--accent); }
+  #sumBar { max-width: 1000px; margin: 0 auto; padding: 8px 20px 0; }
+  .sumTools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
+  .sumTools input[type=text] { width: 340px; max-width: 100%; }
+  .sumTools select { width: auto; }
+  .sumTabs { display: flex; gap: 2px; flex-wrap: wrap; align-items: flex-end; }
+  .sumTab { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-bottom: 0;
+            border-radius: 8px 8px 0 0; padding: 5px 8px 5px 12px; cursor: pointer; background: transparent; color: var(--fg);
+            font: inherit; font-size: 14px; user-select: none; }
+  .sumTab.active { background: var(--card); font-weight: 600; }
+  .sumTab .main { font-size: 11px; color: var(--muted); font-weight: 400; }
+  .sumTab .x { border: 0; background: transparent; color: var(--muted); cursor: pointer; padding: 0 2px; font-size: 13px; }
+  .sumTab .x:hover { color: var(--err); }
+  .sumTab.dragOver { outline: 2px dashed var(--accent); }
+  .sumTab.armed .x { color: var(--err); font-weight: 600; }
   #help { position: fixed; inset: 0; background: var(--bg); overflow-y: auto; z-index: 30; padding: 16px 20px 0; }
   #help .helpBar { max-width: 1000px; margin: 0 auto 10px; display: flex; gap: 12px; align-items: center; }
   #help main.doc { border-radius: 10px; }
@@ -142,6 +205,7 @@
   <div class="tabs">
     <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
+    <button id="settingsBtn" type="button" title="nastavení přepisu, zápisu, nahrávání a klíče API (sdílený teamsrec.toml)">Nastavení</button>
     <button id="helpBtn" type="button" title="uživatelská příručka, instalace a konfigurace, soukromí">Nápověda</button>
   </div>
 </header>
@@ -151,6 +215,7 @@
   <button data-sub="summary" type="button">Zápis</button>
   <select id="docPick" hidden></select>
 </nav>
+<div id="sumBar" hidden></div>
 <main id="main"><div class="empty">Načítám…</div></main>
 <main id="docMain" class="doc" hidden></main>
 <main id="peopleMain" hidden></main>
@@ -163,13 +228,22 @@
     <button id="savePeople" class="primary">Uložit lidi</button>
     <button id="addPerson">Přidat osobu</button>
   </span>
-  <button id="quit">Zavřít</button>
+  <button id="quit" title="ukončí stránku i její server (v aplikaci stačí zavřít okno)">Zavřít</button>
   <button id="histBtn" title="co server udělal, od spuštění stránky">Historie</button>
   <span id="dirty" class="meta"></span>
   <span class="meta" id="tip">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
   <span id="status"></span>
 </footer>
 <div id="events" hidden></div>
+<div id="settings" hidden>
+  <div class="setBar">
+    <strong>Nastavení</strong>
+    <span class="meta" id="settingsPath"></span>
+    <button id="settingsSave" type="button" class="primary">Uložit nastavení</button>
+    <button id="settingsClose" type="button" class="play">✕ Zavřít (Esc)</button>
+  </div>
+  <main id="settingsMain"></main>
+</div>
 <div id="help" hidden>
   <div class="helpBar">
     <strong>Nápověda</strong>
@@ -190,7 +264,7 @@
  * @typedef {{start:number,end:number,at:string,text:string}} Sample
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
- * @typedef {{label:string,unresolved:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{label:string,unresolved:boolean,language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number,voiceprint?:boolean}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
@@ -198,11 +272,22 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,transcribed_with?:{provider:string,model:string,languages:string[]}}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean}} RecordingRow
  */
 
 const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
+/** Inside the teamsrec desktop window (desktop/, Tauri): the same page and server, only a few details differ -
+ * closing the window stops the server, and the window opens links to other sites in the default browser. */
+const DESKTOP = new URLSearchParams(location.search).get("app") === "desktop";
+if (DESKTOP) document.documentElement.classList.add("desktop");
+
+/** links to other sites: a new tab in the browser; in the desktop window it opens them in the default browser */
+function externalLinks(/** @type {ParentNode} */ root) {
+  for (const a of root.querySelectorAll("a[href]")) {
+    if (/^https?:/i.test(a.getAttribute("href") || "") && !DESKTOP) { a.setAttribute("target", "_blank"); a.setAttribute("rel", "noopener"); }
+  }
+}
 const main = $("main"), peopleMain = $("peopleMain"), pick = /** @type {HTMLSelectElement} */ ($("pick")), meta = $("meta"), status = $("status");
 const audio = /** @type {HTMLAudioElement} */ ($("audio"));
 const titleInput = /** @type {HTMLInputElement} */ ($("title"));
@@ -456,11 +541,27 @@ async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonEle
 
 // ---------------------------------------------------------------- speakers tab
 
+const LANG_NAME = { cs: "čeština", sk: "slovenština", en: "angličtina", de: "němčina", pl: "polština" };
+const langName = (/** @type {string|null|undefined} */ code) => code ? (LANG_NAME[code] || code) : "neznámý";
+
+/** one line above the speakers: in which language the transcript was made, and with what */
+function languageLine(/** @type {Review} */ r) {
+  const p = document.createElement("p"); p.className = "langLine";
+  const w = r.transcribed_with || { provider: "", model: "", languages: [] };
+  const own = r.speakers.filter(sp => sp.own);
+  p.innerHTML = `<b>Jazyk přepisu:</b> ${escapeHtml(langName(r.language))}` +
+    (w.languages && w.languages.length ? ` <span class="meta">(zjištěn automaticky z ${escapeHtml(w.languages.join(", "))})</span>` : "") +
+    (own.length ? ` · ${own.length === 1 ? "jeden mluvčí přepsán" : `${own.length} mluvčí přepsáni`} zvlášť ve vlastním jazyce` : "") +
+    (w.provider ? ` · <span class="meta">${escapeHtml(w.provider)}${w.model ? " " + escapeHtml(w.model) : ""}</span>` : "");
+  return p;
+}
+
 function renderSpeakers() {
   if (!review) return;
   main.innerHTML = "";
   if (!review.speakers.length) { main.appendChild(emptyBox("V přepisu nejsou žádní mluvčí.")); return; }
   if (review.meeting) main.appendChild(meetingPanel(review.meeting));
+  main.appendChild(languageLine(review));
   if (review.speakers.some(sp => sp.unresolved && !sp.person)) {
     const bar = document.createElement("div"); bar.className = "toolbar";
     const b = document.createElement("button"); b.type = "button"; b.className = "play";
@@ -510,15 +611,20 @@ function renderSpeakers() {
     armedButton(b, `Potvrdit nový přepis (~${mins} min, jména se zahodí)`, async () => {
       const stem = review ? review.stem : "";
       setStatus("spouštím nový přepis…");
+      const since = finishes;
       try {
-        const r = await api("/api/process", { method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ stem, force: true }) });
+        const r = await api(recUrl(stem, "process"), send("POST", { force: true }));
         if (!r.ok) throw new Error(r.error || "nelze spustit");
       } catch (e) { setStatus(String(e), "err"); return; }
       setBusy(true);
-      try { await waitForSummary(); } finally { setBusy(false); }
-      await loadList(); pick.value = stem; await loadRecording(stem);
-      setStatus("hotovo: nový přepis, mluvčí jsou znovu k pojmenování", "ok");
+      setStatus(`nový přepis běží (~${mins} min) – nezavírejte stránku ani okno konzole`, "busy");
+      let error = "";
+      try { error = await waitForJob(since); }
+      catch (e) { error = String(e); }
+      finally { setBusy(false); }
+      await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
+      if (error) setStatus(`nový přepis selhal: ${error}`, "err");
+      else setStatus("hotovo: nový přepis, mluvčí jsou znovu k pojmenování", "ok");
     });
     bar.appendChild(b); main.appendChild(bar);
   }
@@ -626,6 +732,7 @@ function card(sp, i) {
       + 'hlasový otisk). Uložením ho potvrdíte – teprve pak se hlasový vzorek uloží mezi otisky a osoba do '
       + 'společného seznamu lidí.">nepotvrzeno</span>' : "") +
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
+    `<span class="chip lang${sp.own ? " own" : ""}" title="${sp.own ? "přepsáno znovu v jazyce tohoto mluvčího (jazyk po mluvčích)" : "jazyk, ve kterém byl mluvčí přepsán"}${sp.mixed ? "; část replik v jiném jazyce" : ""}">${escapeHtml(langName(sp.language))}${sp.own ? " · vlastní" : ""}${sp.mixed ? " +" : ""}</span>` +
     (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
   if (sp.voice_hint) {
@@ -1035,11 +1142,13 @@ function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
 
 function showSub(/** @type {"speakers"|"transcript"|"summary"} */ which, render = true) {
   subTab = which;
+  if (!busy && status.className === "busy") setStatus("");  // a question about the tab we leave (delete?) is moot
   const sp = which === "speakers";
   main.hidden = !sp; docMain.hidden = sp;
   $("speakerButtons").hidden = !sp; $("tip").hidden = !sp; $("dirty").hidden = !sp;
   for (const b of $("subtabs").querySelectorAll("button")) b.classList.toggle("active", b.dataset.sub === which);
-  docPick.hidden = sp || docList().length < 2;
+  docPick.hidden = sp || which === "summary" || docList().length < 2;
+  $("sumBar").hidden = which !== "summary";
   if (render && !sp) renderDoc();
 }
 
@@ -1057,7 +1166,10 @@ async function renderDoc() {
   if (!review || !review.docs) { docMain.innerHTML = '<div class="empty">Nahrávka ještě nemá přepis.</div>'; return; }
   let file = null;
   const list = docList();
-  if (list.length) {
+  if (subTab === "summary") {  // tabs instead of the dropdown
+    renderSumBar();
+    file = activeSum || null;
+  } else if (list.length) {
     const key = `${review.stem}:${subTab}`;
     if (!docPick.options.length || docPick.dataset.stem !== key) {
       docPick.innerHTML = list.map(d => `<option value="${escapeHtml(d.file)}">${escapeHtml(d.label)}</option>`).join("");
@@ -1065,11 +1177,12 @@ async function renderDoc() {
     }
     file = docPick.value || list[0].file;
   }
-  if (!file) { docMain.innerHTML = `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vytvoříte ho tlačítkem „Uložit a přegenerovat zápis“ na záložce Mluvčí."}</div>`; return; }
+  if (!file) { docMain.innerHTML = `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`; return; }
   docMain.innerHTML = '<div class="empty">Načítám…</div>';
   try {
     const r = await api(recUrl(review.stem, "docs", file));
     docMain.innerHTML = subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text);
+    externalLinks(docMain);  // a link in the minutes must not replace the page
   } catch (e) { docMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
 }
 
@@ -1159,6 +1272,7 @@ $("save").onclick = () => save(false);
 $("saveSum").onclick = () => save(true);
 $("savePeople").onclick = savePeople;
 $("addPerson").onclick = addPerson;
+if (DESKTOP) $("quit").hidden = true;  // closing the window stops the server
 $("quit").onclick = async () => {
   if (busy) { setStatus("zápis se generuje, počkejte na dokončení", "busy"); return; }
   stopAudio();
@@ -1182,7 +1296,8 @@ async function openHelp(/** @type {string} */ doc) {
   try { r = await api(`/api/help/${encodeURIComponent(doc)}`); }
   catch (e) { helpMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; return; }
   if (r.url) {  // no local docs folder (installed package): the same page on GitHub
-    helpMain.innerHTML = `<p>Nápověda k této instalaci je na webu: <a href="${escapeHtml(r.url)}" target="_blank" rel="noopener">${escapeHtml(r.url)}</a></p>`;
+    helpMain.innerHTML = `<p>Nápověda k této instalaci je na webu: <a href="${escapeHtml(r.url)}">${escapeHtml(r.url)}</a></p>`;
+    externalLinks(helpMain);
     return;
   }
   helpMain.innerHTML = renderMarkdown(r.text);
@@ -1190,12 +1305,9 @@ async function openHelp(/** @type {string} */ doc) {
   for (const a of helpMain.querySelectorAll("a")) {
     const href = a.getAttribute("href") || "";
     const local = href.match(/(?:^|\/)(user-guide|install|privacy)\.md(?:#.*)?$/);
-    if (local) {
-      a.addEventListener("click", ev => { ev.preventDefault(); openHelp(local[1]); });
-    } else if (/^https?:/.test(href)) {
-      a.target = "_blank"; a.rel = "noopener";
-    }
+    if (local) a.addEventListener("click", ev => { ev.preventDefault(); openHelp(local[1]); });
   }
+  externalLinks(helpMain);
 }
 
 function closeHelp() { helpBox.hidden = true; }
@@ -1204,6 +1316,451 @@ $("helpClose").onclick = closeHelp;
 helpPick.onchange = () => openHelp(helpPick.value);
 document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !helpBox.hidden) closeHelp(); });
 setInterval(() => { fetch("/api/ping", { method: "POST" }).catch(() => {}); }, 15000);
+
+// ---- a dropdown of known values plus "jiný…" for anything else (models, microphones)
+const OTHER = "__other__";
+/** @typedef {{label:string,items:SetOption[]}} OptGroup */
+const optText = (/** @type {SetOption} */ o) =>
+  o.note ? `${o.value}   —   ${o.local === true ? "✓ " : o.local === false ? "↓ " : ""}${o.note}` : o.value;
+
+/** fill a combo: groups of options, the value selected, or "jiný…" with the value in the text box */
+function setCombo(/** @type {HTMLSelectElement} */ sel, /** @type {HTMLInputElement} */ other, /** @type {OptGroup[]} */ groups,
+                  /** @type {string} */ value, /** @type {string=} */ emptyLabel) {
+  sel.innerHTML = "";
+  if (emptyLabel !== undefined) { const o = document.createElement("option"); o.value = ""; o.textContent = emptyLabel; sel.appendChild(o); }
+  for (const g of groups) {
+    if (!g.items.length) continue;
+    /** @type {HTMLElement} */ let parent = sel;
+    if (g.label) { const og = document.createElement("optgroup"); og.label = g.label; sel.appendChild(og); parent = og; }
+    for (const it of g.items) { const o = document.createElement("option"); o.value = it.value; o.textContent = optText(it); parent.appendChild(o); }
+  }
+  const o = document.createElement("option"); o.value = OTHER; o.textContent = "jiný…"; sel.appendChild(o);
+  const known = [...sel.options].some(x => x.value === value && x.value !== OTHER);
+  sel.value = known ? value : (value ? OTHER : (emptyLabel !== undefined ? "" : OTHER));
+  other.value = known ? "" : value;
+  other.hidden = sel.value !== OTHER;
+}
+
+function comboValue(/** @type {HTMLSelectElement} */ sel) {
+  if (sel.value !== OTHER) return sel.value;
+  const other = /** @type {HTMLInputElement|null} */ (sel.parentElement && sel.parentElement.querySelector("input.comboOther"));
+  return other ? other.value.trim() : "";
+}
+
+function makeCombo(/** @type {(v: string) => void} */ onChange) {
+  const sel = document.createElement("select"); sel.className = "combo";
+  const other = document.createElement("input"); other.type = "text"; other.className = "comboOther"; other.hidden = true;
+  other.placeholder = "napište název"; other.autocomplete = "off";
+  sel.addEventListener("change", () => {
+    other.hidden = sel.value !== OTHER;
+    if (!other.hidden) other.focus();
+    onChange(comboValue(sel));
+  });
+  other.addEventListener("input", () => onChange(comboValue(sel)));
+  return { sel, other };
+}
+
+// ---- settings: the fields of the shared teamsrec.toml (both apps) and the API keys, over the page like the help
+/** @typedef {{key:string,label:string,type:string,help:string,choices:string[],default:any,value:any,suggest:string,restart:boolean}} SetField */
+/** @typedef {{id:string,title:string,note:string,fields:SetField[]}} SetSection */
+/** @typedef {{name:string,label:string,used_for:string,state:"env"|"vault"|"missing",env:string,env_names:string[]}} SecretState */
+/** @typedef {{value:string,note:string,local:boolean|null}} SetOption */
+/** @typedef {{path:string,sections:SetSection[],secrets:SecretState[],vault:boolean,inputs:string[],suggestions:Record<string,any>}} SettingsData */
+const settingsBox = $("settings"), settingsMain = $("settingsMain");
+/** @type {SettingsData|null} */ let settingsData = null;
+/** @type {Record<string, any>} */ let settingsLoaded = {};
+let settingsCloseArmed = false;
+const KEY_STATE = { env: "✓ proměnná prostředí", vault: "✓ uložen ve Správci", missing: "chybí" };
+/** which setting needs which key: [field key, value, secret] */
+const NEEDS_KEY = [["transcribe.provider", "openai", "openai"], ["transcribe.provider", "elevenlabs", "elevenlabs"],
+                   ["summarize.provider", "anthropic", "anthropic"]];
+
+async function openSettings() {
+  settingsBox.hidden = false;
+  settingsCloseArmed = false;
+  settingsMain.innerHTML = '<div class="empty">Načítám…</div>';
+  try { renderSettings(await api("/api/settings")); }
+  catch (e) { settingsMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
+}
+
+function closeSettings() {
+  if (settingsDirty().length && !settingsCloseArmed) {
+    settingsCloseArmed = true;
+    setStatus("nastavení má neuložené změny – Uložit nastavení, nebo Zavřít ještě jednou (změny se zahodí)", "busy");
+    return;
+  }
+  settingsBox.hidden = true;
+  setStatus("");
+}
+
+/** @param {SettingsData} d */
+function renderSettings(d) {
+  settingsData = d;
+  settingsLoaded = {};
+  $("settingsPath").textContent = d.path;
+  settingsMain.innerHTML = "";
+  settingsMain.appendChild(keysCard(d));
+
+  for (const s of d.sections) {
+    const card = document.createElement("section"); card.className = "card setSec"; card.dataset.section = s.id;
+    const h = document.createElement("h2"); h.textContent = s.title; card.appendChild(h);
+    if (s.note) { const n = document.createElement("p"); n.className = "note"; n.textContent = s.note; card.appendChild(n); }
+    for (const f of s.fields) { settingsLoaded[f.key] = f.value; card.appendChild(settingRow(f)); }
+    const warn = document.createElement("p"); warn.className = "setWarn"; warn.dataset.needs = "1"; warn.hidden = true;
+    card.appendChild(warn);
+    settingsMain.appendChild(card);
+  }
+  const prov = settingsMain.querySelector('[data-type][data-key="summarize.provider"]');
+  if (prov) prov.addEventListener("change", refreshSummaryModels);
+  refreshSummaryModels();
+  updateSettingsState();
+}
+
+
+/** all known options of a field's list; the summary models follow the chosen service */
+function optionsOf(/** @type {string} */ suggest) {
+  if (!settingsData) return [];
+  if (suggest === "inputs") return settingsData.inputs.map(v => ({ value: v, note: "", local: null }));
+  const all = settingsData.suggestions || {};
+  if (suggest === "summary") {
+    const prov = /** @type {HTMLSelectElement|null} */ (settingsMain.querySelector('[data-type][data-key="summarize.provider"]'));
+    return (all.summary || {})[prov ? prov.value : "ollama"] || [];
+  }
+  return Array.isArray(all[suggest]) ? all[suggest] : [];
+}
+
+/** a different summary service: its models in the model dropdown, the typed/chosen value kept */
+function refreshSummaryModels() {
+  const sel = /** @type {HTMLSelectElement|null} */ (settingsMain.querySelector('select.combo[data-key="summarize.model"]'));
+  if (!sel) return;
+  const other = /** @type {HTMLInputElement} */ (sel.parentElement?.querySelector("input.comboOther"));
+  setCombo(sel, other, [{ label: "", items: optionsOf("summary") }], comboValue(sel));
+  updateSettingsState();
+}
+
+/** under a model field: is the chosen value on this PC, to be downloaded, or in the cloud */
+function updateModelNotes() {
+  for (const row of settingsMain.querySelectorAll(".setRow[data-suggest]")) {
+    const r = /** @type {HTMLElement} */ (row);
+    const sel = /** @type {HTMLSelectElement|null} */ (r.querySelector("select.combo"));
+    const note = /** @type {HTMLElement|null} */ (r.querySelector(".modelNote"));
+    if (!sel || !note) continue;
+    const value = comboValue(sel);
+    const opt = optionsOf(r.dataset.suggest || "").find((/** @type {SetOption} */ o) => o.value === value);
+    const prov = /** @type {HTMLSelectElement|null} */ (settingsMain.querySelector('[data-type][data-key="summarize.provider"]'));
+    let text = "", cls = "";
+    if (opt && opt.note) { text = opt.note; cls = opt.local === false ? "down" : opt.local ? "here" : ""; }
+    else if (r.dataset.suggest === "summary" && prov && prov.value === "ollama" && value) {
+      text = settingsData && settingsData.suggestions.ollama_ready
+        ? `není stažený – stáhněte ho: ollama pull ${value}` : "Ollama neběží, nelze ověřit";
+      cls = "down";
+    }
+    note.textContent = text; note.className = "modelNote " + cls;
+  }
+}
+
+/** @param {SetField} f */
+function settingRow(f) {
+  const row = document.createElement("div"); row.className = "setRow"; row.dataset.key = f.key;
+  const id = "set-" + f.key.replace(".", "-");
+  const lab = document.createElement("label"); lab.htmlFor = id; lab.textContent = f.label;
+  /** @type {HTMLInputElement|HTMLSelectElement|HTMLTextAreaElement} */ let el;
+  if (f.type === "bool") {
+    const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!f.value; el = c;
+  } else if (f.type === "enum") {
+    const s = document.createElement("select");
+    for (const ch of f.choices) { const o = document.createElement("option"); o.value = ch; o.textContent = ch; s.appendChild(o); }
+    s.value = String(f.value); el = s;
+  } else if (f.type === "list") {
+    const t = document.createElement("textarea"); t.value = (f.value || []).join("\n"); t.rows = Math.max(2, (f.value || []).length + 1); el = t;
+  } else if (f.suggest) {  // known values in a dropdown, "jiný…" for anything else
+    const { sel, other } = makeCombo(() => updateSettingsState());
+    row.dataset.suggest = f.suggest;
+    const ctl = document.createElement("div"); ctl.className = "setCtl";
+    const note = document.createElement("div"); note.className = "modelNote";
+    ctl.append(sel, other, note);
+    sel.id = id; sel.dataset.key = f.key; sel.dataset.type = f.type;
+    setCombo(sel, other, [{ label: "", items: optionsOf(f.suggest) }], f.value == null ? "" : String(f.value),
+             f.suggest === "inputs" ? "výchozí vstup Windows" : undefined);
+    const lab2 = document.createElement("label"); lab2.htmlFor = id; lab2.textContent = f.label;
+    const help2 = document.createElement("div"); help2.className = "help";
+    const def2 = String(f.default);
+    help2.textContent = [f.help, def2 !== "" ? `výchozí: ${def2}` : "", f.restart ? "platí po restartu aplikací" : ""].filter(Boolean).join(" · ");
+    row.append(lab2, ctl, help2);
+    return row;
+  } else {
+    const i = document.createElement("input"); i.type = "text"; i.value = f.value == null ? "" : String(f.value); i.autocomplete = "off";
+    if (f.type === "int" || f.type === "float") i.inputMode = "decimal";
+    el = i;
+  }
+  el.id = id; el.dataset.key = f.key; el.dataset.type = f.type;
+  el.addEventListener("input", updateSettingsState); el.addEventListener("change", updateSettingsState);
+  const help = document.createElement("div"); help.className = "help";
+  const def = f.type === "list" ? (f.default || []).join(", ") : String(f.default);
+  help.textContent = [f.help, def !== "" ? `výchozí: ${def}` : "", f.restart ? "platí po restartu aplikací" : ""].filter(Boolean).join(" · ");
+  if (f.type === "list" && f.suggest) {  // a list of values: pick one to add it as a line
+    const ctl = document.createElement("div"); ctl.className = "setCtl";
+    const add = document.createElement("select"); add.className = "adder";
+    const items = optionsOf(f.suggest);
+    add.innerHTML = `<option value="">${items.length ? "přidat…" : "nabídka není k dispozici (bez klíče / Ollamy)"}</option>` +
+      items.map((/** @type {SetOption} */ o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.value)}  —  ${escapeHtml((o.local === true ? "✓ " : o.local === false ? "↓ " : "") + o.note)}</option>`).join("");
+    add.disabled = !items.length;
+    add.onchange = () => {
+      const t = /** @type {HTMLTextAreaElement} */ (el);
+      const lines = t.value.split("\n").map(x => x.trim()).filter(Boolean);
+      if (add.value && !lines.includes(add.value)) { lines.push(add.value); t.value = lines.join("\n"); t.rows = lines.length + 1; }
+      add.value = ""; updateSettingsState();
+    };
+    ctl.append(el, add);
+    row.append(lab, ctl, help);
+    return row;
+  }
+  row.append(lab, el, help);
+  return row;
+}
+
+/** the value of one field's control, in the type the server expects */
+function settingValue(/** @type {HTMLElement} */ el) {
+  const t = el.dataset.type;
+  if (el.classList.contains("combo")) return comboValue(/** @type {HTMLSelectElement} */ (el));
+  if (t === "bool") return /** @type {HTMLInputElement} */ (el).checked;
+  const v = /** @type {HTMLInputElement} */ (el).value;
+  if (t === "list") return v.split("\n").map(x => x.trim()).filter(Boolean);
+  if (t === "int" || t === "float") { const n = Number(v.replace(",", ".").trim()); return v.trim() !== "" && !isNaN(n) ? n : v; }
+  return v.trim();
+}
+
+/** keys whose control differs from what was loaded */
+function settingsDirty() {
+  if (!settingsData || settingsBox.hidden) return [];
+  const out = [];
+  for (const el of settingsMain.querySelectorAll("[data-key][data-type]")) {
+    const key = /** @type {HTMLElement} */ (el).dataset.key || "";
+    if (JSON.stringify(settingValue(/** @type {HTMLElement} */ (el))) !== JSON.stringify(settingsLoaded[key])) out.push(key);
+  }
+  return out;
+}
+
+function updateSettingsState() {
+  updateModelNotes();
+  const dirty = new Set(settingsDirty());
+  for (const row of settingsMain.querySelectorAll(".setRow")) row.classList.toggle("changed", dirty.has(/** @type {HTMLElement} */ (row).dataset.key || ""));
+  /** @type {HTMLButtonElement} */ ($("settingsSave")).disabled = !dirty.size;
+  settingsCloseArmed = false;
+  if (!settingsData) return;
+  // a cloud service without its key would fail at the next job: say so where it is chosen
+  const secrets = Object.fromEntries(settingsData.secrets.map(s => [s.name, s]));
+  for (const card of settingsMain.querySelectorAll(".setSec")) {
+    const warn = /** @type {HTMLElement|null} */ (card.querySelector(":scope > p.setWarn[data-needs]"));
+    if (!warn) continue;  // the keys card has no fields to warn about
+    const missing = NEEDS_KEY.filter(([key, value, secret]) => {
+      const el = /** @type {HTMLElement|null} */ (card.querySelector(`[data-type][data-key="${key}"]`));
+      return el && settingValue(el) === value && secrets[secret] && secrets[secret].state === "missing";
+    });
+    warn.hidden = !missing.length;
+    warn.textContent = missing.map(([, value, secret]) => `${value} potřebuje klíč ${secrets[secret].label} – zadejte ho nahoře v Klíčích API.`).join(" ");
+  }
+}
+
+async function saveSettings() {
+  const keys = settingsDirty();
+  if (!keys.length) return;
+  /** @type {Record<string, any>} */ const values = {};
+  for (const key of keys) values[key] = settingValue(/** @type {HTMLElement} */ (settingsMain.querySelector(`[data-type][data-key="${key}"]`)));
+  const btn = /** @type {HTMLButtonElement} */ ($("settingsSave")); btn.disabled = true;
+  try {
+    const r = await api("/api/settings", send("PUT", { values }));
+    renderSettings(r);
+    setStatus(r.changed.length ? `nastavení uloženo (${r.changed.length})${r.restart ? " – složka nahrávek platí po restartu aplikací" : ""}` : "nic se nezměnilo", "ok");
+  } catch (e) { setStatus(String(e), "err"); updateSettingsState(); }
+}
+
+/** @param {SettingsData} d */
+function keysCard(d) {
+  const card = document.createElement("section"); card.className = "card setSec"; card.dataset.section = "keys";
+  card.innerHTML = '<h2>Klíče API</h2><p class="note">Klíč se uloží šifrovaně do Správce přihlašovacích údajů Windows ' +
+    '(jen pro váš účet) a hned platí. Zobrazit ho už nejde, jen přepsat nebo smazat. Klíč v proměnné prostředí má přednost.</p>';
+  if (!d.vault) card.innerHTML += '<p class="setWarn">Správce přihlašovacích údajů není dostupný – klíče jde nastavit jen proměnnými prostředí.</p>';
+  for (const s of d.secrets) {
+    const row = document.createElement("div"); row.className = "keyRow"; row.dataset.secret = s.name;
+    const lab = document.createElement("strong"); lab.textContent = s.label; lab.title = s.used_for;
+    const st = document.createElement("span"); st.className = "keyState " + s.state;
+    st.textContent = KEY_STATE[s.state];
+    st.title = (s.state === "env" ? `klíč z proměnné ${s.env}; ` : "") +
+               (s.state === "missing" ? `potřeba pro: ${s.used_for}` : `používá se pro: ${s.used_for}`);
+    const inp = document.createElement("input"); inp.type = "password"; inp.autocomplete = "off"; inp.placeholder = "nový klíč";
+    inp.disabled = !d.vault; inp.dataset.secretInput = s.name;
+    const saveBtn = document.createElement("button"); saveBtn.type = "button"; saveBtn.className = "play"; saveBtn.textContent = "Uložit klíč";
+    saveBtn.disabled = true;
+    inp.addEventListener("input", () => { saveBtn.disabled = !inp.value.trim(); });
+    inp.addEventListener("keydown", ev => { if (ev.key === "Enter" && inp.value.trim()) { ev.preventDefault(); saveBtn.click(); } });
+    saveBtn.onclick = async () => {
+      saveBtn.disabled = true;
+      try {
+        const r = await api(`/api/secrets/${encodeURIComponent(s.name)}`, send("PUT", { value: inp.value }));
+        inp.value = "";
+        updateSecrets(r.secrets);
+        setStatus(`klíč ${s.label} uložen do Správce přihlašovacích údajů`, "ok");
+      } catch (e) { setStatus(String(e), "err"); saveBtn.disabled = false; }
+    };
+    const del = document.createElement("button"); del.type = "button"; del.className = "play"; del.textContent = "Smazat";
+    del.disabled = s.state !== "vault";
+    del.title = s.state === "env" ? `klíč z proměnné ${s.env} se tady smazat nedá` : "smazat klíč ze Správce přihlašovacích údajů";
+    row.append(lab, st, inp, saveBtn, del);
+    armedButton(del, "Opravdu smazat", async () => {
+      try {
+        const r = await api(`/api/secrets/${encodeURIComponent(s.name)}`, send("DELETE"));
+        updateSecrets(r.secrets);
+        setStatus(`klíč ${s.label} smazán`, "ok");
+      } catch (e) { setStatus(String(e), "err"); }
+    });
+    card.appendChild(row);
+  }
+  return card;
+}
+
+/** new key states without touching unsaved field changes */
+function updateSecrets(/** @type {SecretState[]} */ secrets) {
+  if (!settingsData) return;
+  settingsData.secrets = secrets;
+  const old = settingsMain.querySelector('[data-section="keys"]');
+  if (old) old.replaceWith(keysCard(settingsData));
+  updateSettingsState();
+}
+
+$("settingsBtn").onclick = openSettings;
+$("settingsSave").onclick = saveSettings;
+$("settingsClose").onclick = closeSettings;
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && !settingsBox.hidden) closeSettings(); });
+window.addEventListener("beforeunload", ev => { if (settingsDirty().length) { ev.preventDefault(); ev.returnValue = ""; } });
+
+// ---- Zápis: a tab per summary (named by the model that wrote it); drag to reorder, x deletes the summary (a second
+// click confirms), generate another one with any model. The order is remembered per recording in this browser.
+/** @typedef {{file:string,label:string,provider:string,model:string,created:string,main:boolean}} SummaryDoc */
+/** @type {string} */ let activeSum = "";
+/** @type {{ollama:any[],anthropic:any[],default:{provider:string,model:string}}|null} */ let summaryModels = null;
+
+function sumPrefs(/** @type {string} */ stem) {
+  try { return JSON.parse(localStorage.getItem("teamsrec.sumtabs." + stem) || "") || { order: [] }; }
+  catch { return { order: [] }; }
+}
+function saveSumPrefs(/** @type {string} */ stem, /** @type {{order:string[]}} */ prefs) {
+  try { localStorage.setItem("teamsrec.sumtabs." + stem, JSON.stringify(prefs)); } catch { /* private mode: not remembered */ }
+}
+
+/** the summaries in the user's order */
+function orderedSummaries() {
+  if (!review || !review.docs) return [];
+  const all = /** @type {SummaryDoc[]} */ (review.docs.summaries || []);
+  const prefs = sumPrefs(review.stem);
+  const rank = (/** @type {SummaryDoc} */ d) => { const i = prefs.order.indexOf(d.file); return i < 0 ? 1000 + all.indexOf(d) : i; };
+  return all.slice().sort((a, b) => rank(a) - rank(b));
+}
+
+async function loadSummaryModels() {
+  if (summaryModels) return summaryModels;
+  try { summaryModels = await api("/api/summary-models"); } catch { summaryModels = { ollama: [], anthropic: [], default: { provider: "ollama", model: "" } }; }
+  return summaryModels;
+}
+
+function renderSumBar() {
+  const bar = $("sumBar");
+  if (!review || !review.docs) { bar.innerHTML = ""; return; }
+  const shown = orderedSummaries();
+  if (!shown.some(d => d.file === activeSum)) activeSum = shown.length ? shown[0].file : "";
+  bar.innerHTML = "";
+  const tools = document.createElement("div"); tools.className = "sumTools";
+  const { sel: model, other } = makeCombo(() => {});
+  model.id = "sumModel"; other.id = "sumModelOther"; other.placeholder = "služba:model, např. ollama:qwen3:32b";
+  model.title = "Ollama běží v tomto počítači, Claude je cloud (posílá text přepisu ven)";
+  const gen = document.createElement("button"); gen.type = "button"; gen.id = "sumGen"; gen.className = "play"; gen.textContent = "Vygenerovat zápis";
+  gen.onclick = () => { const [provider, ...rest] = comboValue(model).split(":"); generateSummary(provider, rest.join(":")); };
+  tools.append(model, other, gen);
+  const active = shown.find(d => d.file === activeSum);
+  if (active && active.provider && active.model) {
+    const again = document.createElement("button"); again.type = "button"; again.className = "play"; again.id = "sumAgain";
+    again.textContent = `Přegenerovat „${active.label}“`;
+    again.onclick = () => generateSummary(active.provider, active.model);
+    tools.appendChild(again);
+  }
+  bar.appendChild(tools);
+  setCombo(model, other, [], "");
+  loadSummaryModels().then(m => {
+    const groups = [{ label: "Ollama – v tomto počítači", items: m.ollama.map(o => ({ ...o, value: "ollama:" + o.value })) },
+                    { label: "Claude – cloud (text přepisu jde ven)", items: m.anthropic.map(o => ({ ...o, value: "anthropic:" + o.value, note: "" })) }];
+    setCombo(model, other, groups, m.default && m.default.model ? `${m.default.provider}:${m.default.model}` : "");
+  });
+
+  const tabs = document.createElement("div"); tabs.className = "sumTabs"; tabs.id = "sumTabs";
+  for (const d of shown) {
+    const t = document.createElement("div"); t.className = "sumTab" + (d.file === activeSum ? " active" : "");
+    t.draggable = true; t.dataset.file = d.file; t.tabIndex = 0;
+    t.title = [d.provider === "anthropic" ? "Claude (cloud)" : d.provider === "ollama" ? "Ollama (v tomto počítači)" : "",
+               d.created ? "vytvořeno " + d.created.replace("T", " ") : "", "přetažením změníte pořadí"].filter(Boolean).join(" · ");
+    const label = document.createElement("span"); label.textContent = d.label;
+    t.appendChild(label);
+    if (d.main) { const m = document.createElement("span"); m.className = "main"; m.textContent = "hlavní"; t.appendChild(m); }
+    const x = document.createElement("button"); x.type = "button"; x.className = "x"; x.textContent = "✕";
+    x.title = "zavřít = smazat tento zápis (potvrdíte druhým kliknutím)";
+    x.onclick = ev => {
+      ev.stopPropagation();
+      if (x.dataset.armed) { deleteSummary(d); return; }
+      x.dataset.armed = "1"; x.textContent = "smazat?"; t.classList.add("armed");
+      const warning = `zápis ${d.label}${d.main ? " (hlavní)" : ""} se smaže i se souborem – potvrďte druhým kliknutím na „smazat?“`;
+      setStatus(warning, "busy");
+      setTimeout(() => {  // not confirmed: back to ✕, and the question leaves the status line
+        if (x.isConnected && x.dataset.armed) { delete x.dataset.armed; x.textContent = "✕"; t.classList.remove("armed"); }
+        if (status.textContent === warning) setStatus("");
+      }, 4000);
+    };
+    t.appendChild(x);
+    t.onclick = () => { activeSum = d.file; renderDoc(); };
+    t.addEventListener("keydown", ev => { if (ev.key === "Enter") { activeSum = d.file; renderDoc(); } });
+    t.addEventListener("dragstart", ev => { ev.dataTransfer?.setData("text/plain", d.file); });
+    t.addEventListener("dragover", ev => { ev.preventDefault(); t.classList.add("dragOver"); });
+    t.addEventListener("dragleave", () => t.classList.remove("dragOver"));
+    t.addEventListener("drop", ev => { ev.preventDefault(); t.classList.remove("dragOver"); moveSummary(ev.dataTransfer?.getData("text/plain") || "", d.file); });
+    tabs.appendChild(t);
+  }
+  bar.appendChild(tabs);
+}
+
+/** put tab `file` in front of tab `before` */
+function moveSummary(/** @type {string} */ file, /** @type {string} */ before) {
+  if (!review || !file || file === before) return;
+  const order = orderedSummaries().map(d => d.file).filter(f => f !== file);
+  order.splice(Math.max(0, order.indexOf(before)), 0, file);
+  const prefs = sumPrefs(review.stem); prefs.order = order; saveSumPrefs(review.stem, prefs);
+  renderSumBar();
+}
+
+async function deleteSummary(/** @type {SummaryDoc} */ d) {
+  if (!review) return;
+  const stem = review.stem;
+  try { await api(recUrl(stem, "summaries", d.file), send("DELETE")); }
+  catch (e) { setStatus(String(e), "err"); return; }
+  if (activeSum === d.file) activeSum = "";
+  await loadRecording(stem);  // clears the status line, so write it after
+  showSub("summary");
+  setStatus(`zápis ${d.label} smazán`, "ok");
+}
+
+async function generateSummary(/** @type {string} */ provider, /** @type {string} */ model) {
+  if (!review) return;
+  if (!["ollama", "anthropic"].includes(provider) || !model) { setStatus("zadejte službu a model, např. ollama:gemma4:31b nebo anthropic:claude-opus-5-5", "err"); return; }
+  const stem = review.stem, since = finishes;
+  let file = "";
+  try { file = (await api(recUrl(stem, "summaries"), send("POST", { provider, model }))).file; }
+  catch (e) { setStatus(String(e), "err"); return; }
+  setBusy(true);
+  setStatus(`zápis ${model} se generuje${provider === "anthropic" ? " (Claude, text přepisu jde do cloudu)" : " (lokálně, 1–3 min)"} – nezavírejte stránku`, "busy");
+  let error = "";
+  try { error = await waitForJob(since); } catch (e) { error = String(e); } finally { setBusy(false); }
+  activeSum = file;
+  await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
+  showSub("summary");
+  if (error) setStatus(`zápis ${model} se nepodařil: ${error}`, "err"); else setStatus(`zápis ${model} hotový`, "ok");
+}
 
 // ---- event log: the server says what it did, the page shows the newest line and reloads when needed
 /** @type {{n:number,at:string,text:string,level:string,stem:string,reload:boolean,job_end?:boolean}[]} */
@@ -1260,8 +1817,10 @@ async function onEvents(/** @type {any[]} */ fresh, /** @type {boolean} */ busyN
   if (fresh.length) lastSeq = Math.max(lastSeq, ...fresh.map(e => e.n));
   const finished = wasBusy && !busyNow;
   wasBusy = busyNow;
+  // the end of a job this page started and waits for: that code reloads and writes the status line itself
+  const awaited = !replay && fresh.some(e => e.job_end) && finishWaiters.length > 0;
   if (!replay) for (const e of fresh) if (e.job_end) noteFinish(e);
-  if (replay) { renderEvents(); return; }
+  if (replay || awaited) { renderEvents(); return; }
   const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
   if (mine && review && !isDirty() && !busy) {
     const stem = review.stem;

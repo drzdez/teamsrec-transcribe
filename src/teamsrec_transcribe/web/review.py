@@ -13,6 +13,9 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   PUT    /api/recordings/{stem}/names                  {"names": {label: name|fields}, "title"?, "summary"?}
   POST   /api/recordings/{stem}/process                {"force"?} transcribe + export + summarize in the background
   POST   /api/recordings/{stem}/recognize              match unnamed labels against the voice prints
+  POST   /api/recordings/{stem}/summaries              {"provider", "model"} a summary with that model, in the background
+  DELETE /api/recordings/{stem}/summaries/{file}       delete that summary (closing its tab)
+  GET    /api/summary-models                           models for summaries: Ollama on this PC, Claude for the key
   POST   /api/recordings/{stem}/speakers/merge         fold the labels of one person into one speaker
   POST   /api/recordings/{stem}/speakers/unmerge       undo the merges that remember their origin
   DELETE /api/recordings/{stem}/speakers/{label}       drop that speaker's segments (noise turned into text)
@@ -22,6 +25,8 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/people/merge                             {"keep", "drop", "stem"?}
   GET    /api/people/{id}                              one person with their voice prints
   DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
+  GET    /api/settings / PUT /api/settings             fields of the shared teamsrec.toml / {"values": {key: value}}
+  PUT    /api/secrets/{name} / DELETE                  {"value"} an API key into / out of the Credential Manager
   GET    /api/help/{doc}                               user-guide | install | privacy
   GET    /api/status                                   job state + recent events
   GET    /api/events                                   Server-Sent Events (event: log), replayed after reconnects
@@ -53,9 +58,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from ..config import Config
+from .. import settings
+from ..config import Config, default_config_path
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import (do_export, do_process, do_summarize, enroll_names, load_segments, meeting_info,
+from ..pipeline import (do_export, do_process, do_summarize, do_summarize_compare, enroll_names, summarize_as,
+                        summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording, reset_names,
                         same_person_groups, set_meeting_link, unmerge_speakers)
 from ..voiceprints import Voiceprints
@@ -162,6 +169,22 @@ def _fmt_hms(t: float) -> str:
     return f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}"
 
 
+def speaker_languages(segs: list[Segment], default: str | None) -> dict[str, dict]:
+    """Per label: the language most of its speech was transcribed in, and whether that was a second pass in
+    another language than the recording's (per-speaker language)."""
+    spoken: dict[str, dict[str, float]] = {}
+    for s in segs:
+        lang = s.language or default or "?"
+        by = spoken.setdefault(s.speaker or "UNKNOWN", {})
+        by[lang] = by.get(lang, 0.0) + max(s.end - s.start, 0.0)
+    out = {}
+    for label, by in spoken.items():
+        main = max(by, key=by.get)
+        out[label] = {"language": main, "own": bool(default) and main not in (default, "?"),
+                      "mixed": len([v for v in by.values() if v >= 5]) > 1}
+    return out
+
+
 def build_review(cfg: Config, rec: Recording) -> dict:
     if not rec.transcript_path.exists():  # the page offers to process it
         return {"stem": rec.stem, "title": rec.title, "start": rec.sidecar.get("start"),
@@ -179,6 +202,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     by: dict[str, list[Segment]] = {}
     for s in segs:
         by.setdefault(s.speaker or "UNKNOWN", []).append(s)
+    langs = speaker_languages(segs, data.get("language"))
     speakers = []
     for label, ss in sorted(by.items(), key=lambda kv: -sum(s.end - s.start for s in kv[1])):
         secs = sum(s.end - s.start for s in ss)
@@ -206,6 +230,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
             "confirmed": bool(value) and bool(manual.get(label)) and label not in voice,
             "seconds": round(secs, 1),
             "count": len(ss),
+            **langs.get(label, {"language": data.get("language"), "own": False, "mixed": False}),
             "hint": hints.get(label, ""),
             "samples": [{"start": round(s.start, 2), "end": round(min(s.end, s.start + CLIP_MAX_S), 2),
                          "at": _fmt_hms(s.start), "text": s.text[:140]} for s in pick_samples(ss)],
@@ -216,6 +241,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "stem": rec.stem, "title": rec.title, "start": rec.sidecar.get("start"),
         "duration_s": rec.sidecar.get("duration_s"), "source": rec.source, "transcribed": True,
         "language": data.get("language"), "speaker_sources": data.get("speaker_sources", []),
+        "transcribed_with": {"provider": data.get("provider"), "model": data.get("model"),
+                             "languages": data.get("languages") or []},
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "speakers": speakers, "known_names": known_names(cfg, people),
         "same_person": [{"person": pid, "labels": labels, "name": (people.get(pid) or Person(pid)).full}
@@ -227,17 +254,44 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     }
 
 
+SUMMARY_STAMP = re.compile(r"<!--\s*teamsrec-transcribe summary \| (?P<provider>[^:|]+):\s*(?P<model>[^|]+?)\s*(?:\|[^>]*?created:\s*(?P<created>[^|>]+?))?\s*(?:\||-->)")
+
+
+def summary_info(path: Path, main: bool) -> dict:
+    """A summary file for the page: which provider/model wrote it (from its first-line stamp) and when."""
+    try:
+        with path.open(encoding="utf-8") as f:
+            first = f.readline()
+    except OSError:
+        first = ""
+    m = SUMMARY_STAMP.search(first)
+    provider, model = (m.group("provider").strip(), m.group("model").strip()) if m else ("", "")
+    fallback = "hlavní" if main else path.name.split(".summary.", 1)[-1][:-3]
+    return {"file": path.name, "label": model or fallback, "provider": provider, "model": model,
+            "created": (m.group("created") or "").strip() if m else "", "main": main}
+
+
 def recording_docs(rec: Recording) -> dict:
     """Readable documents of a recording for the Přepis / Zápis tabs."""
     summaries = []
     if rec.summary_path.exists():
-        summaries.append({"file": rec.summary_path.name, "label": "zápis (lokální model)"})
+        summaries.append(summary_info(rec.summary_path, True))
     for p in sorted(rec.dir.glob(f"{rec.stem}.summary.*.md")):
-        summaries.append({"file": p.name, "label": f"zápis ({p.name[len(rec.stem) + 9:-3]})"})
+        summaries.append(summary_info(p, False))
     others = [{"file": p.name, "label": f"přepis ({p.name[len(rec.stem) + 1:-4]})"}
               for p in sorted(rec.dir.glob(f"{rec.stem}.*.txt"))]
     return {"transcript": rec.file(".txt").name if rec.file(".txt").exists() else None, "summaries": summaries,
             "transcripts": others}
+
+
+def delete_summary(rec: Recording, name: str) -> None:
+    """Delete one summary of the recording (the page's tab close). Only <stem>.summary*.md, nothing else."""
+    if ("/" in name or "\\" in name or not name.startswith(rec.stem + ".summary") or not name.endswith(".md")):
+        raise RecordingError("not a summary of this recording")
+    path = rec.dir / name
+    if not path.exists():
+        raise RecordingError(f"{name} does not exist")
+    path.unlink()
 
 
 def read_doc(rec: Recording, name: str) -> str:
@@ -462,8 +516,11 @@ def save_people(cfg: Config, rows: list[dict], stem: str | None = None) -> list[
 # ---------------------------------------------------------------- server
 
 class ReviewState:
+    settings_path: Path  # the teamsrec.toml the settings page edits (the one the config came from)
+
     def __init__(self, cfg: Config):
         self.cfg = cfg
+        self.settings_path = cfg.source_path or default_config_path()
         self.lock = threading.RLock()
         self.busy = False
         self.message = ""
@@ -507,6 +564,23 @@ class ReviewState:
         with self.lock:
             return [e for e in self.events if e["n"] > n] if n is not None else self.events[-last:]
 
+    def _job_errors(self, stem: str) -> logging.Handler:
+        """A log handler for the time of a job: what the pipeline logs as an error without failing the job (a
+        comparison summary with an unknown model, a missing key) goes to the page's history, not only to the
+        console window nobody looks at."""
+        state = self
+
+        class ToEvents(logging.Handler):
+            def emit(self, record: logging.LogRecord) -> None:
+                try:
+                    state.event(record.getMessage(), "err", stem)
+                except Exception:  # never let the log break the job
+                    pass
+
+        h = ToEvents(logging.ERROR)
+        logging.getLogger("teamsrec_transcribe").addHandler(h)
+        return h
+
     def run_job(self, name: str, fn, done: str, stem: str = "", start: str = "") -> bool:
         """Run fn() in a background thread, one job at a time. Its end is an event with job_end (SSE to the page;
         /api/status tells the same to a client without the stream)."""
@@ -519,6 +593,7 @@ class ReviewState:
 
         def work():
             outcome = (f"{done}: {stem}" if stem else done, "ok")
+            errors = self._job_errors(stem)
             try:
                 fn()
                 with self.lock:
@@ -528,6 +603,7 @@ class ReviewState:
                     self.error = str(e)
                 outcome = (f"{name} selhalo: {e}", "err")
             finally:
+                logging.getLogger("teamsrec_transcribe").removeHandler(errors)
                 with self.lock:
                     self.busy = False
             self.event(outcome[0], outcome[1], stem, reload=True, job_end=True)  # after busy clears: the page sees it idle
@@ -535,8 +611,11 @@ class ReviewState:
         return True
 
     def run_summary(self, rec: Recording) -> None:
-        self.run_job("summary", lambda: do_summarize(self.cfg, rec, force=True), "zápis přegenerován", rec.stem,
-                     start=f"{rec.stem}: zápis se generuje")
+        def work():
+            do_summarize(self.cfg, rec, force=True)
+            do_summarize_compare(self.cfg, rec, force=True)  # the comparison summaries follow the new names too
+        self.run_job("summary", work, "zápis přegenerován", rec.stem, start=f"{rec.stem}: zápis se generuje"
+                     + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
     def run_process(self, rec: Recording, force: bool = False) -> bool:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
@@ -572,6 +651,9 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("PUT", rf"/api/recordings/{STEM_RE_PART}/names", "save_names"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/process", "process"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/recognize", "recognize"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/summaries", "summarize_as"),
+    ("DELETE", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)", "delete_summary"),
+    ("GET", r"/api/summary-models", "summary_models"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/merge", "merge"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/unmerge", "unmerge"),
     ("DELETE", rf"/api/recordings/{STEM_RE_PART}/speakers/(?P<label>[^/]+)", "remove_speaker"),
@@ -582,6 +664,10 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", r"/api/people/merge", "merge_people"),
     ("GET", r"/api/people/(?P<pid>[^/]+)", "person"),
     ("DELETE", r"/api/people/(?P<pid>[^/]+)/voiceprints", "forget_prints"),
+    ("GET", r"/api/settings", "settings"),
+    ("PUT", r"/api/settings", "save_settings"),
+    ("PUT", r"/api/secrets/(?P<name>[^/]+)", "set_secret"),
+    ("DELETE", r"/api/secrets/(?P<name>[^/]+)", "delete_secret"),
     ("GET", r"/api/help/(?P<doc>[^/]+)", "help"),
     ("GET", r"/api/status", "status"),
     ("GET", r"/api/events", "events"),
@@ -713,6 +799,29 @@ def _handler(state: ReviewState, server_ref: dict):
                 return
             self._json({"ok": True, "status": state.status()})
 
+        def r_summarize_as(self, q, body, stem):
+            rec = self._recording(stem)
+            provider, model = str(body.get("provider") or "").strip(), str(body.get("model") or "").strip()
+            if provider not in ("ollama", "anthropic") or not model:
+                raise ValueError("provider (ollama | anthropic) and model are needed")
+            started = state.run_job("summary", lambda: summarize_as(state.cfg, rec, provider, model),
+                                    f"zápis {model} hotový", rec.stem, start=f"{rec.stem}: zápis {model} se generuje")
+            if not started:
+                self._json({"error": "another job is still running", "status": state.status()}, HTTPStatus.CONFLICT)
+                return
+            self._json({"ok": True, "file": summary_path_for(state.cfg, rec, provider, model).name})
+
+        def r_delete_summary(self, q, body, stem, file):
+            rec = self._recording(stem)
+            delete_summary(rec, file)
+            state.event(f"{rec.stem}: zápis {file} smazán", "info", rec.stem, reload=True)
+            self._json({"ok": True})
+
+        def r_summary_models(self, q, body):
+            sug = settings.suggestions(settings.read_values(state.settings_path))
+            self._json({**sug["summary"], "default": {"provider": state.cfg.summarize.provider,
+                                                     "model": state.cfg.summarize.model}})
+
         def r_recognize(self, q, body, stem):
             rec = self._recording(stem)
             m = recognize_voices(state.cfg, rec)
@@ -778,6 +887,31 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json({"ok": True, "removed": n})
 
         # ---- server
+        # ---- settings (shared teamsrec.toml) and API keys; key values never come back
+        def r_settings(self, q, body):
+            self._json(settings.describe(state.settings_path))
+
+        def r_save_settings(self, q, body):
+            values = body.get("values")
+            if not isinstance(values, dict):
+                raise ValueError("values must be an object")
+            res = settings.save(values, state.settings_path)
+            if res["changed"]:
+                state.cfg = settings.reload(state.cfg, state.settings_path)
+                state.event(f"nastavení uloženo: {', '.join(res['changed'])}"
+                            + (" (složka nahrávek platí po restartu)" if res["restart"] else ""), "ok")
+            self._json({"ok": True, **res, **settings.describe(state.settings_path)})
+
+        def r_set_secret(self, q, body, name):
+            settings.set_secret(name, str(body.get("value") or ""))
+            state.event(f"klíč {name} uložen do Správce přihlašovacích údajů", "ok")
+            self._json({"ok": True, "secrets": settings.secret_states()})
+
+        def r_delete_secret(self, q, body, name):
+            removed = settings.delete_secret(name)
+            state.event(f"klíč {name} " + ("smazán ze Správce přihlašovacích údajů" if removed else "tam nebyl"), "info")
+            self._json({"ok": True, "removed": removed, "secrets": settings.secret_states()})
+
         def r_help(self, q, body, doc):
             self._json(help_doc(doc))
 

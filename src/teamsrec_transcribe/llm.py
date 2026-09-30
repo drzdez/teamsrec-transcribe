@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -92,7 +91,8 @@ def _anthropic(system: str, user: str, settings: SummarizeSettings) -> LLMResult
     except ImportError as e:  # pragma: no cover
         raise LLMError("the anthropic package is not installed") from e
     try:
-        key = os.environ.get(API_KEY_ENV) or None
+        from .settings import get_secret
+        key = get_secret("anthropic") or None  # environment, then the key stored on the settings page
         client = anthropic.Anthropic(api_key=key)  # None -> SDK defaults (ANTHROPIC_API_KEY, `ant auth login`)
         with client.messages.stream(
             model=settings.model,
@@ -102,7 +102,8 @@ def _anthropic(system: str, user: str, settings: SummarizeSettings) -> LLMResult
         ) as stream:
             response = stream.get_final_message()
     except (anthropic.AuthenticationError, TypeError) as e:  # TypeError: SDK found no credentials at all
-        raise LLMError(f"no valid Claude credentials: set {API_KEY_ENV} (or run `ant auth login`)") from e
+        raise LLMError(f"no valid Claude credentials: enter the key in Settings on the review page, or set "
+                       f"{API_KEY_ENV} (or run `ant auth login`)") from e
     except anthropic.NotFoundError as e:
         raise LLMError(f"model {settings.model!r} not found for this account") from e
     except anthropic.RateLimitError as e:

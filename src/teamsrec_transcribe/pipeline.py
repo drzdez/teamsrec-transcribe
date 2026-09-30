@@ -676,28 +676,49 @@ def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
     return rec.summary_path
 
 
+SUMMARY_PROVIDERS = ("ollama", "anthropic")
+
+
+def summary_path_for(cfg: Config, rec: Recording, provider: str, model: str) -> Path:
+    """The configured provider/model writes the main <stem>.summary.md, any other <stem>.summary.<model>.md."""
+    from .recording import slugify
+    if (provider, model) == (cfg.summarize.provider, cfg.summarize.model):
+        return rec.summary_path
+    return rec.file(f".summary.{slugify(model)}.md")
+
+
+def summarize_as(cfg: Config, rec: Recording, provider: str, model: str) -> Path:
+    """One summary with the given provider/model (the review page's "generate with this model")."""
+    from dataclasses import replace
+    from .summarize import summarize
+    if provider not in SUMMARY_PROVIDERS:
+        raise RecordingError(f"unknown summary provider {provider!r} (ollama | anthropic)")
+    if not model.strip():
+        raise RecordingError("no model given")
+    segs, header = _summary_input(cfg, rec)
+    words = sum(len(s.text.split()) for s in segs)
+    if words < MIN_SUMMARY_WORDS:
+        raise RecordingError(f"{rec.stem}: only {words} words transcribed, nothing to summarize")
+    path = summary_path_for(cfg, rec, provider, model)
+    text = summarize(rec, segs, header, replace(cfg.summarize, provider=provider, model=model.strip()))
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
 def do_summarize_compare(cfg: Config, rec: Recording, *, force: bool = False) -> list[Path]:
     """Extra summaries with other providers/models (config `compare`), each to <stem>.summary.<model>.md."""
-    from dataclasses import replace
-    from .recording import slugify
-    from .summarize import summarize
     out = []
     for spec in cfg.summarize.compare:
         provider, _, model = spec.partition(":")
         if not model:
             log.error("%s: compare entry %r must be provider:model", rec.stem, spec)
             continue
-        path = rec.file(f".summary.{slugify(model)}.md")
-        if path.exists() and not force:
+        if summary_path_for(cfg, rec, provider, model).exists() and not force:
             continue
         try:
-            segs, header = _summary_input(cfg, rec)
-            if sum(len(s.text.split()) for s in segs) < MIN_SUMMARY_WORDS:
-                log.info("%s: too few words for a %s summary", rec.stem, spec)
-                continue
-            text = summarize(rec, segs, header, replace(cfg.summarize, provider=provider, model=model))
-            path.write_text(text, encoding="utf-8")
-            out.append(path)
+            out.append(summarize_as(cfg, rec, provider, model))
+        except RecordingError as e:
+            log.info("%s: no %s summary: %s", rec.stem, spec, e)
         except Exception as e:
             log.error("%s: compare summary %s failed: %s", rec.stem, spec, e)
     return out

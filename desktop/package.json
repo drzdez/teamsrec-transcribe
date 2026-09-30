@@ -1,0 +1,13 @@
+{
+  "name": "teamsrec-desktop",
+  "private": true,
+  "description": "Desktop window for the teamsrec review page (Tauri). The page and its server are the same as in the browser.",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "icons": "tauri icon icon-source.png"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.0"
+  }
+}

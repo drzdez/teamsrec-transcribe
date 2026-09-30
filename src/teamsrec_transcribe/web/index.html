@@ -24,6 +24,10 @@
   header input#title { width: 26vw; min-width: 200px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; }
   header input#title:focus { outline: 2px solid var(--accent); border-color: transparent; }
   #status.busy { color: var(--warn); font-weight: 600; }
+  #recBadge { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #e74c3c; white-space: nowrap; }
+  #recBadge[hidden] { display: none; }
+  #recBadge .recDot { width: 11px; height: 11px; border-radius: 50%; background: #e74c3c; animation: recPulse 1.4s ease-in-out infinite; }
+  @keyframes recPulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
   #events { position: fixed; right: 12px; bottom: 52px; width: min(640px, 92vw); max-height: 45vh; overflow-y: auto;
             background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px;
             font-size: 13px; z-index: 20; box-shadow: 0 8px 24px rgba(0,0,0,.4); }
@@ -71,6 +75,7 @@
   .keyState.missing { color: var(--warn); }
   .keyState.vault, .keyState.env { color: var(--ok); }
   .setWarn { color: var(--warn); font-size: 13px; margin: 6px 0 0; }
+  .setTools { margin: 12px 0 0; padding-top: 12px; border-top: 1px solid var(--line); }
   @media (max-width: 700px) {
     #settings { padding: 12px 16px 32px; }
     .card.setSec { padding: 12px 14px; }
@@ -232,6 +237,7 @@
   <button id="histBtn" title="co server udělal, od spuštění stránky">Historie</button>
   <span id="dirty" class="meta"></span>
   <span class="meta" id="tip">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
+  <span id="recBadge" hidden title="teamsrec-capture právě nahrává"><span class="recDot"></span><span id="recText">Nahrávání probíhá</span></span>
   <span id="status"></span>
 </footer>
 <div id="events" hidden></div>
@@ -299,7 +305,13 @@ function markClean() { baseline = snapshot(); updateDirty(); }
 function isDirty() { return baseline !== "" && snapshot() !== baseline; }
 function updateDirty() {
   const d = $("dirty");
-  if (!review || !review.transcribed) { d.textContent = ""; d.className = "meta"; return; }
+  if (!review) { d.textContent = ""; d.className = "meta"; return; }
+  if (!review.transcribed) {  // only the title can change before the transcript exists
+    const changed = isDirty();
+    d.textContent = changed ? "● neuložený název – Uložit ho zapíše (složka a soubory se přejmenují)" : "";
+    d.className = changed ? "meta changed" : "meta";
+    return;
+  }
   if (isDirty()) { d.textContent = "● neuložené změny – Uložit je zapíše do přepisu a titulků"; d.className = "meta changed"; }
   else { d.textContent = "✓ vše uloženo; Uložit je potřeba jen po změně, zápis se přegenerovává jen na vyžádání"; d.className = "meta clean"; }
 }
@@ -367,7 +379,7 @@ function escapeHtml(/** @type {string} */ s) {
 let allRows = [];
 const filterInput = /** @type {HTMLInputElement} */ ($("filter"));
 
-/** lower case without diacritics, so "archi" finds "Archi board" and "Zdeněk" finds "Zdenek" */
+/** lower case without diacritics, so "archi" finds "Archi board" and "Jiří" finds "Jiri" */
 function foldText(/** @type {string} */ s) {
   return s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
@@ -493,7 +505,7 @@ async function loadRecording(/** @type {string} */ stem) {
     meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · bez přepisu`;
     showSub("speakers", false);
     renderNotTranscribed(r);
-    baseline = ""; updateDirty();
+    markClean();  // the title can be changed and saved right after recording
     return;
   }
   meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · ${r.language || "?"} · mluvčí z: ${(r.speaker_sources || []).join(", ") || "diarizace"}`;
@@ -889,6 +901,15 @@ async function save(/** @type {boolean} */ withSummary) {
   buttons.forEach(b => b.disabled = true);
   setStatus("ukládám…");
   const since = finishes;
+  if (!review.transcribed) {  // no transcript yet: only the title (the recording is renamed)
+    try {
+      const r = await api(recUrl(review.stem, "names"), send("PUT", { names: {}, title: titleInput.value }));
+      await loadList(); pick.value = r.stem; await loadRecording(r.stem);
+      setStatus(`název uložen: ${r.title}`, "ok");
+    } catch (e) { setStatus(String(e), "err"); }
+    finally { buttons.forEach(b => b.disabled = false); }
+    return;
+  }
   try {
     const r = await api(recUrl(review.stem, "names"),
       send("PUT", { names: collectNames(), summary: withSummary, title: titleInput.value }));
@@ -1361,7 +1382,7 @@ function makeCombo(/** @type {(v: string) => void} */ onChange) {
 }
 
 // ---- settings: the fields of the shared teamsrec.toml (both apps) and the API keys, over the page like the help
-/** @typedef {{key:string,label:string,type:string,help:string,choices:string[],default:any,value:any,suggest:string,restart:boolean}} SetField */
+/** @typedef {{key:string,label:string,type:string,help:string,choices:string[],labels?:string[],default:any,value:any,suggest:string,restart:boolean}} SetField */
 /** @typedef {{id:string,title:string,note:string,fields:SetField[]}} SetSection */
 /** @typedef {{name:string,label:string,used_for:string,state:"env"|"vault"|"missing",env:string,env_names:string[]}} SecretState */
 /** @typedef {{value:string,note:string,local:boolean|null}} SetOption */
@@ -1408,6 +1429,8 @@ function renderSettings(d) {
     for (const f of s.fields) { settingsLoaded[f.key] = f.value; card.appendChild(settingRow(f)); }
     const warn = document.createElement("p"); warn.className = "setWarn"; warn.dataset.needs = "1"; warn.hidden = true;
     card.appendChild(warn);
+    if (s.id === "capture") card.appendChild(soundTools());
+    if (s.id === "summarize") card.appendChild(modelTools());
     settingsMain.appendChild(card);
   }
   const prov = settingsMain.querySelector('[data-type][data-key="summarize.provider"]');
@@ -1427,6 +1450,38 @@ function optionsOf(/** @type {string} */ suggest) {
     return (all.summary || {})[prov ? prov.value : "ollama"] || [];
   }
   return Array.isArray(all[suggest]) ? all[suggest] : [];
+}
+
+/** the Ollama / Claude model lists, asked now (the settings open with the last known ones) */
+let modelsLoading = /** @type {Promise<void>|null} */ (null);
+function loadLiveModels(/** @type {boolean} */ quiet = false) {
+  if (modelsLoading) return modelsLoading;
+  if (!quiet) setStatus("načítám aktuální modely (Ollama, Claude)…", "busy");
+  modelsLoading = api("/api/settings/models").then(r => {
+    if (!settingsData) return;
+    settingsData.suggestions = r.suggestions;
+    refreshSummaryModels();
+    refreshCompareAdder();
+    const s = r.suggestions.summary;
+    setStatus(`modely načteny: Ollama ${s.ollama.filter((/** @type {SetOption} */ o) => o.local).length}, Claude ${s.anthropic.length}`, "ok");
+  }).catch(e => setStatus(String(e), "err")).finally(() => { modelsLoading = null; });
+  return modelsLoading;
+}
+
+/** open a model dropdown for the first time: ask for the current lists (once) */
+function lazyModels(/** @type {HTMLElement} */ el) {
+  const ask = () => { if (settingsData && !settingsData.suggestions.models_loaded) loadLiveModels(true); };
+  el.addEventListener("focus", ask); el.addEventListener("mousedown", ask);
+}
+
+/** the compare "přidat…" list, rebuilt after the models were loaded */
+function refreshCompareAdder() {
+  const add = /** @type {HTMLSelectElement|null} */ (settingsMain.querySelector('.setRow[data-key="summarize.compare"] select.adder'));
+  if (!add) return;
+  const items = optionsOf("compare");
+  add.innerHTML = `<option value="">${items.length ? "přidat…" : "nabídka není k dispozici (bez klíče / Ollamy)"}</option>` +
+    items.map((/** @type {SetOption} */ o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(optText(o))}</option>`).join("");
+  add.disabled = !items.length;
 }
 
 /** a different summary service: its models in the model dropdown, the typed/chosen value kept */
@@ -1459,6 +1514,35 @@ function updateModelNotes() {
   }
 }
 
+/** under Zápis: ask for the current model lists (they are not fetched when the settings open: that takes seconds) */
+function modelTools() {
+  const p = document.createElement("div"); p.className = "sumTools setTools";
+  const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.id = "loadModels";
+  b.textContent = "Načíst aktuální modely pro výběr";
+  b.title = "zeptá se Ollamy v tomto počítači a Claude API, které modely jsou k dispozici (pár sekund)";
+  b.onclick = () => { loadLiveModels(); };
+  const hint = document.createElement("span"); hint.className = "meta";
+  hint.textContent = "Načtou se i samy při prvním rozbalení seznamu modelů.";
+  p.append(b, hint);
+  return p;
+}
+
+/** under Nahrávání: the Windows sound dialog (enable the mic array, levels) and where the mic test is */
+function soundTools() {
+  const p = document.createElement("div"); p.className = "sumTools setTools";
+  const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.id = "soundSettings";
+  b.textContent = "Otevřít nastavení zvuku Windows";
+  b.title = "zařízení pro nahrávání, hlasitost, zapnutí mikrofonního pole notebooku";
+  b.onclick = async () => {
+    try { await api("/api/system/sound-settings", send("POST")); setStatus("nastavení zvuku Windows otevřeno", "ok"); }
+    catch (e) { setStatus(String(e), "err"); }
+  };
+  const hint = document.createElement("span"); hint.className = "meta";
+  hint.textContent = "Test mikrofonu: pravým tlačítkem na ikonu nahrávání v liště → Test microphone.";
+  p.append(b, hint);
+  return p;
+}
+
 /** @param {SetField} f */
 function settingRow(f) {
   const row = document.createElement("div"); row.className = "setRow"; row.dataset.key = f.key;
@@ -1469,13 +1553,16 @@ function settingRow(f) {
     const c = document.createElement("input"); c.type = "checkbox"; c.checked = !!f.value; el = c;
   } else if (f.type === "enum") {
     const s = document.createElement("select");
-    for (const ch of f.choices) { const o = document.createElement("option"); o.value = ch; o.textContent = ch; s.appendChild(o); }
+    f.choices.forEach((ch, n) => {
+      const o = document.createElement("option"); o.value = ch; o.textContent = (f.labels && f.labels[n]) || ch; s.appendChild(o);
+    });
     s.value = String(f.value); el = s;
   } else if (f.type === "list") {
     const t = document.createElement("textarea"); t.value = (f.value || []).join("\n"); t.rows = Math.max(2, (f.value || []).length + 1); el = t;
   } else if (f.suggest) {  // known values in a dropdown, "jiný…" for anything else
     const { sel, other } = makeCombo(() => updateSettingsState());
     row.dataset.suggest = f.suggest;
+    if (f.suggest === "summary") lazyModels(sel);
     const ctl = document.createElement("div"); ctl.className = "setCtl";
     const note = document.createElement("div"); note.className = "modelNote";
     ctl.append(sel, other, note);
@@ -1496,11 +1583,15 @@ function settingRow(f) {
   el.id = id; el.dataset.key = f.key; el.dataset.type = f.type;
   el.addEventListener("input", updateSettingsState); el.addEventListener("change", updateSettingsState);
   const help = document.createElement("div"); help.className = "help";
-  const def = f.type === "list" ? (f.default || []).join(", ") : String(f.default);
+  const defIndex = f.type === "enum" ? f.choices.indexOf(String(f.default)) : -1;
+  const def = f.type === "list" ? (f.default || []).join(", ")
+    : f.type === "bool" ? (f.default ? "zapnuto" : "vypnuto")
+    : defIndex >= 0 && f.labels && f.labels[defIndex] ? f.labels[defIndex] : String(f.default);
   help.textContent = [f.help, def !== "" ? `výchozí: ${def}` : "", f.restart ? "platí po restartu aplikací" : ""].filter(Boolean).join(" · ");
   if (f.type === "list" && f.suggest) {  // a list of values: pick one to add it as a line
     const ctl = document.createElement("div"); ctl.className = "setCtl";
     const add = document.createElement("select"); add.className = "adder";
+    if (f.suggest === "compare") lazyModels(add);
     const items = optionsOf(f.suggest);
     add.innerHTML = `<option value="">${items.length ? "přidat…" : "nabídka není k dispozici (bez klíče / Ollamy)"}</option>` +
       items.map((/** @type {SetOption} */ o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.value)}  —  ${escapeHtml((o.local === true ? "✓ " : o.local === false ? "↓ " : "") + o.note)}</option>`).join("");
@@ -1657,9 +1748,10 @@ function orderedSummaries() {
   return all.slice().sort((a, b) => rank(a) - rank(b));
 }
 
-async function loadSummaryModels() {
-  if (summaryModels) return summaryModels;
-  try { summaryModels = await api("/api/summary-models"); } catch { summaryModels = { ollama: [], anthropic: [], default: { provider: "ollama", model: "" } }; }
+async function loadSummaryModels(/** @type {boolean} */ live = false) {
+  if (summaryModels && (!live || summaryModels.loaded)) return summaryModels;
+  try { summaryModels = await api("/api/summary-models" + (live ? "?live=1" : "")); }
+  catch { summaryModels = summaryModels || { ollama: [], anthropic: [], loaded: false, default: { provider: "ollama", model: "" } }; }
   return summaryModels;
 }
 
@@ -1685,11 +1777,15 @@ function renderSumBar() {
   }
   bar.appendChild(tools);
   setCombo(model, other, [], "");
-  loadSummaryModels().then(m => {
-    const groups = [{ label: "Ollama – v tomto počítači", items: m.ollama.map(o => ({ ...o, value: "ollama:" + o.value })) },
-                    { label: "Claude – cloud (text přepisu jde ven)", items: m.anthropic.map(o => ({ ...o, value: "anthropic:" + o.value, note: "" })) }];
-    setCombo(model, other, groups, m.default && m.default.model ? `${m.default.provider}:${m.default.model}` : "");
-  });
+  const fill = (/** @type {any} */ m) => {
+    const groups = [{ label: "Ollama – v tomto počítači", items: m.ollama.map((/** @type {SetOption} */ o) => ({ ...o, value: "ollama:" + o.value })) },
+                    { label: "Claude – cloud (text přepisu jde ven)", items: m.anthropic.map((/** @type {SetOption} */ o) => ({ ...o, value: "anthropic:" + o.value, note: "" })) }];
+    const current = model.options.length > 1 ? comboValue(model) : "";
+    setCombo(model, other, groups, current || (m.default && m.default.model ? `${m.default.provider}:${m.default.model}` : ""));
+  };
+  loadSummaryModels().then(fill);  // the last known lists at once (the configured model is always there)
+  const ask = () => { if (!summaryModels || !summaryModels.loaded) loadSummaryModels(true).then(fill); };
+  model.addEventListener("focus", ask); model.addEventListener("mousedown", ask);
 
   const tabs = document.createElement("div"); tabs.className = "sumTabs"; tabs.id = "sumTabs";
   for (const d of shown) {
@@ -1786,6 +1882,7 @@ async function pollStatus() {
     return;  // the server is gone or busy; the next tick tries again
   }
   events = s.events || [];
+  setCapture(s.capture);
   const fresh = events.filter(e => e.n > lastSeq);
   const first = lastSeq < 0;
   lastSeq = typeof s.seq === "number" ? s.seq : lastSeq;
@@ -1809,6 +1906,17 @@ $("histBtn").addEventListener("click", () => {
   box.hidden = !box.hidden;
   renderEvents();
 });
+/** what teamsrec-capture does: a red dot + "Nahrávání probíhá · title · od hh:mm" while it records */
+function setCapture(/** @type {any} */ c) {
+  const badge = $("recBadge");
+  if (!c || !c.recording) { badge.hidden = true; return; }
+  const since = c.started ? String(c.started).slice(11, 16) : "";
+  const kind = { onsite: "na místě", playback: "přehrávání", manual: "ruční" }[/** @type {string} */ (c.source)] || "";
+  $("recText").textContent = ["Nahrávání probíhá", c.title || c.stem, since ? `od ${since}` : "", kind].filter(Boolean).join(" · ");
+  badge.title = `teamsrec-capture nahrává${c.stem ? " do " + c.stem : ""}`;
+  badge.hidden = false;
+}
+
 /** one event from the server (SSE or a poll), in order; replayed ones only fill the history */
 async function onEvents(/** @type {any[]} */ fresh, /** @type {boolean} */ busyNow, /** @type {boolean} */ replay) {
   for (const e of fresh) if (!events.some(x => x.n === e.n)) events.push(e);
@@ -1847,8 +1955,10 @@ function startEvents() {
     failures = 0;
     const h = JSON.parse(/** @type {MessageEvent} */ (ev).data);
     wasBusy = !!h.busy;
+    setCapture(h.capture);
     if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
   });
+  es.addEventListener("capture", ev => setCapture(JSON.parse(/** @type {MessageEvent} */ (ev).data)));
   es.addEventListener("log", ev => {
     const e = JSON.parse(/** @type {MessageEvent} */ (ev).data);
     onEvents([e], !!e.busy, !!e.replay).catch(() => {});
@@ -1860,7 +1970,21 @@ function startEvents() {
 }
 startEvents();
 
+// another recording asked from outside (the desktop window after a click on "Saved …"): switch to it
+window.addEventListener("hashchange", async () => {
+  const stem = decodeURIComponent(location.hash.slice(1));
+  if (!stem || (review && review.stem === stem)) return;  // our own navigation sets the hash too
+  if (isDirty()) { setStatus(`nahrávka ${stem}: nejdřív uložte rozdělanou práci, pak ji vyberte v seznamu`, "busy"); return; }
+  await loadList();
+  if (![...pick.options].some(o => o.value === stem)) return;
+  pick.value = stem;
+  if (!settingsBox.hidden) closeSettings();
+  showTab("speakers", false);
+  await loadRecording(stem);
+});
+
 (async () => {
+  if (new URLSearchParams(location.search).get("open") === "settings") openSettings();  // the tray's Settings…
   try {
     await loadList();
     if (pick.value) await loadRecording(pick.value);

@@ -102,6 +102,9 @@ test("settings: model fields are editable dropdowns that say what is local and w
   await openSettings(p);
   const model = field(p, "summarize.model");
   assert.equal(model.tagName, "SELECT", "a real dropdown: it always lists everything, whatever is selected");
+  assert.match(model.options[0].textContent, /seznam zatím nenačten/, "the settings open without asking Ollama or Claude");
+  model.dispatchEvent(new p.window.Event("focus"));  // opening the dropdown asks for the current lists
+  await waitFor(() => /modely načteny/.test(p.$("status").textContent), "the live model lists");
   const opts = () => [...model.options].map(o => o.textContent);
   assert.deepEqual(opts(), ["gemma4:31b   —   ✓ v počítači (Ollama)", "jiný…"]);
   p.change(field(p, "summarize.provider"), "anthropic");
@@ -118,4 +121,18 @@ test("settings: model fields are editable dropdowns that say what is local and w
   const adder = field(p, "summarize.compare").closest(".setRow").querySelector("select.adder");
   p.change(adder, "anthropic:claude-opus-5-5");
   assert.equal(field(p, "summarize.compare").value, "anthropic:claude-opus-5-5", "picking adds a line");
+});
+
+test("settings: the tray's Settings… opens them directly; choices read as sentences; the Windows sound button", async t => {
+  const p = await openPage(t, "", { query: "open=settings" });
+  await waitFor(() => field(p, "capture.device_missing"), "the settings opened by the link");
+  assert.ok(!p.$("settings").hidden);
+  const texts = [...field(p, "capture.device_missing").options].map(o => o.textContent);
+  assert.deepEqual(texts, ["Zeptat se, čím nahrávat (nabídne dostupná zařízení)", "Nenahrávat a nahlásit chybu",
+                           "Tiše použít výchozí vstup Windows"]);
+  assert.equal(field(p, "capture.device_missing").value, "ask", "the values stay the same");
+  assert.ok(field(p, "capture.tray_open"), "what the tray icon opens is set here too");
+  const sound = p.$("soundSettings");
+  assert.ok(sound && section(p, "capture").contains(sound), "the sound button sits under Nahrávání");
+  assert.match(section(p, "capture").textContent, /Test mikrofonu: pravým tlačítkem na ikonu/);
 });

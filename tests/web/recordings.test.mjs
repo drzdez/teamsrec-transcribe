@@ -56,3 +56,24 @@ test("the unfinished preset counts and picks what still needs work", async t => 
   todo.click();
   assert.equal(p.$("filterCount").textContent, "3 z 3");
 });
+
+test("a recording without a transcript can be renamed right after recording", async t => {
+  const p = await openPage(t, BOARD_NEW);
+  await waitFor(() => p.doc.querySelector("#main button.primary-btn"), "the offer to transcribe");
+  p.input(p.$("title"), "Plánování sprintu");
+  assert.match(p.$("dirty").textContent, /neuložený název/);
+  p.$("save").click();
+  await waitFor(() => /název uložen: Plánování sprintu/.test(p.$("status").textContent), "the rename");
+  assert.equal(p.$("pick").value, "2026-09-03_0900_planovani-sprintu", "the folder and files follow the title");
+  assert.match([...p.$("pick").options].find(o => o.selected).textContent, /Plánování sprintu \[○ bez přepisu\]/);
+  assert.equal(p.$("dirty").textContent, "");
+  assert.ok(p.doc.querySelector("#main button.primary-btn"), "it can still be transcribed");
+});
+
+test("a new #stem from outside (a click on the Saved balloon) switches the open page to that recording", async t => {
+  const p = await openPage(t, WEEKLY);
+  await waitFor(() => p.doc.querySelector(".card"), "the first recording");
+  p.window.location.hash = BOARD_OLD;
+  p.window.dispatchEvent(new p.window.HashChangeEvent("hashchange"));
+  await waitFor(() => p.$("pick").value === BOARD_OLD && p.$("title").value === "Archi board", "the other recording");
+});

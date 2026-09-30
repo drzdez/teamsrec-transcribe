@@ -131,9 +131,9 @@ def test_video_timeline_names_segments_and_maps_fallback():
     assert apply_video_timeline(segs2, tl, fallback=False) == {}
     assert segs2[4].speaker == "SPEAKER_00"
     from teamsrec_transcribe.speakers import apply_video_fallback
-    segs2[3].speaker = "Zdeněk"  # the mic named SPEAKER_02 in between: untouched by the fallback
+    segs2[3].speaker = "Jiří"  # the mic named SPEAKER_02 in between: untouched by the fallback
     apply_video_fallback(segs2, tl, original)
-    assert [s.speaker for s in segs2] == ["Jana", "Petr", "Jana", "Zdeněk", "Jana"]
+    assert [s.speaker for s in segs2] == ["Jana", "Petr", "Jana", "Jiří", "Jana"]
 
 
 def test_manual_names_and_speaker_list():
@@ -299,24 +299,24 @@ def test_people_display_and_matching(tmp_path):
 def test_people_dedup_and_merge(tmp_path):
     from teamsrec_transcribe.people import People
     ppl = People.load(tmp_path, "nick")
-    z = ppl.ensure("Zdeněk")                      # from the mic track: first name only
-    assert (z.id, z.first, z.last) == ("zdenek", "Zdeněk", "")
-    z2 = ppl.ensure("Zdeněk Zdražil")             # the typed full name completes the same person
-    assert z2 is z and z.last == "Zdražil" and len(ppl.people) == 1
-    assert ppl.find("Zdeněk Zdražil") is z and ppl.find("Zdeněk") is z
-    pv = ppl.ensure("Pavel Orosz"); pv.nick = "Ori"
-    assert ppl.ensure("Pavol Orosz") is pv and "Pavol Orosz" in pv.aliases   # spelling variant, not a new person
-    assert ppl.find("Pavol Orosz") is pv and ppl.display("Pavol Orosz") == "Ori"
-    other = ppl.ensure("Zdeněk Novák")            # a different Zdeněk now has to be a new person
+    z = ppl.ensure("Jiří")                      # from the mic track: first name only
+    assert (z.id, z.first, z.last) == ("jiri", "Jiří", "")
+    z2 = ppl.ensure("Jiří Dvořák")             # the typed full name completes the same person
+    assert z2 is z and z.last == "Dvořák" and len(ppl.people) == 1
+    assert ppl.find("Jiří Dvořák") is z and ppl.find("Jiří") is z
+    pv = ppl.ensure("Karel Horák"); pv.nick = "Kája"
+    assert ppl.ensure("Karol Horák") is pv and "Karol Horák" in pv.aliases   # spelling variant, not a new person
+    assert ppl.find("Karol Horák") is pv and ppl.display("Karol Horák") == "Kája"
+    other = ppl.ensure("Jiří Novák")            # a different Jiří now has to be a new person
     assert other is not z and len(ppl.people) == 3
     # merge: aliases/nick carried over, speakers.json rewritten, voice prints moved
-    dup = ppl.ensure("Z. Zdražil"); dup.nick = "Zdenda"
+    dup = ppl.ensure("J. Dvořák"); dup.nick = "Jirka"
     rec = _make_transcribed(tmp_path)
     rec.write_json(rec.speakers_path, {"SPEAKER_00": dup.id, "SPEAKER_01": other.id})
     changed = ppl.merge(z.id, dup.id, [rec])
     assert [r.stem for r in changed] == [rec.stem] and ppl.get(dup.id) is None
     assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": z.id, "SPEAKER_01": other.id}
-    assert z.nick == "Zdenda" and "Z. Zdražil" in z.aliases and ppl.find("Z. Zdražil") is z
+    assert z.nick == "Jirka" and "J. Dvořák" in z.aliases and ppl.find("J. Dvořák") is z
     with pytest.raises(ValueError):
         ppl.merge(z.id, "nobody")
 
@@ -350,16 +350,16 @@ def test_voiceprints_registry_and_recognition(tmp_path):
     # remap: two labels renamed to the same name are averaged, untouched labels keep their key
     emb = {"SPEAKER_00": a, "SPEAKER_01": [0.0, 0.0, 1.0, 0.0], "SPEAKER_02": b}
     before = ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00", "SPEAKER_02"]
-    after = ["Zdeněk", "Zdeněk", "Zdeněk", "SPEAKER_02"]
+    after = ["Jiří", "Jiří", "Jiří", "SPEAKER_02"]
     out = remap_embeddings(emb, before, after)
-    assert set(out) == {"Zdeněk", "SPEAKER_02"} and abs(out["Zdeněk"][0] - out["Zdeněk"][2]) < 1e-6
-    assert abs(sum(x * x for x in out["Zdeněk"]) - 1) < 1e-6
+    assert set(out) == {"Jiří", "SPEAKER_02"} and abs(out["Jiří"][0] - out["Jiří"][2]) < 1e-6
+    assert abs(sum(x * x for x in out["Jiří"]) - 1) < 1e-6
     # enrol from a transcript after naming
     vp2 = Voiceprints.load(tmp_path / "v2")
-    segs = [{"start": 0, "end": 40, "speaker": "Zdeněk"}, {"start": 40, "end": 45, "speaker": "SPEAKER_02"}]
+    segs = [{"start": 0, "end": 40, "speaker": "Jiří"}, {"start": 40, "end": 45, "speaker": "SPEAKER_02"}]
     n = enroll_from_recording(vp2, {"speaker_embeddings": out, "diarize_model": "m", "segments": segs},
-                              {"Zdeněk": "zdenek", "SPEAKER_02": "petr", "SPEAKER_09": "nobody"}, "rec9", min_seconds=30)
-    assert n == 1 and vp2.count("zdenek") == 1 and vp2.count("petr") == 0  # 5 s of speech is not enrolled
+                              {"Jiří": "jiri", "SPEAKER_02": "petr", "SPEAKER_09": "nobody"}, "rec9", min_seconds=30)
+    assert n == 1 and vp2.count("jiri") == 1 and vp2.count("petr") == 0  # 5 s of speech is not enrolled
 
 
 def test_review_data_clip_and_save(tmp_path):
@@ -611,29 +611,29 @@ def test_mic_named_segments_survive_the_video_pass():
     """Teams never outlines the local user's own tile, so the highlight must not overwrite the mic track."""
     from teamsrec_transcribe.speakers import apply_video_timeline
     from teamsrec_transcribe.video_speakers import VideoTimeline
-    tl = VideoTimeline(fps=2.0, speakers={"Miroslav Bystriansky": [[0, 60]]}, clusters=[])
-    segs = [Segment(0, 10, "já mluvím", "Zdeněk Zdražil"),   # named by the microphone a moment ago
+    tl = VideoTimeline(fps=2.0, speakers={"Michal Bartoš": [[0, 60]]}, clusters=[])
+    segs = [Segment(0, 10, "já mluvím", "Jiří Dvořák"),   # named by the microphone a moment ago
             Segment(10, 20, "a teď on", "SPEAKER_01"),
             Segment(20, 30, "mimo zvýraznění", "SPEAKER_02")]
     segs[2].start, segs[2].end = 120, 130
     apply_video_timeline(segs, tl, fallback=False, keep_named=True)
-    assert [s.speaker for s in segs] == ["Zdeněk Zdražil", "Miroslav Bystriansky", "SPEAKER_02"]
+    assert [s.speaker for s in segs] == ["Jiří Dvořák", "Michal Bartoš", "SPEAKER_02"]
     # without keep_named the highlight wins, as it did for imported recordings
-    segs2 = [Segment(0, 10, "já mluvím", "Zdeněk Zdražil")]
+    segs2 = [Segment(0, 10, "já mluvím", "Jiří Dvořák")]
     apply_video_timeline(segs2, tl, fallback=False)
-    assert segs2[0].speaker == "Miroslav Bystriansky"
+    assert segs2[0].speaker == "Michal Bartoš"
 
 
 def test_video_names_that_match_no_participant_are_dropped():
     from teamsrec_transcribe.pipeline import keep_video_names
-    found = {"Marián Bobrík": [[0, 10]], "Miory Baotnbnsc": [[10, 3000]], "onen Boork": [[20, 25]]}
+    found = {"Tomáš Beneš": [[0, 10]], "Mihoy Bardtnbnsc": [[10, 3000]], "onen Boork": [[20, 25]]}
     # the meeting has participants: only what OCR snapped onto one of them survives
-    kept = keep_video_names(found, ["Marián Bobrík", "Miroslav Bystriansky", "Zdeněk Zdražil"])
-    assert list(kept) == ["Marián Bobrík"]
+    kept = keep_video_names(found, ["Tomáš Beneš", "Michal Bartoš", "Jiří Dvořák"])
+    assert list(kept) == ["Tomáš Beneš"]
     # no participants (imported recording): anything name-shaped is kept, as before ("onen Boork" too:
     # without somebody to compare against there is nothing better to go on)
     kept = keep_video_names(found, [])
-    assert list(kept) == ["Marián Bobrík", "Miory Baotnbnsc", "onen Boork"]
+    assert list(kept) == ["Tomáš Beneš", "Mihoy Bardtnbnsc", "onen Boork"]
 
 
 def test_a_person_can_opt_out_of_voice_recognition(tmp_path):
@@ -1345,3 +1345,33 @@ def test_errors_logged_during_a_job_reach_the_page_history(tmp_path):
     assert texts[-1] == ("ok", "zpracováno: s1"), "the job itself still finished"
     plog.error("after the job")  # the handler is gone
     assert not any("after the job" in t for _, t in [(e["level"], e["text"]) for e in state.events])
+
+
+def test_the_capture_status_file_is_read_and_changes_reach_the_pages(tmp_path):
+    import os as _os
+    import threading as _threading
+    from teamsrec_transcribe.web.review import ReviewState, _capture_watch, capture_status
+    f = tmp_path / "teamsrec-capture.json"
+    assert capture_status(f) == {"running": False, "recording": False}, "no file: no capture app"
+    rec = {"app": "teamsrec-capture", "pid": _os.getpid(), "running": True, "recording": True, "title": "Plánování",
+           "stem": "2026-09-30_1827_planovani", "source": "onsite", "started": "2026-09-30T18:27:05"}
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    assert capture_status(f)["recording"] is True and capture_status(f)["title"] == "Plánování"
+    f.write_text(json.dumps({**rec, "pid": 999999}), encoding="utf-8")
+    assert capture_status(f) == {"running": False, "recording": False}, "a crashed app shows nothing"
+
+    state = ReviewState(Config(out_dir=tmp_path))
+    q = state.subscribe()
+    stop = _threading.Event()
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    t = _threading.Thread(target=_capture_watch, args=(state, f, 0.05, stop), daemon=True)
+    t.start()
+    first = q.get(timeout=2)
+    assert first["type"] == "capture" and first["recording"] is True
+    assert state.status()["capture"]["title"] == "Plánování"
+    f.write_text(json.dumps({**rec, "recording": False, "title": None, "stem": None}), encoding="utf-8")
+    items = [q.get(timeout=2) for _ in range(3)]
+    stop.set()
+    assert any(i.get("type") == "capture" and i["recording"] is False for i in items)
+    ended = [i for i in state.events if "nahrávání skončilo" in i["text"]]
+    assert ended and ended[0]["reload"] is True and ended[0]["stem"] == "2026-09-30_1827_planovani"

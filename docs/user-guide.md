@@ -147,10 +147,10 @@ Na zkoušku bez změny nastavení: `teamsrec-transcribe compare-transcribe <nahr
 `<stem>.openai.txt` vedle hlavního přepisu (ten se nemění) a na stránce ho najdete v záložce Přepis ve výběru
 vpravo. První srovnání (standup 29. 9., slovenština, 16 min):
 
-| | čas | ukázka („Zdeněk, ty tam asi nemáš updates…“, „v štvrtok ste mali Archiboard?“, „mrknem“) |
+| | čas | ukázka („Jiří, ty tam asi nemáš updates…“, „v štvrtok ste mali Archiboard?“, „mrknem“) |
 |---|---|---|
 | WhisperX (lokálně) | ~1,5 min | jméno ✓, „Štátok ste mali Archiboard?“ ✗, „mrknem“ ✓ |
-| ElevenLabs `scribe_v2` | 37 s | „Zdenek“ ✓, „v štvrtok ste mali Archibord?“ ✓, „mrknem“ ✓; zapisuje i „uhm“ a opakování, delší repliky |
+| ElevenLabs `scribe_v2` | 37 s | „Jiri“ ✓, „v štvrtok ste mali Archibord?“ ✓, „mrknem“ ✓; zapisuje i „uhm“ a opakování, delší repliky |
 | OpenAI `gpt-4o-transcribe-diarize` | 3 min | „Zdaj niekdy“ ✗, „čo tak ste mali ArchiveBot“ ✗, „mrtnem“ ✗ |
 
 Nejpřesnější byl ElevenLabs, WhisperX těsně za ním a zdarma a bez odesílání zvuku; OpenAI výrazně horší.
@@ -172,7 +172,7 @@ by jinak vyrobila osobu i otisk). Vzorek hlasu zůstává v přepisu nahrávky, 
 
 U nové nahrávky se každý dosud neznámý řečník porovná s otisky a když je shoda dost vysoká a jasně nejlepší,
 dostane jméno rovnou.
-Na stránce to uvidíte zeleně jako „poznáno po hlase: Pavel Orosz (shoda 0.72) – zkontrolujte a uložte“;
+Na stránce to uvidíte zeleně jako „poznáno po hlase: Karel Horák (shoda 0.72) – zkontrolujte a uložte“;
 špatné rozpoznání opravíte přepsáním jména. Nastavení `[voiceprints]`: `enabled`, `threshold` (potřebná shoda),
 `margin` (odstup od druhého nejlepšího). Otisky jednoho člověka smažete příkazem
 `teamsrec-transcribe people forget-voice <id>`, celý soubor `voiceprints.json` lze kdykoli smazat.

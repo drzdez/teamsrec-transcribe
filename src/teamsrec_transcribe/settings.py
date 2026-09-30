@@ -31,6 +31,7 @@ class Field:
     default: Any
     help: str = ""
     choices: tuple[str, ...] = ()
+    labels: tuple[str, ...] = ()  # what the page shows for each of `choices` (same order); empty = the values
     suggest: str = ""   # name of a suggestion list (suggestions()): the field becomes an editable dropdown;
                         # "inputs" = the audio input devices of this PC
     restart: bool = False  # takes effect only after the review server / the apps start again
@@ -59,38 +60,51 @@ SECTIONS: tuple[Section, ...] = (
     Section("general", "Obecné", "", (
         Field("user.name", "Tvoje jméno", "str", "",
               "Mikrofonní stopa živé nahrávky dostane tohle jméno (prázdné = vypnuto)."),
-        Field("people.display", "Jména v zápisu", "enum", "nick",
-              "first = křestní jméno, full = celé jméno, nick = přezdívka (bez přezdívky křestní).",
-              choices=("first", "full", "nick")),
+        Field("people.display", "Jména v zápisu", "enum", "nick", "",
+              choices=("first", "full", "nick"),
+              labels=("křestní jméno", "celé jméno", "přezdívka (bez přezdívky křestní jméno)")),
         Field("calendar.outlook", "Kalendář z Outlooku", "bool", False,
               "Název a účastníci schůzky z klasického Outlooku na tomto PC (lokálně, přes COM)."),
         Field("recordings.out_dir", "Složka nahrávek", "str", "D:/meetings",
               "Kam se nahrávky ukládají; _inbox je uvnitř.", restart=True),
-    )),
-    Section("capture", "Nahrávání", "Používá aplikace pro nahrávání (ikona v liště); změnu si načte sama. "
-            "Test mikrofonu je v její nabídce (pravé kliknutí na ikonu).", (
-        Field("capture.onsite_mic", "Mikrofon pro schůzky na místě", "str", "",
-              "Prázdné = výchozí vstup Windows.", suggest="inputs"),
-        Field("capture.device_missing", "Když mikrofon chybí", "enum", "ask",
-              "ask = zeptat se, fail = nenahrávat a ohlásit, fallback = vzít výchozí vstup.",
-              choices=("ask", "fail", "fallback")),
-        Field("capture.onsite_offer", "Nabízet nahrávání schůzek na místě", "enum", "never",
-              "calendar = podle schůzky v kalendáři, always = vždy, never = nikdy.",
-              choices=("never", "calendar", "always")),
-        Field("capture.onsite_upgrade", "Přejít na hovor, když začne Teams", "bool", True,
-              "Nahrávka na místě pokračuje jako živý hovor, jakmile se připojíte přes Teams."),
-        Field("capture.other_apps", "Hovory v jiných aplikacích", "enum", "record",
-              "record = nahrávat i hovory mimo Teams (Zoom, prohlížeč…), off = jen Teams.",
-              choices=("record", "off")),
-        Field("capture.prompt_default", "Když nikdo neodpoví na „Nahrávat?“", "enum", "record",
-              "Co se stane po 45 s bez odpovědi.", choices=("record", "ask", "skip")),
         Field("capture.tray_open", "Poklepání na ikonu v liště otevře", "enum", "app",
-              "app = tuto stránku v okně aplikace, web = v prohlížeči.", choices=("app", "web")),
+              "Ikona aplikace pro nahrávání; totéž platí pro Settings… v její nabídce.", choices=("app", "web"),
+              labels=("tuto stránku v okně aplikace", "tuto stránku v prohlížeči")),
+    )),
+    Section("capture", "Nahrávání", "Používá aplikace pro nahrávání (ikona v liště); změnu si načte sama.", (
+        Field("capture.onsite_mic", "Mikrofon pro schůzky na místě", "str", "",
+              "Nahrává se z prvního zařízení, jehož název obsahuje tento text. V zasedačce použijte mikrofonní pole "
+              "notebooku, ne sluchátka – ta slyší jen vás.", suggest="inputs"),
+        Field("capture.device_missing", "Když zvolený mikrofon chybí", "enum", "ask", "",
+              choices=("ask", "fail", "fallback"),
+              labels=("Zeptat se, čím nahrávat (nabídne dostupná zařízení)", "Nenahrávat a nahlásit chybu",
+                      "Tiše použít výchozí vstup Windows")),
+        Field("capture.onsite_offer", "Nabízet nahrávání podle kalendáře", "enum", "never",
+              "Nahrávání se spustí hned na začátku schůzky a zobrazí se okénko „Zahodit?“ – když neodpovíte, "
+              "nahrávka se zachová. Potřebuje zapnutý kalendář z Outlooku (Obecné).",
+              choices=("never", "calendar", "always"),
+              labels=("Nikdy – nahrávání na místě spouštím sám z menu ikony",
+                      "U schůzek bez odkazu na Teams (pravděpodobně na místě)", "U každé schůzky v kalendáři")),
+        Field("capture.onsite_upgrade", "Když během nahrávání na místě začne hovor v Teams, přejít na živý záznam",
+              "bool", True, "Nahrávka na místě skončí a hned začne živá (zvuk systému + mikrofon); obě se propojí."),
+        Field("capture.other_apps", "Hovory v jiných aplikacích", "enum", "record",
+              "Zoom, Webex, Slack, Discord, WhatsApp, Skype, Signal a schůzka v prohlížeči (Google Meet, Zoom, Webex, "
+              "Teams na webu, Jitsi, Whereby v názvu okna). Mikrofon se bere ten, který aplikace hovoru používá; "
+              "snímání oken a jmen z dlaždic je jen pro Teams.",
+              choices=("record", "off"),
+              labels=("Nahrávat stejně jako Teams (od první vteřiny, oznámení v liště)", "Nenahrávat – jen Teams")),
+        Field("capture.prompt_default", "Na začátku hovoru v Teams", "enum", "record",
+              "Nahrává se vždy od první vteřiny; volba mění jen to, jak se aplikace ptá.",
+              choices=("record", "ask", "skip"),
+              labels=("Nahrávat a jen oznámit (zahodit lze z menu ikony)",
+                      "Nahrávat a zeptat se „Zahodit?“ – bez odpovědi zachovat",
+                      "Nahrávat a zeptat se „Zahodit?“ – bez odpovědi zahodit")),
     )),
     Section("transcribe", "Přepis", "Cloudové služby posílají zvuk mimo počítač (docs/privacy.md).", (
         Field("transcribe.provider", "Služba přepisu", "enum", _d(T, "provider"),
-              "whisperx = lokálně na grafické kartě; openai / elevenlabs = cloud (potřebují klíč níže).",
-              choices=("whisperx", "openai", "elevenlabs")),
+              "Cloudové služby potřebují klíč (Klíče API nahoře).",
+              choices=("whisperx", "openai", "elevenlabs"),
+              labels=("WhisperX – v tomto počítači (grafická karta)", "OpenAI – cloud", "ElevenLabs – cloud")),
         Field("transcribe.language", "Jazyk", "str", _d(T, "language"),
               "auto nebo kód jazyka (cs, sk, en).", suggest="language"),
         Field("transcribe.languages", "Jazyky pro auto", "list", _d(T, "languages"),
@@ -124,8 +138,9 @@ SECTIONS: tuple[Section, ...] = (
     Section("summarize", "Zápis", "Claude posílá text přepisu mimo počítač; Ollama běží lokálně.", (
         Field("summarize.enabled", "Dělat zápis", "bool", _d(S, "enabled"), "Součást zpracování nahrávky."),
         Field("summarize.provider", "Služba", "enum", _d(S, "provider"),
-              "ollama = lokální model na grafické kartě, anthropic = Claude (potřebuje klíč níže).",
-              choices=("ollama", "anthropic")),
+              "Claude potřebuje klíč (Klíče API nahoře).",
+              choices=("ollama", "anthropic"),
+              labels=("Ollama – v tomto počítači (grafická karta)", "Claude – cloud")),
         Field("summarize.model", "Model", "str", _d(S, "model"),
               "Nabídka podle zvolené služby: modely Ollamy v tomto počítači, nebo modely Claude dostupné pro váš klíč.",
               suggest="summary"),
@@ -201,7 +216,8 @@ def describe(path: Path | None = None) -> dict:
         "path": str(path),
         "sections": [{"id": s.id, "title": s.title, "note": s.note,
                       "fields": [{"key": f.key, "label": f.label, "type": f.type, "help": f.help,
-                                  "choices": list(f.choices), "default": f.default, "value": values[f.key],
+                                  "choices": list(f.choices), "labels": list(f.labels), "default": f.default,
+                                  "value": values[f.key],
                                   "suggest": f.suggest, "restart": f.restart} for f in s.fields]}
                      for s in SECTIONS],
         "secrets": secret_states(),
@@ -432,8 +448,7 @@ OPENAI = ("gpt-4o-transcribe-diarize", "gpt-4o-transcribe", "gpt-4o-mini-transcr
 ELEVENLABS = ("scribe_v2", "scribe_v1")
 LANGUAGES = (("auto", "rozpoznat"), ("cs", "čeština"), ("sk", "slovenština"), ("en", "angličtina"),
              ("de", "němčina"), ("pl", "polština"))
-SUGGEST_TTL_S = 300.0
-_cache: dict[str, tuple[float, list[str]]] = {}
+_cache: dict[str, list[str]] = {}  # the last live lists (Ollama tags, Claude models), until the server stops
 
 
 def _opt(value: str, note: str, local: bool | None = None) -> dict:
@@ -441,30 +456,29 @@ def _opt(value: str, note: str, local: bool | None = None) -> dict:
     return {"value": value, "note": note, "local": local}
 
 
-def _cached(key: str, fetch) -> list[str]:
-    """A live list (Ollama, Claude API), fetched at most every SUGGEST_TTL_S; [] when it cannot be had."""
-    import time
-    hit = _cache.get(key)
-    if hit and time.monotonic() - hit[0] < SUGGEST_TTL_S:
-        return hit[1]
+def _cached(key: str, fetch, live: bool) -> list[str] | None:
+    """A live list (Ollama, Claude API). Only live=True asks (seconds: Ollama may be down, Claude is on the
+    internet), so opening the settings stays instant; otherwise the last answer, or None = not asked yet."""
+    if not live:
+        return _cache.get(key)
     try:
         items = fetch()
-    except Exception:  # Ollama not running, no key, offline: the field stays a plain text box
+    except Exception:  # Ollama not running, no key, offline: an empty list, the field still takes free text
         items = []
-    _cache[key] = (time.monotonic(), items)
+    _cache[key] = items
     return items
 
 
-def ollama_models(url: str) -> list[str]:
+def ollama_models(url: str, live: bool = False) -> list[str] | None:
     def fetch():
         import json
         import urllib.request
-        with urllib.request.urlopen(url.rstrip("/") + "/api/tags", timeout=1.5) as r:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/tags", timeout=1.0) as r:
             return sorted(m["name"] for m in json.loads(r.read()).get("models", []))
-    return _cached("ollama:" + url, fetch)
+    return _cached("ollama:" + url, fetch, live)
 
 
-def claude_models() -> list[str]:
+def claude_models(live: bool = False) -> list[str] | None:
     """The models the stored/env key can use (listing models costs nothing and sends no text)."""
     key = get_secret("anthropic")
     if not key:
@@ -474,7 +488,7 @@ def claude_models() -> list[str]:
         import anthropic
         client = anthropic.Anthropic(api_key=key, timeout=5.0, max_retries=0)
         return [m.id for m in client.models.list(limit=100)]
-    return _cached("claude:" + key[-6:], fetch)
+    return _cached("claude:" + key[-6:], fetch, live)
 
 
 def hf_cached() -> set[str]:
@@ -487,23 +501,34 @@ def hf_cached() -> set[str]:
         return set()
 
 
-def suggestions(values: dict[str, Any]) -> dict[str, Any]:
+def suggestions(values: dict[str, Any], live: bool = False) -> dict[str, Any]:
     """Every dropdown list, entries marked: on this PC / to be downloaded / cloud. The summary models depend on
-    the chosen service, so both lists are sent; a configured model that is not installed is listed as such."""
+    the chosen service, so both lists are sent; a configured model that is not installed is listed as such.
+    Without live the Ollama and Claude lists are the last known ones (models_loaded = False until asked once);
+    the configured models are always in them."""
     cached = hf_cached()
     whisper = [_opt(v, "v počítači" if any(r.endswith("faster-whisper-" + v) for r in cached)
                     else f"stáhne se při prvním přepisu ({size})",
                     any(r.endswith("faster-whisper-" + v) for r in cached)) for v, size in WHISPER]
     diarize = [_opt(v, "v počítači" if v in cached else f"stáhne se při prvním přepisu ({size})", v in cached)
                for v, size in DIARIZE]
-    ollama = ollama_models(str(values.get("summarize.ollama_url") or _d(S, "ollama_url")))
+    ollama_known = ollama_models(str(values.get("summarize.ollama_url") or _d(S, "ollama_url")), live)
+    claude_known = claude_models(live)
+    ollama = ollama_known or []
     ollama_opts = [_opt(m, "v počítači (Ollama)", True) for m in ollama]
-    wanted = {c.partition(":")[2] for c in values.get("summarize.compare") or [] if c.startswith("ollama:")}
+    compare = list(values.get("summarize.compare") or [])
+    wanted = {c.partition(":")[2] for c in compare if c.startswith("ollama:")}
     if values.get("summarize.provider") != "anthropic":
         wanted.add(str(values.get("summarize.model") or ""))
     for m in sorted(wanted - set(ollama) - {""}):  # configured but not pulled: say so, and how
-        ollama_opts.append(_opt(m, f"není stažený – ollama pull {m}", False))
-    claude = [_opt(m, "cloud (Claude API)") for m in claude_models()]
+        ollama_opts.append(_opt(m, f"není stažený – ollama pull {m}", False) if ollama_known is not None
+                           else _opt(m, "nastavený model (seznam zatím nenačten)"))
+    claude_ids = list(claude_known or [])
+    for m in [c.partition(":")[2] for c in compare if c.startswith("anthropic:")] + (
+            [str(values.get("summarize.model") or "")] if values.get("summarize.provider") == "anthropic" else []):
+        if m and m not in claude_ids:  # the configured Claude models, also before the list is loaded
+            claude_ids.append(m)
+    claude = [_opt(m, "cloud (Claude API)") for m in claude_ids]
     return {
         "language": [_opt(v, n) for v, n in LANGUAGES],
         "whisper": whisper,
@@ -514,6 +539,7 @@ def suggestions(values: dict[str, Any]) -> dict[str, Any]:
         "compare": [_opt("anthropic:" + o["value"], o["note"]) for o in claude]
                    + [_opt("ollama:" + o["value"], o["note"], o["local"]) for o in ollama_opts],
         "ollama_ready": bool(ollama),
+        "models_loaded": ollama_known is not None and claude_known is not None,
     }
 
 

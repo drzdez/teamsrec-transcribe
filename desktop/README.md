@@ -15,7 +15,8 @@ What the shell does (`src-tauri/src/main.rs`, ~200 lines):
    browser tab, keeps running). While a job runs the server refuses and ends by itself after the job.
 
 `teamsrec-review.exe --browser` opens the page in the default browser instead (no window) and exits; a second start
-of the window only brings the open one to the front. The tray icon of teamsrec-capture starts one or the other on a
+of the window only brings the open one to the front. `--settings` opens the page's Nastavení (the tray's Settings…),
+`--open <stem>` one recording (a click on the capture app's "Saved …" balloon; the open window switches to it). The tray icon of teamsrec-capture starts one or the other on a
 double click, as `[capture] tray_open` (`app` | `web`) says.
 
 What the page does differently with `?app=desktop`: no Zavřít button (closing the window does it) and no

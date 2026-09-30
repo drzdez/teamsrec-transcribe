@@ -178,8 +178,8 @@ def test_suggestions_mark_what_is_on_this_pc_and_what_would_download(cfg_file, v
     (hub / "models--Systran--faster-whisper-large-v3").mkdir(parents=True)
     monkeypatch.setenv("HF_HUB_CACHE", str(hub))
     monkeypatch.setattr(settings, "_cache", {})
-    monkeypatch.setattr(settings, "ollama_models", lambda url: ["gemma4:31b"])
-    monkeypatch.setattr(settings, "claude_models", lambda: ["claude-opus-5-5"])
+    monkeypatch.setattr(settings, "ollama_models", lambda url, live=False: ["gemma4:31b"])
+    monkeypatch.setattr(settings, "claude_models", lambda live=False: ["claude-opus-5-5"])
     settings.save({"summarize.model": "qwen9:70b", "summarize.compare": ["ollama:llama9:8b", "anthropic:claude-opus-5-5"]},
                   cfg_file)
     d = settings.suggestions(settings.read_values(cfg_file))
@@ -192,3 +192,27 @@ def test_suggestions_mark_what_is_on_this_pc_and_what_would_download(cfg_file, v
     assert ollama["llama9:8b"]["local"] is False, "a comparison model that is not pulled is flagged too"
     assert d["summary"]["anthropic"] == [{"value": "claude-opus-5-5", "note": "cloud (Claude API)", "local": None}]
     assert {o["value"] for o in d["compare"]} >= {"anthropic:claude-opus-5-5", "ollama:gemma4:31b"}
+
+
+def test_opening_the_settings_asks_nobody_the_live_lists_come_on_request(cfg_file, vault, monkeypatch):
+    calls = []
+    monkeypatch.setattr(settings, "_cache", {})
+    monkeypatch.setattr(settings, "get_secret", lambda name: "sk-test")
+
+    def slow(kind, items):
+        def fetch_list(*a, **k):
+            calls.append(kind)
+            return items
+        return fetch_list
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no network")))
+    settings.save({"summarize.provider": "anthropic", "summarize.model": "claude-opus-5-5",
+                   "summarize.compare": ["ollama:gemma4:31b"]}, cfg_file)
+    d = settings.suggestions(settings.read_values(cfg_file))
+    assert d["models_loaded"] is False, "not asked yet"
+    assert [o["value"] for o in d["summary"]["anthropic"]] == ["claude-opus-5-5"], "the configured model is offered"
+    assert d["summary"]["ollama"][0]["value"] == "gemma4:31b" and "nenačten" in d["summary"]["ollama"][0]["note"]
+    monkeypatch.setattr(settings, "_cached", lambda key, fetch, live: settings._cache.setdefault(key, ["x"]) if live else settings._cache.get(key))
+    d = settings.suggestions(settings.read_values(cfg_file), live=True)
+    assert d["models_loaded"] is True
+    assert settings.suggestions(settings.read_values(cfg_file))["models_loaded"] is True, "remembered afterwards"

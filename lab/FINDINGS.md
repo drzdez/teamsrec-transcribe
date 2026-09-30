@@ -61,7 +61,7 @@ byl v té době hlasitý (medián −40 dB proti −73 dB u ostatních označen�
 
 Důsledky: mikrofonní stopa má přednost před videem (je to jeho vlastní hardware), video pojmenovává jen repliky,
 které mikrofon nezabral. A jména z jmenovek se berou jen tehdy, když sedí na účastníka schůzky: OCR živého okna
-přečetlo „Miroslav Bystriansky“ jako „Miory Baotnbnsc“ a „Miory Baotnongg“, což se rozdílem skóre nedá spolehlivě
+přečetlo „Michal Bartoš“ jako „Mihoy Bardtnbnsc“ a „Mihoy Bardtnongg“, což se rozdílem skóre nedá spolehlivě
 opravit (0.46 vs 0.43 na jiného účastníka), takže z takového jména je lepší nechat `SPEAKER_XX`.
 
 ## Decisions (2026-09-04)
@@ -92,10 +92,10 @@ podobnost všech dvojic (nahrávka, mluvčí). Tři nahrávky (12 s, 29 min, 10 
 
 | dvojice | podobnost |
 |---|---|
-| Zdeněk 29 min (mikrofon) × Zdeněk 10 min (mikrofon) | 0.94 |
-| Zdeněk 12 s × Zdeněk 29 / 10 min | 0.43 / 0.44 |
-| různí lidé, pojmenovaní (Zdeněk × Ori, Zdeněk × Miro, Ori × Miro) | max 0.36, průměr 0.24 |
-| nepojmenované SPEAKER_02 (24 s, 29 min nahrávka) × Zdeněk 10 min | 0.56 |
+| Jiří 29 min (mikrofon) × Jiří 10 min (mikrofon) | 0.94 |
+| Jiří 12 s × Jiří 29 / 10 min | 0.43 / 0.44 |
+| různí lidé, pojmenovaní (Jiří × Kája, Jiří × Michal, Kája × Michal) | max 0.36, průměr 0.24 |
+| nepojmenované SPEAKER_02 (24 s, 29 min nahrávka) × Jiří 10 min | 0.56 |
 
 Závěry: dostatečně dlouhá promluva téhož člověka dává shodu vysoko nad různými lidmi; krátké promluvy
 (pod ~30 s) dávají nespolehlivý embedding na obě strany (0.43 pro téhož člověka, 0.56 pro cizí hlas).

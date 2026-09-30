@@ -121,7 +121,7 @@ class People:
                 by_first = [p for p in self.people if _norm(p.first) == t and not p.last]
             if len(by_first) == 1:
                 return by_first[0]
-            # spelling variants of the same full name (calendar "Pavol Orosz" vs registry "Pavel Orosz", OCR slips)
+            # spelling variants of the same full name (calendar "Karol Horák" vs registry "Karel Horák", OCR slips)
             if len(parts) > 1:
                 import difflib
                 close = difflib.get_close_matches(_norm(text), [_norm(p.full) for p in self.people], n=2, cutoff=0.85)

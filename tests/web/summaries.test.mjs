@@ -19,8 +19,13 @@ test("summaries: tabs by model, generate another, reorder by dragging, close = d
   assert.deepEqual(tabs(p), ["test"], "the tab is named after the model in the file's stamp");
   assert.ok(tab(p, "test").querySelector(".main"), "the configured model's summary is marked as the main one");
   await waitFor(() => p.$("sumModel").value === "ollama:gemma4:31b", "the configured model as the default");
+  assert.deepEqual([...p.$("sumModel").options].map(o => o.value), ["ollama:gemma4:31b", "__other__"],
+                   "at first only what is known without asking anybody");
+  p.$("sumModel").dispatchEvent(new p.window.Event("focus"));  // opening the dropdown asks for the current lists
+  await waitFor(() => p.$("sumModel").options.length === 3, "the live lists");
   assert.deepEqual([...p.$("sumModel").options].map(o => o.value), ["ollama:gemma4:31b", "anthropic:claude-opus-5-5", "__other__"],
                    "every model is listed although one is selected");
+  assert.equal(p.$("sumModel").value, "ollama:gemma4:31b", "the selection is kept");
   assert.deepEqual([...p.$("sumModel").querySelectorAll("optgroup")].map(g => g.label),
                    ["Ollama – v tomto počítači", "Claude – cloud (text přepisu jde ven)"]);
 
@@ -56,6 +61,8 @@ test("summaries: the order of the tabs is stored for the recording", async t => 
   const p = await openPage(t, WEEKLY);
   await openSummaries(p);
   await waitFor(() => p.$("sumModel").value === "ollama:gemma4:31b", "the models");
+  p.$("sumModel").dispatchEvent(new p.window.Event("focus"));
+  await waitFor(() => p.$("sumModel").options.length === 3, "the live lists");
   p.change(p.$("sumModel"), "anthropic:claude-opus-5-5");
   p.$("sumGen").click();
   await waitFor(() => tabs(p).length === 2 && !p.$("quit").disabled, "a second summary");

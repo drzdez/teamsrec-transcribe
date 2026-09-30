@@ -60,6 +60,7 @@ def spec(version: str) -> dict:
                 "Delete one summary of the recording (<stem>.summary*.md only)",
                 params=[STEM, {"name": "file", "in": "path", "required": True, "schema": s}])},
             "/api/summary-models": {"get": _op(
+                "live=1 asks Ollama and the Claude API now; otherwise the last known lists. " +
                 "Models for summaries: {ollama: [...], anthropic: [...], default: {provider, model}}; each entry "
                 "{value, note, local}", tags=("settings",))},
             "/api/recordings/{stem}/speakers/merge": {"post": _op("Fold the labels of one person into one speaker",
@@ -100,11 +101,17 @@ def spec(version: str) -> dict:
                 "delete": _op("Remove a stored API key (a key in the environment stays)", tags=("settings",),
                               params=[{"name": "name", "in": "path", "required": True,
                                        "schema": {"enum": ["anthropic", "openai", "elevenlabs"]}}])},
+            "/api/settings/models": {"get": _op(
+                "The model lists asked live - Ollama on this PC, the Claude models of the key (takes seconds; "
+                "GET /api/settings sends the last known ones)", tags=("settings",))},
+            "/api/system/sound-settings": {"post": _op("Open the Windows sound dialog (mmsys.cpl)", tags=("settings",))},
             "/api/help/{doc}": {"get": _op("A guide: user-guide | install | privacy", tags=("server",), params=[
                 {"name": "doc", "in": "path", "required": True, "schema": {"enum": ["user-guide", "install", "privacy"]}}])},
             "/api/status": {"get": _op("Background job state and the recent events", tags=("server",))},
             "/api/events": {"get": _op(
-                "Server-Sent Events: `event: log` with {n, at, text, level, stem, reload, busy, job_end}; the last events are "
+                "Server-Sent Events: `event: log` with {n, at, text, level, stem, reload, busy, job_end}, and "
+                "`event: capture` {running, recording, title, stem, source, started} when teamsrec-capture starts or "
+                "stops recording (also in `hello` and /api/status); the last events are "
                 "replayed on connect, and after a reconnect from Last-Event-ID", tags=("server",),
                 responses={"200": {"description": "text/event-stream", "content": {"text/event-stream": {}}}})},
             "/api/openapi.json": {"get": _op("This document", tags=("server",))},

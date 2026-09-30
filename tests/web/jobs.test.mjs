@@ -2,7 +2,14 @@
 // and the history lists what happened, newest first.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { writeFileSync } from "node:fs";
 import { BOARD_NEW, WEEKLY, openPage, waitFor } from "./page.mjs";
+
+/** what teamsrec-capture writes; the test server watches this file (TEAMSREC_TEST_CAPTURE) */
+function writeCapture(status) {
+  writeFileSync(process.env.TEAMSREC_TEST_CAPTURE, JSON.stringify({ app: "teamsrec-capture", pid: Number(process.env.TEAMSREC_TEST_PID),
+                                                                     running: true, ...status }));
+}
 
 test("transcribing a new recording: live status over SSE, reload when done, history", async t => {
   const p = await openPage(t, BOARD_NEW);
@@ -47,4 +54,16 @@ test("transcribing again from scratch: armed button, REST call, the page reloads
   assert.ok(!p.$("quit").disabled);
   assert.ok(p.requests.includes(`POST /api/recordings/${WEEKLY}/process`));
   await waitFor(() => p.doc.querySelector("#main").textContent.includes("Nová nahrávka je přepsaná."), "the new transcript");
+});
+
+test("while teamsrec-capture records, a red dot and the title show next to the status line", async t => {
+  const p = await openPage(t, WEEKLY);
+  await waitFor(() => p.doc.querySelector(".card"), "the page");
+  assert.ok(p.$("recBadge").hidden, "nothing recorded at first");
+  writeCapture({ recording: true, title: "Plánování sprintu", stem: "2026-09-30_1827_planovani-sprintu",
+                 source: "onsite", started: "2026-09-30T18:27:05" });
+  await waitFor(() => !p.$("recBadge").hidden, "the red dot");
+  assert.equal(p.$("recText").textContent, "Nahrávání probíhá · Plánování sprintu · od 18:27 · na místě");
+  writeCapture({ recording: false });
+  await waitFor(() => p.$("recBadge").hidden, "the dot gone when the recording ends");
 });

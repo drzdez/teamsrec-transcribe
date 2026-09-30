@@ -27,8 +27,10 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
   GET    /api/settings / PUT /api/settings             fields of the shared teamsrec.toml / {"values": {key: value}}
   PUT    /api/secrets/{name} / DELETE                  {"value"} an API key into / out of the Credential Manager
+  POST   /api/system/sound-settings                    open the Windows sound dialog (devices, levels, the mic array)
+  GET    /api/settings/models                          the model lists asked live (Ollama on this PC, Claude API)
   GET    /api/help/{doc}                               user-guide | install | privacy
-  GET    /api/status                                   job state + recent events
+  GET    /api/status                                   job state + recent events + what teamsrec-capture records
   GET    /api/events                                   Server-Sent Events (event: log), replayed after reconnects
   GET    /api/openapi.json                             this API as OpenAPI 3.1
   POST   /api/ping, /api/quit                          heartbeat (the server exits IDLE_S after the last), stop
@@ -81,6 +83,41 @@ PAGE = Path(__file__).with_name("index.html")
 IDLE_S = 90.0  # exit this long after the page's last heartbeat (the page pings every 15 s)
 MAX_EVENTS = 200   # kept in memory only: the log is a convenience, the files are the truth
 LOCK = Path(tempfile.gettempdir()) / "teamsrec-review.json"
+CAPTURE_STATUS = Path(tempfile.gettempdir()) / "teamsrec-capture.json"  # written by teamsrec-capture on every change
+CAPTURE_POLL_S = 2.0
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not h:
+            return False
+        try:
+            code = ctypes.c_ulong()
+            return bool(k.GetExitCodeProcess(h, ctypes.byref(code))) and code.value == 259  # STILL_ACTIVE
+        finally:
+            k.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def capture_status(path: Path = CAPTURE_STATUS) -> dict:
+    """What teamsrec-capture is doing: {"running", "recording", "title", "stem", "source", "started"}. A file left
+    by an app that is gone (crash, power loss) counts as not running."""
+    try:
+        d = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"running": False, "recording": False}
+    if not d.get("running") or not _pid_alive(int(d.get("pid") or 0)):
+        return {"running": False, "recording": False}
+    return {k: d.get(k) for k in ("running", "recording", "title", "stem", "source", "started")}
 
 
 def is_label(name: str | None) -> bool:
@@ -521,6 +558,7 @@ class ReviewState:
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self.settings_path = cfg.source_path or default_config_path()
+        self.capture: dict = {"running": False, "recording": False}  # teamsrec-capture, from _capture_watch
         self.lock = threading.RLock()
         self.busy = False
         self.message = ""
@@ -547,6 +585,20 @@ class ReviewState:
                 q.put(e)
         log.info("%s", text)
         return self.seq
+
+    def set_capture(self, status: dict) -> None:
+        """The capture app's state changed: tell the pages (SSE `capture`), and log the start and end."""
+        with self.lock:
+            before, self.capture = getattr(self, "capture", {"recording": False}), status
+            subscribers = list(self.subscribers)
+        for q in subscribers:
+            q.put({"type": "capture", **status})
+        if status.get("recording") and not before.get("recording"):
+            self.event(f"nahrávání probíhá: {status.get('title') or status.get('stem')}", "info")
+        elif before.get("recording") and not status.get("recording"):
+            # the new recording appears in the list once its sidecar is written: reload
+            self.event(f"nahrávání skončilo: {before.get('title') or before.get('stem')}", "info",
+                       before.get("stem") or "", reload=True)
 
     def subscribe(self) -> queue.Queue:
         q: queue.Queue = queue.Queue()
@@ -638,7 +690,7 @@ class ReviewState:
         with self.lock:
             return {"app": "teamsrec-review", "out_dir": str(self.cfg.out_dir), "job": getattr(self, "job", ""),
                     "busy": self.busy, "message": self.message, "error": self.error,
-                    "seq": self.seq, "events": self.events[-events:]}
+                    "seq": self.seq, "events": self.events[-events:], "capture": self.capture}
 
 
 STEM_RE_PART = r"(?P<stem>[^/]+)"
@@ -666,8 +718,10 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("DELETE", r"/api/people/(?P<pid>[^/]+)/voiceprints", "forget_prints"),
     ("GET", r"/api/settings", "settings"),
     ("PUT", r"/api/settings", "save_settings"),
+    ("GET", r"/api/settings/models", "settings_models"),
     ("PUT", r"/api/secrets/(?P<name>[^/]+)", "set_secret"),
     ("DELETE", r"/api/secrets/(?P<name>[^/]+)", "delete_secret"),
+    ("POST", r"/api/system/sound-settings", "sound_settings"),
     ("GET", r"/api/help/(?P<doc>[^/]+)", "help"),
     ("GET", r"/api/status", "status"),
     ("GET", r"/api/events", "events"),
@@ -785,6 +839,10 @@ def _handler(state: ReviewState, server_ref: dict):
             rec = self._recording(stem)
             if body.get("title") is not None:
                 rec = save_title(state.cfg, rec, str(body.get("title")))
+            if not rec.transcript_path.exists():  # right after recording: only the title can be set yet
+                state.event(f"{rec.stem}: název uložen („{rec.title}“)", "ok", rec.stem, reload=True)
+                self._json({"ok": True, "written": {}, "stem": rec.stem, "title": rec.title, "status": state.status()})
+                return
             written = save_names(state.cfg, rec, body.get("names") or {})
             state.event(f"{rec.stem}: uloženo {len(written)} jmen, přepis a titulky přegenerovány", "ok", rec.stem)
             if body.get("summary"):
@@ -818,9 +876,10 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json({"ok": True})
 
         def r_summary_models(self, q, body):
-            sug = settings.suggestions(settings.read_values(state.settings_path))
-            self._json({**sug["summary"], "default": {"provider": state.cfg.summarize.provider,
-                                                     "model": state.cfg.summarize.model}})
+            live = (q.get("live") or [""])[0] in ("1", "true")
+            sug = settings.suggestions(settings.read_values(state.settings_path), live=live)
+            self._json({**sug["summary"], "loaded": sug["models_loaded"],
+                        "default": {"provider": state.cfg.summarize.provider, "model": state.cfg.summarize.model}})
 
         def r_recognize(self, q, body, stem):
             rec = self._recording(stem)
@@ -891,6 +950,10 @@ def _handler(state: ReviewState, server_ref: dict):
         def r_settings(self, q, body):
             self._json(settings.describe(state.settings_path))
 
+        def r_settings_models(self, q, body):
+            sug = settings.suggestions(settings.read_values(state.settings_path), live=True)
+            self._json({"suggestions": sug})
+
         def r_save_settings(self, q, body):
             values = body.get("values")
             if not isinstance(values, dict):
@@ -911,6 +974,13 @@ def _handler(state: ReviewState, server_ref: dict):
             removed = settings.delete_secret(name)
             state.event(f"klíč {name} " + ("smazán ze Správce přihlašovacích údajů" if removed else "tam nebyl"), "info")
             self._json({"ok": True, "removed": removed, "secrets": settings.secret_states()})
+
+        def r_sound_settings(self, q, body):
+            if os.name != "nt":
+                raise ValueError("the sound dialog is a Windows thing")
+            import subprocess
+            subprocess.Popen(["control", "mmsys.cpl"])  # the classic dialog: recording devices, levels, enable/disable
+            self._json({"ok": True})
 
         def r_help(self, q, body, doc):
             self._json(help_doc(doc))
@@ -946,7 +1016,8 @@ def _handler(state: ReviewState, server_ref: dict):
             self.close_connection = True
             sub = state.subscribe()
             try:
-                self._sse("hello", {"seq": state.seq, "busy": state.busy, "replay": since is None})
+                self._sse("hello", {"seq": state.seq, "busy": state.busy, "replay": since is None,
+                                    "capture": state.capture})
                 for e in state.events_since(since):
                     self._sse("log", {**e, "replay": since is None}, e["n"])
                 while not getattr(server_ref.get("server"), "_teamsrec_stopping", False):
@@ -956,7 +1027,10 @@ def _handler(state: ReviewState, server_ref: dict):
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                         continue
-                    self._sse("log", e, e["n"])
+                    if e.get("type") == "capture":  # what teamsrec-capture records (no id: not replayed)
+                        self._sse("capture", {k: v for k, v in e.items() if k != "type"})
+                    else:
+                        self._sse("log", e, e["n"])
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
                 pass  # the page went away
             finally:
@@ -995,6 +1069,18 @@ def _idle_watchdog(state: ReviewState, server: ThreadingHTTPServer, idle_s: floa
             return
 
 
+def _capture_watch(state: "ReviewState", path: Path = CAPTURE_STATUS, poll_s: float = CAPTURE_POLL_S,
+                   stop: threading.Event | None = None) -> None:
+    """Poll the capture app's status file and push changes (a file, not a socket: the capture app needs no server)."""
+    last = None
+    while not (stop and stop.is_set()):
+        now = capture_status(path)
+        if now != last:
+            state.set_capture(now)
+            last = now
+        time.sleep(poll_s)
+
+
 def serve(cfg: Config, rec: Recording | None, *, port: int = 0, open_browser: bool = True,
           idle_s: float = IDLE_S, lock: Path = LOCK) -> str:
     """Run the review server until the page's Close button, the tab is closed, or Ctrl+C. Returns the URL.
@@ -1016,6 +1102,7 @@ def serve(cfg: Config, rec: Recording | None, *, port: int = 0, open_browser: bo
     if open_browser:
         webbrowser.open(base + fragment)
     threading.Thread(target=_idle_watchdog, args=(state, server, idle_s), daemon=True).start()
+    threading.Thread(target=_capture_watch, args=(state,), daemon=True).start()
     try:
         server.serve_forever()
     except KeyboardInterrupt:

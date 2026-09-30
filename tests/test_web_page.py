@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -77,8 +78,13 @@ def test_review_page(script, tmp_path, monkeypatch):
     monkeypatch.setenv("TEAMSREC_CONFIG", str(cfg_file))
     vault = FakeVault()
     monkeypatch.setattr(settings, "_keyring", lambda: vault)
-    monkeypatch.setattr(settings, "ollama_models", lambda url: ["gemma4:31b"])  # no network in page tests
-    monkeypatch.setattr(settings, "claude_models", lambda: ["claude-opus-5-5"])
+    known = {"on": False}  # like the real ones: nothing known until asked live once
+
+    def ollama_models(url, live=False):
+        known["on"] = known["on"] or live
+        return ["gemma4:31b"] if known["on"] else None
+    monkeypatch.setattr(settings, "ollama_models", ollama_models)  # no network in page tests
+    monkeypatch.setattr(settings, "claude_models", lambda live=False: ["claude-opus-5-5"] if known["on"] or live else None)
     for secret in settings.SECRETS.values():
         for var in secret.env:
             monkeypatch.delenv(var, raising=False)
@@ -93,12 +99,17 @@ def test_review_page(script, tmp_path, monkeypatch):
         path.write_text(stamp + "\n# Zápis od " + model + "\n\nText.\n", encoding="utf-8")
         return path
     monkeypatch.setattr(review, "summarize_as", fake_summarize_as)
-    srv, _state, base = _serve(tmp_path)
+    srv, state, base = _serve(tmp_path)
+    capture_file = tmp_path / "teamsrec-capture.json"  # the test's own capture status, never the real one
+    stop = threading.Event()
+    threading.Thread(target=review._capture_watch, args=(state, capture_file, 0.1, stop), daemon=True).start()
     try:
         run = subprocess.run([NODE, "--test", "--test-reporter=spec", str(WEB / script)], cwd=WEB,
-                             env={**os.environ, "TEAMSREC_REVIEW_URL": base, "TEAMSREC_TEST_CONFIG": str(cfg_file)},
+                             env={**os.environ, "TEAMSREC_REVIEW_URL": base, "TEAMSREC_TEST_CONFIG": str(cfg_file),
+                                  "TEAMSREC_TEST_CAPTURE": str(capture_file), "TEAMSREC_TEST_PID": str(os.getpid())},
                              capture_output=True,
                              text=True, encoding="utf-8", errors="replace", timeout=120)
     finally:
+        stop.set()
         srv.shutdown()
     assert run.returncode == 0, run.stdout + run.stderr

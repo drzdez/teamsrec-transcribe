@@ -82,8 +82,8 @@ def do_video_screens(cfg: Config, rec: Recording) -> VideoTimeline | None:
     """Live recording: the capture app saved every Teams window as <stem>_screen<N>.mp4 (sidecar `screens`).
     Each meeting window is analysed like a Teams recording video; the timelines are shifted by their start
     offset and merged. When the meeting has participants (calendar, registry), only names that matched one of
-    them count: a live window is noisy and OCR invents people ("Miroslav Bystriansky" came out as "Miory
-    Baotnbnsc" and collected 48 minutes under a name nobody could place). An anonymous SPEAKER_XX that voice
+    them count: a live window is noisy and OCR invents people ("Michal Bartoš" came out as "Mihoy
+    Bardtnbnsc" and collected 48 minutes under a name nobody could place). An anonymous SPEAKER_XX that voice
     prints or the user can name is worth more than a made-up one. Without participants (imported recordings)
     anything name-shaped is kept, as before."""
     screens = rec.sidecar.get("screens") or []

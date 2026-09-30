@@ -11,7 +11,7 @@
 //!
 //! `teamsrec-review.exe --browser` opens the page in the default browser instead and exits (the tray icon of
 //! teamsrec-capture uses it when `[capture] tray_open = "web"`). A second start of the window only brings the open
-//! window to the front.
+//! window to the front. `--settings` opens the page's Nastavení (the tray's Settings…), in either case.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -155,17 +155,34 @@ fn show_error(window: &WebviewWindow, text: &str) {
     let _ = window.eval(&js);
 }
 
+fn wants_settings(args: &[String]) -> bool {
+    args.iter().skip(1).any(|a| a == "--settings")
+}
+
+/// `--open <stem>`: the recording to show (a click on the "Saved …" balloon of the capture app). Only characters a
+/// stem has (date_time_slug), because it ends up in a URL and in JavaScript.
+fn open_stem(args: &[String]) -> Option<String> {
+    let i = args.iter().position(|a| a == "--open")?;
+    let stem = args.get(i + 1)?;
+    (!stem.is_empty() && stem.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')).then(|| stem.clone())
+}
+
 /// `--browser`: the page in the default browser, no window. The server stays until the browser tab closes.
-fn open_in_browser() {
-    match ensure_server().and_then(|(url, _)| Url::parse(&format!("{url}/")).map_err(|e| e.to_string())) {
+fn open_in_browser(settings: bool, stem: Option<String>) {
+    let query = if settings { "?open=settings" } else { "" };
+    let hash = stem.map(|s| format!("#{s}")).unwrap_or_default();
+    match ensure_server().and_then(|(url, _)| Url::parse(&format!("{url}/{query}{hash}")).map_err(|e| e.to_string())) {
         Ok(page) => open_external(&page),
         Err(msg) => eprintln!("{msg}"),
     }
 }
 
 fn main() {
-    if std::env::args().skip(1).any(|a| a == "--browser") {
-        open_in_browser();
+    let args: Vec<String> = std::env::args().collect();
+    let settings = wants_settings(&args);
+    let stem = open_stem(&args);
+    if args.iter().skip(1).any(|a| a == "--browser") {
+        open_in_browser(settings, stem);
         return;
     }
     // the server this window shows (for the navigation filter) and whether this program started it
@@ -174,11 +191,17 @@ fn main() {
 
     tauri::Builder::default()
         // a second start (the tray icon, the Start menu) brings the open window to the front
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.show();
                 let _ = w.set_focus();
+                if wants_settings(&args) {
+                    let _ = w.eval("typeof openSettings === 'function' && openSettings()");
+                }
+                if let Some(stem) = open_stem(&args) {
+                    let _ = w.eval(&format!("location.hash = '{stem}'")); // the page switches on hashchange
+                }
             }
         }))
         .setup({
@@ -221,7 +244,9 @@ fn main() {
                         if let Ok(mut s) = started_here.lock() {
                             *s = started;
                         }
-                        match Url::parse(&format!("{url}/?app=desktop")) {
+                        let extra = if settings { "&open=settings" } else { "" };
+                        let hash = stem.as_ref().map(|s| format!("#{s}")).unwrap_or_default();
+                        match Url::parse(&format!("{url}/?app=desktop{extra}{hash}")) {
                             Ok(page) => {
                                 if let Err(e) = window.navigate(page) {
                                     show_error(&window, &format!("Stránku se nepodařilo otevřít: {e}"));
@@ -245,6 +270,15 @@ mod tests {
 
     fn u(s: &str) -> Url {
         Url::parse(s).unwrap()
+    }
+
+    #[test]
+    fn open_takes_a_stem_and_nothing_else() {
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(open_stem(&a(&["x.exe", "--open", "2026-09-30_1827_zina"])), Some("2026-09-30_1827_zina".into()));
+        assert_eq!(open_stem(&a(&["x.exe", "--open", "a'; alert(1); '"])), None);
+        assert_eq!(open_stem(&a(&["x.exe", "--open"])), None);
+        assert_eq!(open_stem(&a(&["x.exe", "--settings"])), None);
     }
 
     #[test]

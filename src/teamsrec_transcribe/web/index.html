@@ -1044,6 +1044,7 @@ async function save(/** @type {boolean} */ withSummary) {
     const r = await api(recUrl(review.stem, "names"),
       send("PUT", { names: collectNames(), summary: withSummary, title: titleInput.value }));
     const n = Object.keys(r.written).length;
+    markClean();  // the names are saved now; only the minutes may still be generated
     setStatus(`uloženo (${n} jmen), přepis a titulky přegenerovány${withSummary ? ", zápis se generuje…" : ""}`, "ok");
     if (withSummary && r.job) { queuedNote(r, "zápis"); setBusy(true); try { await waitForSummary(r.job); } finally { setBusy(false); } }
     const stem = r.stem || review.stem;  // a new title renames the folder, so the stem may have changed

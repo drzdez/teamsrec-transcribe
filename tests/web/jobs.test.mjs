@@ -38,11 +38,14 @@ test("transcribing a new recording: live status over SSE, reload when done, hist
 test("regenerating the minutes waits for the job's end event, not by polling", async t => {
   const p = await openPage(t, WEEKLY);
   await waitFor(() => p.doc.querySelector(".card"), "speaker cards");
+  p.input(p.doc.querySelector('.side [data-key="nick"]'), "Kája");  // an unsaved change
+  assert.ok(p.$("dirty").classList.contains("changed"));
   p.$("saveSum").click();
   assert.match(p.$("saveSum").textContent, /Potvrdit/, "regenerating the minutes asks first");
   assert.ok(!p.requests.some(r => r.startsWith("PUT ")), "nothing saved by the first click");
   p.$("saveSum").click();
   await waitFor(() => p.$("quit").disabled, "the page busy while the minutes are written");
+  assert.ok(p.$("dirty").classList.contains("clean"), "the names are saved: no 'neuložené změny' while the minutes run");
   await waitFor(() => /uloženo, zápis přegenerován/.test(p.$("status").textContent), "the page's own message at the end");
   assert.ok(!p.$("quit").disabled);
   assert.ok(!p.requests.some(r => r.startsWith("GET /api/status")), "no polling while the stream works");

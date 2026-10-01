@@ -65,11 +65,14 @@ SECTIONS: tuple[Section, ...] = (
               labels=("křestní jméno", "celé jméno", "přezdívka (bez přezdívky křestní jméno)")),
         Field("calendar.outlook", "Kalendář z Outlooku", "bool", False,
               "Název a účastníci schůzky z klasického Outlooku na tomto PC (lokálně, přes COM)."),
-        Field("recordings.out_dir", "Složka nahrávek", "str", "D:/meetings",
+        Field("recordings.out_dir", "Složka nahrávek", "str", "~/meetings",
               "Kam se nahrávky ukládají; _inbox je uvnitř.", restart=True),
         Field("capture.tray_open", "Poklepání na ikonu v liště otevře", "enum", "app",
               "Ikona aplikace pro nahrávání; totéž platí pro Settings… v její nabídce.", choices=("app", "web"),
               labels=("tuto stránku v okně aplikace", "tuto stránku v prohlížeči")),
+        Field("capture.update_check", "Kontrolovat nové verze", "bool", True,
+              "Aplikace pro nahrávání se jednou denně podívá na GitHub, jestli je nová verze, a nabídne ji "
+              "k instalaci (nikdy během nahrávání). Ručně: Check for updates v nabídce ikony."),
     )),
     Section("capture", "Nahrávání", "Používá aplikace pro nahrávání (ikona v liště); změnu si načte sama.", (
         Field("capture.onsite_mic", "Mikrofon pro schůzky na místě", "str", "",

@@ -65,9 +65,12 @@ goes into `[recordings] out_dir` of the shared configuration, so teamsrec-transc
 A grey icon appears in the tray; it is red while recording, yellow means no sound is arriving. A double click opens
 the review page; **Settings…** opens its Nastavení.
 
-**To update**, run the newer MSI. It asks the running app to quit and starts it again afterwards; during a recording
-the app refuses and the installer stops with a message – run it again after the meeting. Uninstall in Settings →
-Apps (recordings and configuration stay).
+**Updates:** the app looks for a newer release at start and then once a day (`[capture] update_check`). When there is
+one, a balloon offers it and the tray menu gets **Install version X…**; **Check for updates** asks right away. After a
+confirmation the app downloads the MSI, checks its size and SHA-256 against the release, and runs it: the installer
+quits the app and starts the new version. Never during a recording – the offer comes after it. A declined version gets
+no more balloons, only the menu item. Running a newer MSI by hand works the same way; during a recording the app
+refuses and the installer stops with a message. Uninstall in Settings → Apps (recordings and configuration stay).
 
 **From source** (development):
 
@@ -106,6 +109,7 @@ One file for both apps: `%APPDATA%\teamsrec\teamsrec.toml`. Every setting can be
 | `[capture] prompt_default` | the start of a call: `record` (only notify) / `ask` / `skip` | `record` |
 | `[capture] other_apps` | also record calls in Zoom, Webex, Slack, Discord, WhatsApp, Skype, Signal and meetings in a browser: `record` / `off` | `record` |
 | `[capture] tray_open` | what a double click on the tray icon opens: `app` (desktop window) / `web` (browser) | `app` |
+| `[capture] update_check` | look for a new version on GitHub once a day and offer to install it | `true` |
 | `[transcribe] provider` | `whisperx` (local) / `openai` / `elevenlabs` (cloud, sends the audio) | `whisperx` |
 | `[transcribe] language`, `languages` | the language or `auto`; with `auto` only among `languages` | `auto`, `cs sk en` |
 | `[transcribe] per_speaker_language` | in a mixed meeting transcribe each speaker in their language | `true` |

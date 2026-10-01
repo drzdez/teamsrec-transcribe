@@ -51,18 +51,18 @@ Design consequences:
   diarization**; diarization remains for audio-only recordings (live capture, playback without tiles visible).
 - For live capture the same idea could work on screenshots of the Teams window, but that is a later experiment.
 
-## Kdo je zvýrazněný v okně Teams (2026-09-28)
+## Who is highlighted in the Teams window (2026-09-28)
 
-Průchod devíti živými nahrávkami s analýzou oken: **vlastní dlaždice uživatele nebyla zvýrazněná ani jednou**
-(`speakers_video.json` nikde neobsahuje jeho jméno). Teams v jeho vlastním klientovi rámeček kolem jeho dlaždice
-nekreslí, takže když mluví on, zůstává zvýrazněný předchozí mluvčí – a video jeho řeč připíše tomu druhému.
-Na schůzce 2026-09-24 Archi board to znamenalo 52 minut zvýraznění jedné dlaždice, zatímco mikrofon uživatele
-byl v té době hlasitý (medián −40 dB proti −73 dB u ostatních označení).
+Going through nine live recordings with window analysis: **the user's own tile was never highlighted** (no
+`speakers_video.json` contains their name). Teams does not draw the outline around the user's own tile in their own
+client, so while they speak the previous speaker stays highlighted – and the video credits their speech to that other
+person. In the Archi board meeting of 2026-09-24 that meant 52 minutes of one tile highlighted while the user's
+microphone was loud (median −40 dB against −73 dB for the other labels).
 
-Důsledky: mikrofonní stopa má přednost před videem (je to jeho vlastní hardware), video pojmenovává jen repliky,
-které mikrofon nezabral. A jména z jmenovek se berou jen tehdy, když sedí na účastníka schůzky: OCR živého okna
-přečetlo „Michal Bartoš“ jako „Mihoy Bardtnbnsc“ a „Mihoy Bardtnongg“, což se rozdílem skóre nedá spolehlivě
-opravit (0.46 vs 0.43 na jiného účastníka), takže z takového jména je lepší nechat `SPEAKER_XX`.
+Consequences: the microphone track wins over the video (it is the user's own hardware); the video names only the
+replies the microphone did not take. And names from name labels are used only when they match a participant of the
+meeting: OCR of a live window read "Michal Bartoš" as "Mihoy Bardtnbnsc" and "Mihoy Bardtnongg", which a score
+difference cannot reliably correct (0.46 vs 0.43 for another participant), so for such a name `SPEAKER_XX` is better.
 
 ## Decisions (2026-09-04)
 
@@ -84,35 +84,47 @@ opravit (0.46 vs 0.43 na jiného účastníka), takže z takového jména je lep
 - HuggingFace: `hf auth login` (token in `~/.cache/huggingface/token`) + accept terms of
   `pyannote/speaker-diarization-community-1`.
 
-## Hlasové otisky – kalibrace (2026-09-11)
+## Voice prints – calibration (2026-09-11)
 
-Skript `lab/voiceprints_calib.py`: diarizace všech nahrávek v OUT_DIR s `return_embeddings=True`
-(pyannote community-1 přes whisperx), označení pojmenována překryvem s existujícím přepisem, kosinová
-podobnost všech dvojic (nahrávka, mluvčí). Tři nahrávky (12 s, 29 min, 10 min), 8 označení.
+Script `lab/voiceprints_calib.py`: diarization of all recordings in OUT_DIR with `return_embeddings=True` (pyannote
+community-1 through whisperx), labels named by overlap with the existing transcript, cosine similarity of all pairs
+(recording, speaker). Three recordings (12 s, 29 min, 10 min), 8 labels.
 
-| dvojice | podobnost |
+| pair | similarity |
 |---|---|
-| Jiří 29 min (mikrofon) × Jiří 10 min (mikrofon) | 0.94 |
+| Jiří 29 min (microphone) × Jiří 10 min (microphone) | 0.94 |
 | Jiří 12 s × Jiří 29 / 10 min | 0.43 / 0.44 |
-| různí lidé, pojmenovaní (Jiří × Kája, Jiří × Michal, Kája × Michal) | max 0.36, průměr 0.24 |
-| nepojmenované SPEAKER_02 (24 s, 29 min nahrávka) × Jiří 10 min | 0.56 |
+| different people, named (Jiří × Kája, Jiří × Michal, Kája × Michal) | max 0.36, mean 0.24 |
+| unnamed SPEAKER_02 (24 s, 29-min recording) × Jiří 10 min | 0.56 |
 
-Závěry: dostatečně dlouhá promluva téhož člověka dává shodu vysoko nad různými lidmi; krátké promluvy
-(pod ~30 s) dávají nespolehlivý embedding na obě strany (0.43 pro téhož člověka, 0.56 pro cizí hlas).
-Nastaveno: `threshold = 0.60`, `margin = 0.10`, `min_seconds = 30` (kratší označení se neporovnávají
-ani neukládají). Přehodnotit po 10+ nahrávkách s více lidmi.
+Conclusions: a long enough stretch of the same person's speech gives a match well above different people; short
+stretches (under ~30 s) give an unreliable embedding both ways (0.43 for the same person, 0.56 for a stranger's voice).
+Set: `threshold = 0.60`, `margin = 0.10`, `min_seconds = 30` (shorter labels are neither compared nor stored).
+Revisit after 10+ recordings with more people.
 
-Ukládání otisků (2026-09-28): otisk, který má k některému uloženému podobnost ≥ `NEAR_DUPLICATE = 0.95`, se zahazuje – týž hlas za týchž podmínek dal 0.94 (řádek výše), takže nad 0.95 už vzorek nepřidává nic nového a jen zabere jeden z deseti slotů. Slučování mluvčích (`merge_same_person`) proto ukládá vzorky všech slučovaných označení – ta, která vznikla za jiných podmínek, projdou a rozpoznávání zlepší.
+Storing prints (2026-09-28): a print whose similarity to a stored one is ≥ `NEAR_DUPLICATE = 0.95` is dropped – the same
+voice in the same conditions gave 0.94 (row above), so above 0.95 a sample adds nothing new and only takes one of the
+ten slots. Merging speakers (`merge_same_person`) therefore stores the samples of all merged labels – the ones made in
+other conditions get through and improve recognition.
 
-Doplněk po 7 nahrávkách (10 osob s otisky): dva správné kandidáty práh 0.60 těsně odmítl (0.597 s odstupem
-0.29, 0.58 s odstupem 0.15), cizí hlasy zůstávají pod 0.36. Práh snížen na 0.55; kandidáti mezi 0.40 a prahem se
-na stránce ukazují jako „nejpodobnější hlas“ s tlačítkem k potvrzení, ale nepřiřazují se sami.
+Addendum after 7 recordings (10 people with prints): the 0.60 threshold just rejected two correct candidates (0.597
+with a lead of 0.29, 0.58 with a lead of 0.15), strangers' voices stay below 0.36. Threshold lowered to 0.55;
+candidates between 0.40 and the threshold are shown on the page as "nejpodobnější hlas" (the most similar voice) with a
+button to confirm, but are not assigned by themselves.
 
-## Lokální zápisy – kontext vs. VRAM (2026-09-11)
+## Local minutes – context vs. VRAM (2026-09-11)
 
-gemma4:31b (20 GB) na RTX 5090 Laptop 24 GB: s `num_ctx` 38 343 (70minutový přepis, 64 tis. znaků) Ollama
-umístila 12 % modelu do CPU (`ollama ps`: 12%/88% CPU/GPU) a zápis nedoběhl do 30minutového timeoutu.
-S `num_ctx` ≈ 20 000 je model 100 % na GPU. Proto `ollama_max_ctx = 20480` a přepisy nad ~23 tis. znaků
-se sumarizují po částech (každá část samostatný zápis se stejnými nadpisy, pak sloučení). 44minutová schůzka:
-2 části + sloučení, tokeny 18 tis. in / 4,3 tis. out. Během souběžné schůzky v Teams je GPU sdílená a části
-trvají několikanásobně déle.
+gemma4:31b (20 GB) on an RTX 5090 Laptop with 24 GB: with `num_ctx` 38,343 (a 70-minute transcript, 64k characters)
+Ollama put 12 % of the model on the CPU (`ollama ps`: 12%/88% CPU/GPU) and the minutes did not finish within the
+30-minute timeout. With `num_ctx` ≈ 20,000 the model is 100 % on the GPU. Hence `ollama_max_ctx = 20480`, and
+transcripts over ~23k characters are summarised in parts (each part its own minutes with the same headings, then
+merged). A 44-minute meeting: 2 parts + merge, 18k tokens in / 4.3k out. During a concurrent Teams meeting the GPU is
+shared and the parts take several times longer.
+
+## Microphone activity threshold (2026-09-30)
+
+A Sony WH-1000XM6 connected directly over Bluetooth gates its microphone: almost digital silence between words (floor
+−104 dBFS) and a −80…−90 dB residue while the others talk. "Active" as floor + 10 dB then counted that residue as the
+user speaking (the others' segments had the mic "active" 61 % of the time, everyone ended up under the user's name).
+An absolute minimum of −55 dBFS fixes it: the others' segments 5 %, the user's 92 %; on the dongle recordings 11–12 %
+(was 28–34 %), the user's 86–88 %.

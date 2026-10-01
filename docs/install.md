@@ -1,25 +1,28 @@
-# Instalace a konfigurace
+# Installation and configuration
 
-teamsrec jsou dvě aplikace, které sdílejí jednu složku nahrávek a jeden konfigurační soubor:
+teamsrec is two applications that share one recordings folder and one configuration file:
 
-- **teamsrec-capture** – ikona v liště, která nahrává hovory (Teams i jiné aplikace) a schůzky na místě.
-  Jen Windows. Zatím Python prototyp ve složce `legacy`.
-- **teamsrec-transcribe** – přepis, jména mluvčích, zápis a kontrolní stránka v prohlížeči.
+- **teamsrec-capture** – a tray icon that records calls (Teams and other apps) and on-site meetings. Windows only
+  (.NET 10); the earlier Python prototype is kept in its `legacy` folder.
+- **teamsrec-transcribe** – transcript, speaker names, minutes and the review page (in a browser or as a desktop
+  window).
 
-Postup níže je pro jeden počítač s Windows 11 a grafickou kartou NVIDIA.
+The steps below are for one PC with Windows 11 and an NVIDIA graphics card.
 
-## Požadavky
+## Requirements
 
-| co | proč |
+| what | why |
 |---|---|
-| Windows 11 | nahrávání (WASAPI, Outlook přes COM) |
-| NVIDIA GPU, ovladač 570+ | přepis WhisperX a diarizace na CUDA 12.8; lokální zápisy přes Ollamu (model 31B chce ~24 GB VRAM) |
-| ~20 GB volného místa | modely (~5 GB přepis + ~20 GB Ollama model podle velikosti) a nahrávky (~0,5 GB za hodinu) |
+| Windows 11 | recording (WASAPI, Outlook through COM) |
+| NVIDIA GPU, driver 570+ | WhisperX transcription and diarization on CUDA 12.8; local minutes through Ollama (the 31B model wants ~24 GB VRAM) |
+| ~20 GB free space | models (~5 GB transcription + ~20 GB Ollama model, by size) and recordings (~0.5 GB per hour) |
 | `git`, `uv` | `winget install Git.Git astral-sh.uv` |
-| `ffmpeg` | `winget install Gyan.FFmpeg` (obě aplikace ho najdou ve složce WinGet samy) |
-| účet na HuggingFace | stažení modelu diarizace, jednou je potřeba odsouhlasit jeho podmínky |
+| `ffmpeg` | `winget install Gyan.FFmpeg` (both apps find it in the WinGet folder by themselves) |
+| .NET 10 SDK | building teamsrec-capture: `winget install Microsoft.DotNet.SDK.10` |
+| a Hugging Face account | downloading the diarization model; its terms must be accepted once |
+| Rust, Node.js (optional) | building the desktop window of the review page (`desktop/`) |
 
-## 1. Přepis a kontrolní stránka (teamsrec-transcribe)
+## 1. Transcription and review page (teamsrec-transcribe)
 
 ```
 git clone https://github.com/drzdez/teamsrec-transcribe
@@ -28,93 +31,101 @@ uv sync --extra all
 uv run hf auth login
 ```
 
-Na <https://huggingface.co/pyannote/speaker-diarization-community-1> přijměte podmínky modelu (jediný ruční krok).
-Pak vytvořte konfiguraci – průvodce se zeptá na vaše jméno, kalendář Outlook a hlasové otisky:
+On <https://huggingface.co/pyannote/speaker-diarization-community-1> accept the model's terms (the only manual step).
+Then create the configuration – the wizard asks for your name, the Outlook calendar and voice prints:
 
 ```
 uv run teamsrec-transcribe config --init
 ```
 
-Příkaz odkudkoli: přidejte složku `bin` do proměnné PATH (spouštěč `bin\teamsrec-transcribe.cmd` použije
-virtuální prostředí repozitáře a najde ffmpeg). Kontrola: `teamsrec-transcribe config` vypíše, co platí.
+The command from anywhere: add the `bin` folder to PATH (the launcher `bin\teamsrec-transcribe.cmd` uses the
+repository's virtual environment and finds ffmpeg). Check: `teamsrec-transcribe config` prints what applies.
 
-## 2. Zápisy
+**Desktop window (optional):** `cd desktop`, `npm install`, `npm run build`; copy
+`src-tauri\target\release\teamsrec-review.exe` to `%LOCALAPPDATA%\Programs\teamsrec-review\` (that is where the tray
+icon of teamsrec-capture looks for it) and make a Start menu shortcut to it. Details: `desktop/README.md`.
 
-- **Lokálně (výchozí):** `winget install Ollama.Ollama`, pak `ollama pull gemma4:31b`. Nic neopouští počítač.
-- **Claude (volitelně, srovnání nebo hlavní):** klíč do proměnné prostředí `TEAMSREC_ANTHROPIC_API_KEY`
-  (vlastní jméno schválně – obecnou `ANTHROPIC_API_KEY` by si vzaly jiné nástroje). Pak v konfiguraci
-  `[summarize] provider = "anthropic"` nebo `compare = ["anthropic:claude-opus-5"]`.
+## 2. Minutes
 
-## 3. Nahrávání (teamsrec-capture)
+- **Local (default):** `winget install Ollama.Ollama`, then `ollama pull gemma4:31b`. Nothing leaves the PC.
+- **Claude (optional, as a comparison or the main one):** the key under **Nastavení → Klíče API** on the review page (or
+  the environment variable `TEAMSREC_ANTHROPIC_API_KEY` – the tool's own name on purpose, a plain `ANTHROPIC_API_KEY`
+  would be taken by other tools). Then choose Claude as the summary service, or add `anthropic:claude-opus-5-5` to the
+  comparison summaries.
+
+## 3. Recording (teamsrec-capture)
 
 ```
 git clone https://github.com/drzdez/teamsrec-capture
-cd teamsrec-capture\legacy
-uv venv --python 3.12 .venv
-uv pip install --python .venv\Scripts\python.exe pyaudiowpatch pystray pillow pywin32 psutil pycaw
+cd teamsrec-capture\dotnet
+dotnet publish src\TeamsRec.Capture\TeamsRec.Capture.csproj -c Release -r win-x64 --self-contained false -o %LOCALAPPDATA%\Programs\teamsrec-capture
 ```
 
-Spuštění: dvojklik na `legacy\run_teamsrec.cmd` (bez konzole) nebo `run_teamsrec_console.cmd` (ukáže chyby).
-V liště se objeví šedá ikona; při nahrávání je červená, žlutá znamená, že nejde zvuk.
+Start `%LOCALAPPDATA%\Programs\teamsrec-capture\teamsrec-capture.exe`. A grey icon appears in the tray; it is red while
+recording, yellow means no sound is arriving. A double click opens the review page; **Settings…** opens its Nastavení.
 
-**Automatické spouštění:**
+**Starting automatically:**
 
-1. Zástupce na `legacy\run_teamsrec.cmd` do složky Po spuštění (Win+R → `shell:startup`).
-2. Hlídací úloha, která aplikaci znovu spustí, kdyby spadla nebo byla ukončena (druhá instance se hned sama
-   ukončí, takže nevadí, že běží každých 5 minut):
+1. A shortcut to `teamsrec-capture.exe` in the Startup folder (Win+R → `shell:startup`).
+2. A watchdog task that starts the app again should it crash or be quit (a second instance quits at once, so it does
+   not matter that it runs every 5 minutes):
 
    ```
-   schtasks /Create /TN teamsrec-capture /SC MINUTE /MO 5 /F /TR "\"<cesta>\legacy\.venv\Scripts\pythonw.exe\" \"<cesta>\legacy\teamsrec.py\""
+   schtasks /Create /TN teamsrec-capture /SC MINUTE /MO 5 /F /TR "\"%LOCALAPPDATA%\Programs\teamsrec-capture\teamsrec-capture.exe\""
    ```
 
-**Mikrofony:** pro schůzky na místě povolte mikrofonní pole notebooku (`mmsys.cpl` → Záznam → pravým →
-Povolit) a v menu ikony dejte **Settings…** → vyberte mikrofon → **Test mikrofonu**.
+To update: Quit the app from its tray menu, publish again into the same folder, start it.
 
-Kontrola bez hovoru: `.venv\Scripts\python.exe smoke_test.py` (s `--hardware` nahraje 2 s z mikrofonu).
+**Microphones:** for on-site meetings enable the laptop's microphone array (Nastavení → Nahrávání → "Otevřít nastavení
+zvuku Windows" → Recording → right click → Enable), choose it as the on-site microphone, and try it with **Test
+microphone** in the tray menu.
 
-## 4. Konfigurace
+## 4. Configuration
 
-Jeden soubor pro obě aplikace: `%APPDATA%\teamsrec\teamsrec.toml`. Nastavení nahrávání jde měnit i na
-stránce **Settings…** z ikony v liště (zapisuje do stejného souboru, komentáře zachová).
+One file for both apps: `%APPDATA%\teamsrec\teamsrec.toml`. Every setting can be changed on the review page
+(**Nastavení**; it writes to the same file and keeps the comments); the recording app picks up changes by itself.
 
-| sekce, klíč | co dělá | výchozí |
+| section, key | what it does | default |
 |---|---|---|
-| `[recordings] out_dir` | složka nahrávek (po změně restartovat obě aplikace) | `~/meetings` |
-| `[user] name` | vaše jméno; mikrofonní stopa živého hovoru ho dostane | – |
-| `[people] display` | jak psát lidi do přepisu a zápisu: `first` / `full` / `nick` | `nick` |
-| `[calendar] outlook` | název a účastníci schůzky z klasického Outlooku (lokálně přes COM) | `false` |
-| `[capture] onsite_mic` | mikrofon pro schůzky na místě (část názvu zařízení) | výchozí vstup |
-| `[capture] device_missing` | chybí nastavený mikrofon: `ask` / `fail` / `fallback` | `ask` |
-| `[capture] onsite_offer` | nahrávat schůzky z kalendáře: `never` / `calendar` (bez odkazu na Teams) / `always` | `never` |
-| `[capture] onsite_upgrade` | schůzka na místě, která přejde do hovoru, pokračuje živou nahrávkou | `true` |
-| `[capture] prompt_default` | začátek hovoru: `record` (jen oznámit) / `ask` / `skip` | `record` |
-| `[capture] other_apps` | nahrávat i hovory v Zoomu, Webexu, Slacku, Discordu, WhatsAppu, Skypu, Signalu a schůzky v prohlížeči: `record` / `off` | `record` |
-| `[transcribe] provider` | `whisperx` (lokálně) / `openai` / `elevenlabs` (cloud, posílá zvuk) | `whisperx` |
-| `[transcribe] language`, `languages` | jazyk nebo `auto`; při `auto` se vybírá jen z `languages` | `auto`, `cs sk en` |
-| `[transcribe] per_speaker_language` | u smíšené schůzky přepsat každého mluvčího v jeho jazyce | `true` |
-| `[transcribe] glossary` | pojmy do nápovědy přepisu (názvy systémů, zkratky) | – |
-| `[voiceprints] enabled` | poznávat lidi po hlase (biometrie kolegů, viz Soukromí) | `false` |
-| `[summarize] provider`, `model`, `compare` | zápis lokálně (Ollama) nebo přes Claude; `compare` = zápis navíc | `ollama`, `gemma4:31b` |
-| `[retention] audio_days` | po kolika dnech smazat zvuk hotových schůzek (texty zůstanou); `0` = nikdy | `0` |
+| `[recordings] out_dir` | the recordings folder (restart both apps after a change) | `~/meetings` |
+| `[user] name` | your name; the microphone track of a live call gets it | – |
+| `[people] display` | how people are written in transcript and minutes: `first` / `full` / `nick` | `nick` |
+| `[calendar] outlook` | meeting title and participants from classic Outlook (locally, through COM) | `false` |
+| `[capture] onsite_mic` | the microphone for on-site meetings (part of the device name) | default input |
+| `[capture] device_missing` | the chosen microphone is missing: `ask` / `fail` / `fallback` | `ask` |
+| `[capture] onsite_offer` | record calendar meetings: `never` / `calendar` (no Teams link) / `always` | `never` |
+| `[capture] onsite_upgrade` | an on-site meeting that turns into a call continues as a live recording | `true` |
+| `[capture] prompt_default` | the start of a call: `record` (only notify) / `ask` / `skip` | `record` |
+| `[capture] other_apps` | also record calls in Zoom, Webex, Slack, Discord, WhatsApp, Skype, Signal and meetings in a browser: `record` / `off` | `record` |
+| `[capture] tray_open` | what a double click on the tray icon opens: `app` (desktop window) / `web` (browser) | `app` |
+| `[transcribe] provider` | `whisperx` (local) / `openai` / `elevenlabs` (cloud, sends the audio) | `whisperx` |
+| `[transcribe] language`, `languages` | the language or `auto`; with `auto` only among `languages` | `auto`, `cs sk en` |
+| `[transcribe] per_speaker_language` | in a mixed meeting transcribe each speaker in their language | `true` |
+| `[transcribe] when_recording` | processing while a recording starts: `ask` / `stop` / `continue` | `ask` |
+| `[transcribe] glossary` | terms for the transcription prompt (system names, abbreviations) | – |
+| `[voiceprints] enabled` | recognise people by voice (colleagues' biometrics, see Privacy) | `false` |
+| `[summarize] provider`, `model`, `compare` | minutes locally (Ollama) or through Claude; `compare` = extra minutes | `ollama`, `gemma4:31b` |
+| `[retention] audio_days` | after how many days the audio of finished meetings is deleted (texts stay); `0` = never | `0` |
 
-## 5. Klíče ke službám
+## 5. Keys for the services
 
-Nikdy v konfiguraci ani v repozitáři. Nejjednodušší je vložit je v **Nastavení** na stránce kontroly
-(`teamsrec-transcribe review` → Nastavení → Klíče API): uloží se šifrovaně do Správce přihlašovacích údajů Windows
-pro váš účet a platí hned, bez restartu. Jde to i proměnnými prostředí uživatele, které mají přednost:
+Never in the configuration or the repository. The easiest is to enter them under **Nastavení** on the review page
+(`teamsrec-transcribe review` → Nastavení → Klíče API): they are stored encrypted in the Windows Credential Manager for
+your account and apply at once, without a restart. User environment variables work too and win:
 
-| proměnná | k čemu |
+| variable | for |
 |---|---|
-| `TEAMSREC_ANTHROPIC_API_KEY` | zápisy přes Claude |
-| `TEAMSREC_OPENAI_API_KEY` (nebo `OPENAI_API_KEY`) | přepis `provider = "openai"` |
-| `TEAMSREC_ELEVENLABS_API_KEY` (nebo `ELEVENLABS_API_KEY`) | přepis `provider = "elevenlabs"`; klíč musí mít oprávnění Speech to Text |
+| `TEAMSREC_ANTHROPIC_API_KEY` | minutes through Claude |
+| `TEAMSREC_OPENAI_API_KEY` (or `OPENAI_API_KEY`) | transcription `provider = "openai"` |
+| `TEAMSREC_ELEVENLABS_API_KEY` (or `ELEVENLABS_API_KEY`) | transcription `provider = "elevenlabs"`; the key needs the Speech to Text permission |
 
-Proměnná: Start → „Upravit proměnné prostředí pro váš účet“ → Nová. Běžící aplikace ji uvidí až po restartu.
+A variable: Start → "Edit environment variables for your account" → New. Running apps see it only after a restart.
 
-## 6. První nahrávka
+## 6. The first recording
 
-1. Zavolejte si v Teams (*Kalendář → Sejít se hned*) – ikona zčervená a přijde oznámení.
-2. Po hovoru: `teamsrec-transcribe process --latest` (přepis, jména, zápis; na ploše si na to můžete udělat zástupce).
-3. Kontrolní stránka (`teamsrec-transcribe review`) ukáže mluvčí; pojmenujte je a dejte Uložit.
+1. Start a call in Teams (*Calendar → Meet now*) – the icon turns red and a notification appears.
+2. After the call: double click the tray icon (or `teamsrec-transcribe process --latest`); on the page confirm
+   "Ano, přepsat a zpracovat".
+3. The review page shows the speakers; name them and click Uložit.
 
-Podrobně o používání: [Uživatelská příručka](user-guide.md). Co se ukládá a posílá: [Soukromí](privacy.md).
+Using it in detail: [User guide](user-guide.md). What is stored and sent: [Privacy](privacy.md).

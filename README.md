@@ -19,7 +19,7 @@ Working, early. Implemented and verified on a real 70-minute Teams recording:
   a local Ollama model or the Claude API), `process` (inbox + all pending), `list`, `config`.
 - Not yet: `purge-audio`, per-speaker language, the `me` track for live captures, CPU/cloud providers.
 
-User guide (Czech): [docs/user-guide.md](docs/user-guide.md). Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
+User guide: [docs/user-guide.md](docs/user-guide.md), installation: [docs/install.md](docs/install.md), privacy: [docs/privacy.md](docs/privacy.md) (the review page itself is in Czech). Background: `lab/FINDINGS.md` (measurements and decisions), `docs/hardware-portability.md` (other GPUs, CPU, Mac, cloud).
 
 ## Usage
 

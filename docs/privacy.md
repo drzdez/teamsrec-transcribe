@@ -1,47 +1,55 @@
-# Soukromí: hlasové otisky a co opouští počítač
+# Privacy: voice prints and what leaves the PC
 
-teamsrec nahrává schůzky a pozná v nich lidi. Část z toho jsou osobní údaje kolegů, hlasový otisk je navíc
-biometrický údaj. Tady je, co se ukládá, kde, proč a jak se z toho kdokoli vyvlékne. Poslední oddíl je text,
-který se dá kolegům rovnou poslat.
+teamsrec records meetings and recognises the people in them. Part of that is colleagues' personal data; a voice print
+is moreover biometric data. Here is what is stored, where, why, and how anyone can opt out. The last section is a note
+that can be sent to colleagues as it is.
 
-## Hlasový otisk
+## Voice print
 
-- **Co to je:** 256 čísel, které popisují zabarvení hlasu (embedding z diarizace pyannote
-  `speaker-diarization-community-1`). Z otisku se nedá přehrát ani složit řeč; zvuk se do něj neukládá.
-- **Kde je:** jen v souboru `<složka nahrávek>\_speakers\voiceprints.json` na počítači toho, kdo nahrává.
-  Nikam se neposílá.
-- **K čemu:** aby další nahrávky poznaly, kdo mluví, a v přepisu i zápisu stálo jméno místo `SPEAKER_03`.
-- **Kdy vzniká:** jen když uživatel na kontrolní stránce (nebo `label-speakers`) **potvrdí**, že daný hlas patří
-  dané osobě. Odhady aplikace (jmenovka z videa, shoda s otiskem) se trvale neukládají.
-- **Kolik:** nejvýš 10 otisků na osobu, skoro shodné se zahazují.
-- **Výchozí stav:** vypnuto. Zapíná se v `%APPDATA%\teamsrec\teamsrec.toml` (`[voiceprints] enabled = true`);
-  `teamsrec-transcribe config --init` se na to při instalaci zeptá.
+- **What it is:** 256 numbers describing the timbre of a voice (an embedding from the pyannote diarization
+  `speaker-diarization-community-1`). No speech can be played or put together from a print; no audio is stored in it.
+- **Where it is:** only in the file `<recordings folder>\_speakers\voiceprints.json` on the PC of whoever records. It is
+  not sent anywhere.
+- **What for:** so that later recordings know who speaks, and the transcript and minutes show a name instead of
+  `SPEAKER_03`.
+- **When it is made:** only when the user **confirms** on the review page (or with `label-speakers`) that a voice
+  belongs to a person. The application's guesses (a name label from the video, a match with a print) are not stored
+  permanently.
+- **How many:** at most 10 prints per person; almost identical ones are dropped.
+- **Default:** off. It is turned on in the settings (Nastavení → Hlasové otisky, `[voiceprints] enabled = true` in
+  `%APPDATA%\teamsrec\teamsrec.toml`); `teamsrec-transcribe config --init` asks during installation.
 
-## Jak se vyvléknout
+## How to opt out
 
-Kdo si nepřeje být poznáván po hlase, stačí říct tomu, kdo nahrává. Ten na kontrolní stránce v záložce
-**Lidé** zruší u jeho jména zaškrtnutí ve sloupci **Hlas** a dá **Uložit lidi**:
+Whoever does not want to be recognised by voice just tells the person who records. They untick the **Hlas** column for
+that name on the review page's **Lidé** tab and click **Uložit lidi**:
 
-- všechny jeho otisky se **hned smažou**,
-- nové už nevzniknou ani při potvrzení jména (přání se pamatuje v `people.json`),
-- v přepisech zůstane jeho jméno tam, kde ho někdo ručně zadal; jinak `SPEAKER_XX`.
+- all of that person's prints are **deleted at once**,
+- no new ones are made, not even when a name is confirmed (the wish is remembered in `people.json`),
+- the transcripts keep their name where someone typed it by hand; otherwise `SPEAKER_XX`.
 
-Totéž z příkazové řádky: `teamsrec-transcribe people forget-voice <id>` smaže otisky (vyvléknutí natrvalo je
-ta volba na stránce). Celý soubor `voiceprints.json` lze kdykoli smazat, aplikace funguje dál bez rozpoznávání.
+The same from the command line: `teamsrec-transcribe people forget-voice <id>` deletes the prints (the permanent
+opt-out is the choice on the page). The whole `voiceprints.json` can be deleted at any time; the application works on
+without recognition.
 
-## Co opouští počítač
+## What leaves the PC
 
-- **Otisky nikdy.** Rozpoznávání mluvčích po hlase běží jen lokálně.
-- **Zvuk jen s cloudovým přepisem.** Ve výchozím stavu (`[transcribe] provider = "whisperx"`) běží přepis lokálně
-  na grafické kartě a zvuk počítač neopouští. S `provider = "openai"` nebo `"elevenlabs"` – nebo příkazem
-  `compare-transcribe --provider …` – se **zvuk celé schůzky** (zkomprimovaný) posílá službě OpenAI nebo
-  ElevenLabs. To je třeba vědomě zvolit a kolegům říct.
-- **Text přepisu jen při zápisu přes Claude**: když je v `[summarize]` nastaven `provider = "anthropic"` nebo
-  je Claude v `compare`, pošle se text přepisu (se jmény mluvčích) do Claude API společnosti Anthropic, aby
-  z něj vznikl zápis. S `provider = "ollama"` a prázdným `compare` nic neodchází.
-- **Kalendář** (Outlook) se čte lokálně přes COM, nic se neposílá.
+- **Prints never.** Recognising speakers by voice runs only locally.
+- **Audio only with cloud transcription.** By default (`[transcribe] provider = "whisperx"`) the transcription runs
+  locally on the graphics card and the audio does not leave the PC. With `provider = "openai"` or `"elevenlabs"` – or
+  the command `compare-transcribe --provider …` – **the audio of the whole meeting** (compressed) is sent to OpenAI or
+  ElevenLabs. That has to be chosen deliberately and colleagues told.
+- **The transcript text only for minutes through Claude:** when the summary service is Claude (`provider = "anthropic"`)
+  or Claude is among the comparison summaries (`compare`), the transcript text (with the speakers' names) is sent to
+  Anthropic's Claude API to write the minutes. With `provider = "ollama"` and an empty `compare` nothing leaves.
+- **API keys** entered on the settings page are stored encrypted in the Windows Credential Manager of your account and
+  are only sent to the service they belong to.
+- **The calendar** (Outlook) is read locally through COM; nothing is sent.
+- **The review page** runs on 127.0.0.1 only; it is not reachable from the network.
 
-## Text pro kolegy
+## Note for colleagues
+
+The note below is in Czech, as sent to the team; adapt the bracketed sentences to the settings in use.
 
 > Ahoj, schůzky si nahrávám kvůli zápisu (teamsrec, běží jen na mém počítači). Přepis dělám lokálně; aby
 > v něm byla jména, pamatuje si aplikace hlasové otisky lidí, které jsem u nahrávky ručně pojmenoval –
@@ -49,3 +57,12 @@ ta volba na stránce). Celý soubor `voiceprints.json` lze kdykoli smazat, aplik
 > [Zápis z přepisu nechávám napsat i přes Claude API, tam jde text přepisu.]
 > [Přepis dělá služba OpenAI / ElevenLabs, tam jde i zvuk schůzky.]
 > Kdybys nechtěl/a být poznáván/a po hlase, dej mi vědět – otisky smažu a nové už nevzniknou.
+
+In English:
+
+> Hi, I record meetings to write up the minutes (teamsrec, it runs only on my PC). The transcript is made locally; to
+> put names in it, the application keeps voice prints of the people I named by hand in a recording – 256 numbers
+> describing a voice, no audio, stored only with me and never sent anywhere.
+> [The minutes are also written through the Claude API, which receives the transcript text.]
+> [The transcript is made by OpenAI / ElevenLabs, which receives the meeting's audio.]
+> If you would rather not be recognised by voice, let me know – I will delete the prints and no new ones will be made.

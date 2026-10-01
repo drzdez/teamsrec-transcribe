@@ -1,90 +1,98 @@
-# Využitelnost řešení na různém hardwaru
+# Running on different hardware
 
-Zhodnocení, ne plán. Vychází z měření v `lab/FINDINGS.md` (2026-09-04) a z veřejně známých vlastností použitých
-knihoven. Čísla pro jiný hardware jsou **odhady** z poměrů výkonu, ne měření.
+An assessment, not a plan. It is based on the measurements in `lab/FINDINGS.md` (2026-09-04) and on publicly known
+properties of the libraries used. The figures for other hardware are **estimates** from performance ratios, not
+measurements. Other operating systems: `teamsrec-capture/docs/cross-platform-design.md`.
 
-## Co vlastně zatěžuje hardware
+## What actually loads the hardware
 
-Capture (.NET, nahrávání WASAPI) je zanedbatelné a poběží na čemkoli s Windows. Veškerá zátěž je v transkripci,
-která má čtyři fáze. Změřeno na RTX 5090 Laptop (24 GB VRAM) pro 70 min záznamu:
+Capture (.NET, WASAPI recording) is negligible and runs on anything with Windows. All the load is in transcription,
+which has four phases. Measured on an RTX 5090 Laptop (24 GB VRAM) for a 70-minute recording:
 
-| Fáze | Knihovna | Čas | VRAM (odhad) | Poznámka |
+| Phase | Library | Time | VRAM (estimate) | Note |
 |---|---|---|---|---|
-| ASR large-v3, float16 | faster-whisper / CTranslate2 | 61 s | ~3,5 GB | jediná fáze, kde záleží na modelu a přesnosti výpočtu |
-| zarovnání (word timestamps) | wav2vec2 přes torch | 40 s | ~1 GB | volitelné, bez něj segmenty po 30 s |
-| diarizace | pyannote community-1 | 60 s | ~1,5 GB | volitelné; u záznamů s videem nahraditelné analýzou videa |
-| mluvčí z videa | numpy + easyocr | ~240 s | ~0,5 GB (OCR) | téměř celé na CPU (dekódování videa), na GPU nezávislé |
+| ASR large-v3, float16 | faster-whisper / CTranslate2 | 61 s | ~3.5 GB | the only phase where the model and the compute precision matter |
+| alignment (word timestamps) | wav2vec2 through torch | 40 s | ~1 GB | optional; without it segments of 30 s |
+| diarization | pyannote community-1 | 60 s | ~1.5 GB | optional; for recordings with video replaceable by the video analysis |
+| speakers from video | numpy + easyocr | ~240 s | ~0.5 GB (OCR) | almost all on the CPU (video decoding), independent of the GPU |
 
-Špička VRAM celého řetězce je kolem 5 až 6 GB. Vše je 20× rychlejší než reálný čas, takže jakýkoli hardware,
-který je i 10× pomalejší, je pro noční nebo pozaďové zpracování stále v pohodě.
+The VRAM peak of the whole chain is around 5 to 6 GB. Everything is 20× faster than real time, so any hardware that is
+even 10× slower is still fine for overnight or background processing.
 
-## NVIDIA RTX a jiné NVIDIA karty
+## NVIDIA RTX and other NVIDIA cards
 
-CTranslate2 i torch běží na všech kartách od Turingu (RTX 20xx, compute capability 7.5) nahoru, Pascal (GTX 10xx)
-funguje, ale bez rychlého float16. Balíčky cu128 vyžadují driver 570+; pro starší karty jde použít i cu124/cu126.
+CTranslate2 and torch run on every card from Turing (RTX 20xx, compute capability 7.5) up; Pascal (GTX 10xx) works, but
+without fast float16. The cu128 packages need driver 570+; for older cards cu124/cu126 can be used.
 
-| Karta | Typ | VRAM | Odhad ASR 70 min | Doporučené nastavení |
+| Card | Generation | VRAM | Estimated ASR, 70 min | Recommended settings |
 |---|---|---|---|---|
-| RTX 5090 Laptop (změřeno) | Blackwell | 24 GB | 1 min | large-v3, float16, batch 16 |
-| RTX 4090 / 4080 desktop | Ada | 16–24 GB | 1 min nebo méně | totéž |
+| RTX 5090 Laptop (measured) | Blackwell | 24 GB | 1 min | large-v3, float16, batch 16 |
+| RTX 4090 / 4080 desktop | Ada | 16–24 GB | 1 min or less | the same |
 | RTX 4070 / 4060 laptop | Ada | 8 GB | 2–3 min | large-v3, float16, batch 8 |
-| RTX 3060 / 3050 | Ampere | 6–12 GB | 3–4 min | large-v3, float16 nebo int8_float16, batch 4–8 |
+| RTX 3060 / 3050 | Ampere | 6–12 GB | 3–4 min | large-v3, float16 or int8_float16, batch 4–8 |
 | RTX 2060 / 2070 | Turing | 6–8 GB | 4–6 min | large-v3, int8_float16 |
-| GTX 1650 / 1060 | Pascal | 4–6 GB | 8–15 min | large-v3 int8 nebo medium, batch 2; zarovnání a diarizaci zvážit vypnout |
-| GeForce MX, 2 GB | libovolný | 2 GB | – | GPU nepoužitelná, jako CPU níže |
+| GTX 1650 / 1060 | Pascal | 4–6 GB | 8–15 min | large-v3 int8 or medium, batch 2; consider turning off alignment and diarization |
+| GeForce MX, 2 GB | any | 2 GB | – | GPU unusable, as CPU below |
 
-Praktické minimum je **4 GB VRAM s int8** (large-v3 int8 má ~1,6 GB), pohodlné **6 GB**, bez kompromisů **8 GB**.
-Konfigurace se dá volit automaticky podle zjištěné VRAM a compute capability; dnes je natvrdo v laboratorním skriptu.
+The practical minimum is **4 GB VRAM with int8** (large-v3 int8 takes ~1.6 GB), comfortable is **6 GB**, without
+compromises **8 GB**. The settings could be chosen automatically from the detected VRAM and compute capability; today
+they are set in the configuration.
 
-## Počítače bez NVIDIA GPU
+## PCs without an NVIDIA GPU
 
-**Windows laptop s Intel/AMD grafikou (jen CPU).** CTranslate2 má dobrou CPU cestu (int8, AVX2/AVX-512).
-Orientačně na 8jádrovém moderním CPU:
+**A Windows laptop with Intel/AMD graphics (CPU only).** CTranslate2 has a good CPU path (int8, AVX2/AVX-512). Roughly,
+on a modern 8-core CPU:
 
-| Model | Odhad ASR 70 min | Kvalita |
+| Model | Estimated ASR, 70 min | Quality |
 |---|---|---|
-| large-v3 int8 | 40–90 min | plná |
-| large-v3-turbo int8 | 12–25 min | mírně horší na termíny, s promptem přijatelná |
-| medium int8 | 15–30 min | znatelně horší čeština/slovenština |
-| small int8 | 5–8 min | pro zápis nedostačující |
+| large-v3 int8 | 40–90 min | full |
+| large-v3-turbo int8 | 12–25 min | slightly worse on terms, acceptable with a prompt |
+| medium int8 | 15–30 min | noticeably worse Czech/Slovak |
+| small int8 | 5–8 min | not enough for minutes |
 
-Diarizace pyannote na CPU je zhruba v reálném čase (70 min ≈ 40–80 min). U importovaných Teams záznamů ji
-analýza videa nahradí zcela, což je na slabém hardwaru největší úspora. Zarovnání na CPU je v řádu 10 min.
-Závěr: **na CPU je řešení použitelné pro dávkové zpracování** (přes noc, po schůzce na pozadí), ne pro rychlý přepis.
+pyannote diarization on the CPU runs at about real time (70 min ≈ 40–80 min). For imported Teams recordings the video
+analysis replaces it completely, which is the biggest saving on weak hardware. Alignment on the CPU takes around 10 min.
+Conclusion: **on a CPU the solution is usable for batch processing** (overnight, in the background after a meeting),
+not for a quick transcript.
 
-**AMD Radeon.** ROCm je jen pro Linux a CTranslate2 ho nepodporuje; na Windows se AMD chová jako CPU.
-Existují cesty přes ONNX Runtime s DirectML (whisper v ONNX), ale to je jiný stack než WhisperX.
+**AMD Radeon.** ROCm is Linux-only and CTranslate2 does not support it; on Windows AMD behaves like a CPU. There are
+routes through ONNX Runtime with DirectML (whisper in ONNX), but that is a different stack from WhisperX.
 
-**Intel Arc / Core Ultra NPU.** OpenVINO umí Whisper (optimum-intel, whisper.cpp), opět jiný stack. Bez diarizace.
+**Intel Arc / Core Ultra NPU.** OpenVINO can run Whisper (optimum-intel, whisper.cpp), again a different stack, without
+diarization.
 
-**Apple Silicon (Mac).** Nejlepší ne-NVIDIA cesta. `mlx-whisper` s large-v3 běží na M2 Pro a výš zhruba
-5–10× rychleji než reálný čas, pyannote na MPS/CPU je pomalejší. WhisperX tam neběží, byl by to samostatný provider,
-jak už předpokládal původní návrh.
+**Apple Silicon (Mac).** The best non-NVIDIA route. `mlx-whisper` with large-v3 runs roughly 5–10× faster than real time
+on an M2 Pro and up; pyannote on MPS/CPU is slower. WhisperX does not run there; it would be a separate provider, as the
+original design already assumed.
 
-## Cloud a vzdálený výpočet
+## Cloud and remote compute
 
-Tři odlišné varianty, s různým dopadem na soukromí záznamů:
+Three distinct options, with a different impact on the privacy of the recordings:
 
-1. **Vlastní vzdálený worker.** Stejné CLI na jiném vlastním stroji s GPU (domácí server, druhý PC). Capture uloží
-   nahrávku do sdílené složky (OneDrive, SMB, syncthing), worker ji zpracuje a výsledky vrátí vedle ní. Data neopouští
-   vlastní infrastrukturu. Prototyp s tím počítal (POST_HOOK).
-2. **Pronajatá GPU** (RunPod, Vast.ai, Lambda, Azure NC řada). Stejný kontejner jako lokálně, 70 min záznamu za
-   ~3 min a jednotky korun. Záznam se posílá třetí straně, model ale zůstává pod kontrolou.
-3. **Hotové API pro přepis.** Azure AI Speech (batch, diarizace, cs/sk/en, evropské regiony), ElevenLabs Scribe,
-   OpenAI, AssemblyAI, Deepgram. Nulové nároky na hardware, nulová údržba modelů, záznam i přepis u poskytovatele.
-   Většina nemá slovník pojmů srovnatelný s `initial_prompt`, výsledek na termínech bude horší.
+1. **Your own remote worker.** The same CLI on another machine of your own with a GPU (a home server, a second PC).
+   Capture saves the recording to a shared folder (OneDrive, SMB, syncthing), the worker processes it and puts the
+   results next to it. The data never leaves your own infrastructure. The prototype allowed for this (POST_HOOK).
+2. **A rented GPU** (RunPod, Vast.ai, Lambda, Azure NC series). The same container as locally, 70 minutes of recording
+   in ~3 min for a few cents. The recording goes to a third party, but the model stays under your control.
+3. **A ready-made transcription API.** Azure AI Speech (batch, diarization, cs/sk/en, European regions), ElevenLabs
+   Scribe, OpenAI, AssemblyAI, Deepgram. No hardware requirements, no model maintenance; recording and transcript stay
+   with the provider. Most have no glossary comparable to `initial_prompt`, so terms come out worse. OpenAI and
+   ElevenLabs are implemented (`[transcribe] provider`); measured comparison in the user guide.
 
-## Jak zvýšit využitelnost (možné směry, neplánováno)
+## How to make it run on more hardware (possible directions, not planned)
 
-Architektura už s tím počítá: transkripce je provider za rozhraním, capture je od hardwaru nezávislé. Rozšíření
-na další hardware znamená přidat provider, ne měnit řetězec.
+The architecture already allows for it: transcription is a provider behind an interface, capture is independent of the
+hardware. Supporting more hardware means adding a provider, not changing the chain.
 
-- **Automatická volba konfigurace** podle zjištěné GPU/VRAM: model, compute type, batch, zapnutí zarovnání a diarizace.
-- **CPU provider** (faster-whisper int8) se stejným výstupem, jako nouzová cesta bez GPU.
-- **Vypnutelná diarizace** tam, kde jsou mluvčí z videa nebo z mikrofonní stopy; na slabém hardwaru největší efekt.
-- **Vzdálený worker** přes sdílenou složku, stejné CLI, jen jiný stroj.
-- **Cloud API provider** pro stroje bez GPU a bez ochoty čekat; volba per nahrávka podle citlivosti.
-- **Apple provider** přes mlx-whisper, pokud se objeví Mac.
-- **Benchmark příkaz** (`bench`), který na daném stroji změří fáze na krátkém vzorku a navrhne konfiguraci.
-- **Kontejner** s CUDA stackem pro pronajaté GPU i vlastní worker, aby instalace (torch cu128 vs. whisperx pin)
-  nebyla ruční.
+- **Automatic choice of settings** from the detected GPU/VRAM: model, compute type, batch, alignment and diarization on
+  or off.
+- **A CPU provider** (faster-whisper int8) with the same output, as a fallback without a GPU.
+- **Diarization that can be turned off** where the speakers come from the video or the microphone track; the biggest
+  effect on weak hardware (already a setting).
+- **A remote worker** through a shared folder: the same CLI, just another machine.
+- **Cloud API providers** for machines without a GPU and without patience; chosen per recording by sensitivity (done
+  for OpenAI and ElevenLabs).
+- **An Apple provider** through mlx-whisper, should a Mac turn up.
+- **A benchmark command** (`bench`) that measures the phases on a short sample on the machine and suggests settings.
+- **A container** with the CUDA stack for rented GPUs and your own worker, so that the installation (torch cu128 vs.
+  the whisperx pin) is not manual.

@@ -28,6 +28,8 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
   GET    /api/settings / PUT /api/settings             fields of the shared teamsrec.toml / {"values": {key: value}}
   PUT    /api/secrets/{name} / DELETE                  {"value"} an API key into / out of the Credential Manager
+  POST   /api/jobs/pause                               stop the running job for a recording (it resumes after it)
+  POST   /api/jobs/continue                            let it run during the recording
   POST   /api/system/sound-settings                    open the Windows sound dialog (devices, levels, the mic array)
   GET    /api/settings/models                          the model lists asked live (Ollama on this PC, Claude API)
   GET    /api/help/{doc}                               user-guide | install | privacy
@@ -87,6 +89,44 @@ MAX_EVENTS = 200   # kept in memory only: the log is a convenience, the files ar
 LOCK = Path(tempfile.gettempdir()) / "teamsrec-review.json"
 CAPTURE_STATUS = Path(tempfile.gettempdir()) / "teamsrec-capture.json"  # written by teamsrec-capture on every change
 CAPTURE_POLL_S = 2.0
+
+
+RECORDING_ASK_S = 30.0  # with when_recording = ask: no answer within this -> stop (the sound is breaking meanwhile)
+
+
+def run_cli(argv: list[str], on_proc, on_line) -> None:
+    """Run `teamsrec-transcribe <argv>` as a child process (a job that can be stopped). on_proc(proc) gets the
+    process as soon as it runs; on_line(text) every line it logs. Raises RuntimeError with its last message when it
+    fails. Tests replace this function."""
+    import subprocess
+    import sys as _sys
+    flags = 0x08000000 if os.name == "nt" else 0  # CREATE_NO_WINDOW
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUNBUFFERED": "1"}
+    proc = subprocess.Popen([_sys.executable, "-m", "teamsrec_transcribe.cli", *argv], stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace",
+                            creationflags=flags, env=env)
+    on_proc(proc)
+    last = ""
+    for line in proc.stdout or []:
+        line = line.rstrip()
+        if line:
+            last = line
+            on_line(line)
+    if proc.wait() != 0:
+        raise RuntimeError(last or f"exit code {proc.returncode}")
+
+
+def _kill_tree(proc) -> None:
+    """Stop a job's process with everything it started (ffmpeg, ...). Ollama stops generating when the
+    connection goes away."""
+    try:
+        if os.name == "nt":
+            import subprocess
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, creationflags=0x08000000)
+        else:
+            proc.kill()
+    except Exception as e:  # already gone
+        log.debug("kill job: %s", e)
 
 
 def _pid_alive(pid: int) -> bool:
@@ -582,7 +622,11 @@ class ReviewState:
         self.subscribers: list[queue.Queue] = []  # one per open /api/events stream
         self.jobs: list[dict] = []        # waiting background jobs, in order
         self.current: dict | None = None  # the job running now (id, name, stem, text, started)
+        self.running: dict | None = None  # ... the whole job (its process, to stop it)
         self.next_job = 0
+        self.held = False    # a recording runs: jobs wait (the GPU would break the recorded sound)
+        self.asking = False  # the pages are asked whether to stop the running job for the recording
+        self.wake = threading.Condition(self.lock)
 
     def seen(self) -> None:
         self.last_seen = time.monotonic()
@@ -612,10 +656,64 @@ class ReviewState:
             q.put({"type": "capture", **status})
         if status.get("recording") and not before.get("recording"):
             self.event(f"nahrávání probíhá: {status.get('title') or status.get('stem')}", "info")
+            self._recording_started()
         elif before.get("recording") and not status.get("recording"):
             # the new recording appears in the list once its sidecar is written: reload
             self.event(f"nahrávání skončilo: {before.get('title') or before.get('stem')}", "info",
                        before.get("stem") or "", reload=True)
+            self._recording_ended()
+
+    # ---- a recording must not be broken by processing
+    def _recording_started(self) -> None:
+        with self.lock:
+            working = bool(self.current or self.jobs)
+            mode = self.cfg.transcribe.when_recording
+            pages = bool(self.subscribers)
+        if not working or mode == "continue":
+            if working:
+                self.event("zpracování běží dál i během nahrávání (nastavení: nechat běžet)", "info")
+            return
+        if mode == "ask" and pages:
+            with self.lock:
+                self.asking = True
+            self._push_jobs()
+
+            def timeout():
+                time.sleep(RECORDING_ASK_S)
+                if self.asking and self.capture.get("recording"):
+                    self.pause_for_recording("bez odpovědi do %d s" % RECORDING_ASK_S)
+            threading.Thread(target=timeout, daemon=True).start()
+            return
+        self.pause_for_recording("nastavení: hned přerušit" if mode == "stop" else "žádná stránka není otevřená")
+
+    def pause_for_recording(self, why: str = "") -> None:
+        """Stop the running job (it goes back to the front of the queue) and let nothing start until the recording
+        ends. A job that runs in this process (tests) cannot be stopped: it finishes, the queue waits."""
+        with self.lock:
+            self.held, self.asking = True, False
+            job = self.running
+            if job and job.get("proc"):
+                job["stopped"] = True
+        if job and job.get("proc"):
+            _kill_tree(job["proc"])
+        self.event("zpracování přerušeno kvůli nahrávání" + (f" ({why})" if why else "")
+                   + ", doběhne samo po jeho konci", "info")
+        self._push_jobs()
+
+    def keep_running(self) -> None:
+        with self.lock:
+            self.asking = False
+        self.event("zpracování běží dál i během nahrávání (rozhodnuto na stránce)", "info")
+        self._push_jobs()
+
+    def _recording_ended(self) -> None:
+        with self.lock:
+            was_held, self.held, self.asking = self.held, False, False
+            waiting = len(self.jobs)
+            self.wake.notify_all()
+        if was_held and waiting:
+            self.event(f"nahrávání skončilo, zpracování pokračuje ({waiting} ve frontě)", "info")
+        self._push_jobs()
 
     def subscribe(self) -> queue.Queue:
         q: queue.Queue = queue.Queue()
@@ -654,7 +752,8 @@ class ReviewState:
         """What runs and what waits, for every page (SSE `jobs`, hello, /api/status)."""
         with self.lock:
             return {"current": dict(self.current) if self.current else None,
-                    "queue": [{k: j[k] for k in ("id", "name", "stem", "text")} for j in self.jobs]}
+                    "queue": [{k: j[k] for k in ("id", "name", "stem", "text")} for j in self.jobs],
+                    "held": self.held, "asking": self.asking, "ask_s": RECORDING_ASK_S}
 
     def _push_jobs(self) -> None:
         state = self.jobs_state()
@@ -671,6 +770,8 @@ class ReviewState:
         with self.lock:
             self.next_job += 1
             job = {"id": self.next_job, "name": name, "stem": stem, "text": start or name, "fn": fn, "done": done}
+            if isinstance(fn, list):  # a command: run in a child process that can be stopped
+                job["argv"], job["fn"] = fn, None
             self.jobs.append(job)
             position = len(self.jobs) + (1 if self.busy else 0)
             starts_worker = not self.busy
@@ -686,10 +787,13 @@ class ReviewState:
         """The one worker: runs the queued jobs one after another until the queue is empty."""
         while True:
             with self.lock:
+                while self.held and self.jobs:  # a recording runs: wait for its end
+                    self.wake.wait(timeout=5)
                 if not self.jobs:
                     self.busy, self.current = False, None
                     break
                 job = self.jobs.pop(0)
+                self.running = job
                 self.current = {"id": job["id"], "name": job["name"], "stem": job["stem"], "text": job["text"],
                                 "started": datetime.now().strftime("%H:%M")}
                 self.message, self.error, self.job = job["name"], "", job["name"]
@@ -700,7 +804,10 @@ class ReviewState:
             outcome = (f"{done}: {stem}" if stem else done, "ok")
             errors = self._job_errors(stem)
             try:
-                job["fn"]()
+                if job.get("argv"):
+                    self._run_command(job)
+                else:
+                    job["fn"]()
                 with self.lock:
                     self.message = done
             except Exception as e:  # shown on the page, not fatal
@@ -710,34 +817,64 @@ class ReviewState:
             finally:
                 logging.getLogger("teamsrec_transcribe").removeHandler(errors)
                 with self.lock:
-                    self.current = None
+                    self.current = self.running = None
+                    stopped = job.pop("stopped", False)
+                    job.pop("proc", None)
+                    if stopped:  # stopped for a recording: back to the front, it runs again after it
+                        self.jobs.insert(0, job)
                     if not self.jobs:
                         self.busy = False  # before the end event: the page sees it idle
-            self.event(outcome[0], outcome[1], stem, reload=True, job_end=True, job=job["id"])
+            if stopped:
+                self.event(f"{job['text']} – přerušeno, pokračuje po konci nahrávání", "info", stem, job=job["id"])
+            else:
+                self.event(outcome[0], outcome[1], stem, reload=True, job_end=True, job=job["id"])
             self._push_jobs()
 
+    def _run_command(self, job: dict) -> None:
+        """A job's command in a child process; what it logs as an error goes to the history."""
+        args = list(job["argv"])
+        if self.cfg.source_path or self.settings_path.exists():
+            args = ["--config", str(self.cfg.source_path or self.settings_path)] + args
+        args = ["--out-dir", str(self.cfg.out_dir)] + args
+
+        def on_proc(proc):
+            with self.lock:
+                job["proc"] = proc
+                stop_now = self.held  # a recording started while it was being launched
+            if stop_now:
+                job["stopped"] = True
+                _kill_tree(proc)
+
+        def on_line(line: str):
+            parts = line.split(" ", 2)
+            if len(parts) == 3 and parts[1] == "ERROR":
+                self.event(parts[2], "err", job["stem"])
+        try:
+            run_cli(args, on_proc, on_line)
+        except RuntimeError:
+            if job.get("stopped"):
+                return  # stopped for a recording, not a failure
+            raise
+
     def run_summary(self, rec: Recording) -> tuple[int, int]:
-        def work():
-            do_summarize(self.cfg, rec, force=True)
-            do_summarize_compare(self.cfg, rec, force=True)  # the comparison summaries follow the new names too
-        return self.run_job("summary", work, "zápis přegenerován", rec.stem, start=f"{rec.stem}: zápis se generuje"
+        # in a child process (it can be stopped for a recording); the compare summaries follow the new names too
+        return self.run_job("summary", ["run-job", "summary", rec.stem], "zápis přegenerován", rec.stem,
+                            start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
     def run_process(self, rec: Recording, force: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
-        def work():
-            if force:
-                old = reset_names(rec)
-                if old:
-                    self.event(f"{rec.stem}: ruční přiřazení jmen zahozeno ({len(old)})", "info", rec.stem)
-                if rec.speakers_video_path.exists():
-                    # the cached timeline holds the names OCR read last time; from scratch means those too
-                    rec.speakers_video_path.unlink()
-                    self.event(f"{rec.stem}: okna Teams se projdou znovu (jmenovky z minule zahozeny)",
-                               "info", rec.stem)
-            do_process(self.cfg, rec, force=force)
-        return self.run_job("process", work, "zpracováno", rec.stem,
+        if force:
+            old = reset_names(rec)
+            if old:
+                self.event(f"{rec.stem}: ruční přiřazení jmen zahozeno ({len(old)})", "info", rec.stem)
+            if rec.speakers_video_path.exists():
+                # the cached timeline holds the names OCR read last time; from scratch means those too
+                rec.speakers_video_path.unlink()
+                self.event(f"{rec.stem}: okna Teams se projdou znovu (jmenovky z minule zahozeny)", "info", rec.stem)
+        return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else []),
+                            "zpracováno", rec.stem,
                             start=f"{rec.stem}: {'nový přepis od nuly' if force else 'zpracování'} spuštěno")
 
     def status(self, events: int = 40) -> dict:
@@ -778,6 +915,8 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("PUT", r"/api/secrets/(?P<name>[^/]+)", "set_secret"),
     ("DELETE", r"/api/secrets/(?P<name>[^/]+)", "delete_secret"),
     ("POST", r"/api/system/sound-settings", "sound_settings"),
+    ("POST", r"/api/jobs/pause", "jobs_pause"),
+    ("POST", r"/api/jobs/continue", "jobs_continue"),
     ("GET", r"/api/help/(?P<doc>[^/]+)", "help"),
     ("GET", r"/api/status", "status"),
     ("GET", r"/api/events", "events"),
@@ -924,7 +1063,8 @@ def _handler(state: ReviewState, server_ref: dict):
             provider, model = str(body.get("provider") or "").strip(), str(body.get("model") or "").strip()
             if provider not in ("ollama", "anthropic") or not model:
                 raise ValueError("provider (ollama | anthropic) and model are needed")
-            job, position = state.run_job("summary", lambda: summarize_as(state.cfg, rec, provider, model),
+            job, position = state.run_job("summary", ["run-job", "summarize-as", rec.stem, "--provider", provider,
+                                                      "--model", model],
                                           f"zápis {model} hotový", rec.stem, start=f"{rec.stem}: zápis {model} se generuje")
             self._json({"ok": True, "job": job, "position": position,
                         "file": summary_path_for(state.cfg, rec, provider, model).name})
@@ -1034,6 +1174,14 @@ def _handler(state: ReviewState, server_ref: dict):
             removed = settings.delete_secret(name)
             state.event(f"klíč {name} " + ("smazán ze Správce přihlašovacích údajů" if removed else "tam nebyl"), "info")
             self._json({"ok": True, "removed": removed, "secrets": settings.secret_states()})
+
+        def r_jobs_pause(self, q, body):
+            state.pause_for_recording("rozhodnuto na stránce")
+            self._json({"ok": True, "jobs": state.jobs_state()})
+
+        def r_jobs_continue(self, q, body):
+            state.keep_running()
+            self._json({"ok": True, "jobs": state.jobs_state()})
 
         def r_sound_settings(self, q, body):
             if os.name != "nt":

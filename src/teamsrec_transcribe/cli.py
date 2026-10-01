@@ -424,5 +424,26 @@ def _require_ffmpeg() -> None:
         raise typer.BadParameter("ffmpeg/ffprobe not found on PATH (winget install Gyan.FFmpeg, or set TEAMSREC_FFMPEG_DIR)")
 
 
+@app.command("run-job", hidden=True)
+@_errors
+def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as"),
+            target: str = typer.Argument(...), force: bool = typer.Option(False),
+            provider: str = typer.Option(""), model: str = typer.Option("")):
+    """One background job of the review page, in a process of its own, so the page can stop it (a recording
+    started: the GPU must not break the recorded sound)."""
+    from .pipeline import do_process, do_summarize, do_summarize_compare, resolve_target, summarize_as
+    cfg = _cfg(ctx)
+    rec = resolve_target(cfg, target, allow_import=False)
+    if kind == "process":
+        do_process(cfg, rec, force=force)
+    elif kind == "summary":
+        do_summarize(cfg, rec, force=True)
+        do_summarize_compare(cfg, rec, force=True)  # the comparison summaries follow the new names too
+    elif kind == "summarize-as":
+        summarize_as(cfg, rec, provider, model)
+    else:
+        raise typer.BadParameter(f"unknown job {kind!r}")
+
+
 if __name__ == "__main__":
     app()

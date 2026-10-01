@@ -107,6 +107,11 @@ def spec(version: str) -> dict:
             "/api/settings/models": {"get": _op(
                 "The model lists asked live - Ollama on this PC, the Claude models of the key (takes seconds; "
                 "GET /api/settings sends the last known ones)", tags=("settings",))},
+            "/api/jobs/pause": {"post": _op("Stop the running job because a recording runs; it goes back to the "
+                                            "front of the queue and the queue waits for the recording's end",
+                                            tags=("server",))},
+            "/api/jobs/continue": {"post": _op("Let the jobs run during the recording (answers the question)",
+                                               tags=("server",))},
             "/api/system/sound-settings": {"post": _op("Open the Windows sound dialog (mmsys.cpl)", tags=("settings",))},
             "/api/help/{doc}": {"get": _op("A guide: user-guide | install | privacy", tags=("server",), params=[
                 {"name": "doc", "in": "path", "required": True, "schema": {"enum": ["user-guide", "install", "privacy"]}}])},

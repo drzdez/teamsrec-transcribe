@@ -99,6 +99,12 @@ SECTIONS: tuple[Section, ...] = (
               labels=("Nahrávat a jen oznámit (zahodit lze z menu ikony)",
                       "Nahrávat a zeptat se „Zahodit?“ – bez odpovědi zachovat",
                       "Nahrávat a zeptat se „Zahodit?“ – bez odpovědi zahodit")),
+        Field("transcribe.when_recording", "Když začne nahrávání a běží zpracování", "enum", "ask",
+              "Přepis i lokální zápis vytíží počítač a nahrávaný zvuk se pak může trhat. Přerušená úloha se vrátí "
+              "do fronty a doběhne sama po konci nahrávání.",
+              choices=("ask", "stop", "continue"),
+              labels=("Zeptat se (bez odpovědi do 30 s nebo bez otevřené stránky přerušit)",
+                      "Hned přerušit, doběhne po nahrávání", "Nechat běžet (zvuk se může trhat)")),
     )),
     Section("transcribe", "Přepis", "Cloudové služby posílají zvuk mimo počítač (docs/privacy.md).", (
         Field("transcribe.provider", "Služba přepisu", "enum", _d(T, "provider"),

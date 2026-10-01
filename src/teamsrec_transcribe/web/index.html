@@ -28,6 +28,12 @@
               max-width: 52vw; overflow: hidden; text-overflow: ellipsis; }
   #jobBadge[hidden] { display: none; }
   #jobText { overflow: hidden; text-overflow: ellipsis; }
+  #recAsk { position: fixed; top: 0; left: 0; right: 0; z-index: 40; display: flex; gap: 12px; align-items: center;
+            justify-content: center; flex-wrap: wrap; padding: 12px 20px; background: #7f1d1d; color: #fff; font-weight: 600;
+            box-shadow: 0 4px 16px rgba(0,0,0,.45); }
+  #recAsk[hidden] { display: none; }
+  #recAsk .recDot { width: 12px; height: 12px; border-radius: 50%; background: #ff6b5b; animation: recPulse 1.4s ease-in-out infinite; }
+  #recAsk button.play { color: #fff; border-color: rgba(255,255,255,.6); }
   #recBadge { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #e74c3c; white-space: nowrap; }
   #recBadge[hidden] { display: none; }
   #recBadge .recDot { width: 11px; height: 11px; border-radius: 50%; background: #e74c3c; animation: recPulse 1.4s ease-in-out infinite; }
@@ -254,6 +260,12 @@
   <span id="status"></span>
 </footer>
 <div id="events" hidden></div>
+<div id="recAsk" hidden role="alertdialog" aria-live="assertive">
+  <span class="recDot"></span>
+  <span id="recAskText">Začalo nahrávání a běží zpracování – může rozbít nahrávaný zvuk.</span>
+  <button id="recAskStop" type="button" class="primary">Přerušit (doběhne po nahrávání)</button>
+  <button id="recAskGo" type="button" class="play">Nechat běžet</button>
+</div>
 <div id="settings" hidden>
   <div class="setBar">
     <strong>Nastavení</strong>
@@ -372,9 +384,10 @@ function emptyBox(/** @type {string} */ text) {
 /** An action that deletes, changes things or runs long: the first click only arms the button (it says what will
  * happen), the second does it; Zrušit or 6 s without a second click put it back. No browser dialogs. */
 function armedButton(/** @type {HTMLButtonElement} */ btn, /** @type {string} */ confirmText, /** @type {() => void} */ action,
-                     /** @type {string=} */ question) {
+                     /** @type {string|(() => string)=} */ question) {
   const original = btn.textContent;
-  const ask = question || "zatím se nic nesmazalo – potvrďte kliknutím na červené tlačítko, nebo Zrušit";
+  const fixed = "zatím se nic nesmazalo – potvrďte kliknutím na červené tlačítko, nebo Zrušit";
+  let ask = typeof question === "string" ? question : fixed;
   const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "link cancel"; cancel.textContent = "Zrušit"; cancel.hidden = true;
   let timer = 0;
   const disarm = () => {
@@ -386,6 +399,7 @@ function armedButton(/** @type {HTMLButtonElement} */ btn, /** @type {string} */
   btn.onclick = () => {
     if (btn.dataset.armed) { disarm(); action(); return; }
     if (!cancel.isConnected && btn.parentElement) btn.insertAdjacentElement("afterend", cancel);
+    if (typeof question === "function") ask = question();  // what it will do right now
     btn.dataset.armed = "1"; btn.classList.add("armed"); btn.textContent = confirmText; cancel.hidden = false;
     setStatus(ask, "busy");
     timer = window.setTimeout(() => { if (btn.dataset.armed) disarm(); }, 6000);
@@ -1014,13 +1028,16 @@ async function save(/** @type {boolean} */ withSummary) {
   const buttons = [$("save"), $("saveSum")].map(b => /** @type {HTMLButtonElement} */ (b));
   buttons.forEach(b => b.disabled = true);
   setStatus("ukládám…");
-  if (!review.transcribed) {  // no transcript yet: only the title (the recording is renamed)
+  if (!review.transcribed) {  // no transcript yet: the title (the recording is renamed), and with the minutes
+    /** @type {string} */ let stem = review.stem;   // asked for, the whole processing (transcript, exports, minutes)
     try {
       const r = await api(recUrl(review.stem, "names"), send("PUT", { names: {}, title: titleInput.value }));
+      stem = r.stem;
       await loadList(); pick.value = r.stem; await loadRecording(r.stem);
       setStatus(`název uložen: ${r.title}`, "ok");
-    } catch (e) { setStatus(String(e), "err"); }
-    finally { buttons.forEach(b => b.disabled = false); }
+    } catch (e) { setStatus(String(e), "err"); buttons.forEach(b => b.disabled = false); return; }
+    buttons.forEach(b => b.disabled = false);
+    if (withSummary) await startProcess(stem, buttons[1]);
     return;
   }
   try {
@@ -1079,15 +1096,37 @@ async function waitForJob(/** @type {number} */ id) {
 }
 
 /** "⏳ běží: … · ve frontě N" next to the status line, for every page (also after a reload, in another window) */
+let askTimer = 0;
 function setJobs(/** @type {any} */ j) {
+  // a recording started while something runs: ask (the server stops it by itself if nobody answers in time)
+  const ask = $("recAsk");
+  if (j && j.asking) {
+    if (ask.hidden) {
+      let left = Math.round(j.ask_s || 30);
+      const show = () => { $("recAskText").textContent = `Začalo nahrávání a běží zpracování – může rozbít nahrávaný zvuk. Bez odpovědi se za ${left} s přeruší.`; };
+      show(); clearInterval(askTimer);
+      askTimer = window.setInterval(() => { left = Math.max(0, left - 1); show(); }, 1000);
+    }
+    ask.hidden = false;
+  } else { ask.hidden = true; clearInterval(askTimer); }
   const badge = $("jobBadge");
   if (!j || (!j.current && !(j.queue || []).length)) { badge.hidden = true; return; }
   const cur = j.current ? `běží: ${j.current.text}${j.current.started ? ` · od ${j.current.started}` : ""}` : "";
-  const waiting = (j.queue || []).length ? `ve frontě: ${j.queue.length}` : "";
+  const waiting = (j.queue || []).length ? (j.held ? `čeká na konec nahrávání: ${j.queue.length}` : `ve frontě: ${j.queue.length}`) : "";
   $("jobText").textContent = [cur, waiting].filter(Boolean).join(" · ");
+  badge.querySelector(".jobSpin").textContent = j.held && !j.current ? "⏸" : "⏳";
   badge.title = (j.queue || []).map((/** @type {any} */ q, /** @type {number} */ n) => `${n + 1}. ${q.text}`).join("\n") || "";
   badge.hidden = false;
 }
+$("recAskStop").onclick = async () => {
+  try { await api("/api/jobs/pause", send("POST")); setStatus("zpracování přerušeno, doběhne po konci nahrávání", "ok"); }
+  catch (e) { setStatus(String(e), "err"); }
+};
+$("recAskGo").onclick = async () => {
+  try { await api("/api/jobs/continue", send("POST")); setStatus("zpracování běží dál, zvuk nahrávky se může trhat", "busy"); }
+  catch (e) { setStatus(String(e), "err"); }
+};
+
 /** a job was queued behind others: say so, it starts by itself */
 function queuedNote(/** @type {any} */ r, /** @type {string} */ what) {
   if (r && r.position > 1) setStatus(`${what} – ve frontě, před ní ${r.position - 1}; spustí se sama`, "busy");
@@ -1453,8 +1492,13 @@ docPick.onchange = () => renderDoc();
 $("tabSpeakers").onclick = () => showTab("speakers");
 $("tabPeople").onclick = () => showTab("people");
 $("save").onclick = () => save(false);
-armedButton(/** @type {HTMLButtonElement} */ ($("saveSum")), "Potvrdit: uložit a přegenerovat zápis", () => save(true),
-            "přegenerování zápisu trvá 1–3 min a vytíží grafickou kartu (srovnávací zápisy jdou případně do cloudu) – potvrďte, nebo Zrušit");
+armedButton(/** @type {HTMLButtonElement} */ ($("saveSum")), "Potvrdit: uložit a přegenerovat zápis", () => save(true), () => {
+  if (review && !review.transcribed) {  // nothing to regenerate yet: it starts the whole processing
+    const est = Math.max(2, Math.round((review.duration_s || 0) / 60 / 6) + 3);
+    return `nahrávka ještě nemá přepis: spustí se celé zpracování (přepis, export, zápis), zhruba ${est} min na grafické kartě – potvrďte, nebo Zrušit`;
+  }
+  return "přegenerování zápisu trvá 1–3 min a vytíží grafickou kartu (srovnávací zápisy jdou případně do cloudu) – potvrďte, nebo Zrušit";
+});
 $("savePeople").onclick = savePeople;
 $("addPerson").onclick = addPerson;
 if (DESKTOP) $("quit").hidden = true;  // closing the window stops the server

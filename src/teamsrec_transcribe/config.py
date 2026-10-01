@@ -19,6 +19,7 @@ class TranscribeSettings:
     provider: str = "whisperx"
     language: str = "auto"  # auto | BCP-47 code
     languages: tuple[str, ...] = ("cs", "sk", "en")  # with auto: detect only among these, on several 30 s windows
+    when_recording: str = "ask"  # review page jobs when teamsrec-capture starts recording: ask | stop | continue
     per_speaker_language: bool = True  # with auto: a speaker whose own speech is in another of `languages` is
                                        # transcribed again in that language (mixed cs/sk meetings)
     model: str = "large-v3"

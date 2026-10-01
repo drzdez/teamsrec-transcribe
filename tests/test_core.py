@@ -463,7 +463,7 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
     d = rv.build_review(cfg, rec)
     assert d["transcribed"] is False and d["has_mix"] and d["speakers"] == []
     calls = []
-    monkeypatch.setattr(rv, "do_process", lambda c, r, force=False: calls.append((r.stem, force)))
+    monkeypatch.setattr(rv, "run_cli", lambda argv, on_proc, on_line: calls.append(argv))  # the child process
     st = rv.ReviewState(cfg)
     assert st.run_process(rec)
     import time
@@ -471,7 +471,9 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls == [(rec.stem, False)] and st.status()["message"] == "zpracováno" and st.status()["job"] == "process"
+    assert calls and calls[0][-3:] == ["run-job", "process", rec.stem], "processing runs as a child process"
+    assert calls[0][:2] == ["--out-dir", str(tmp_path)], "with the server's folder"
+    assert st.status()["message"] == "zpracováno" and st.status()["job"] == "process"
     ev = st.status()["events"]
     assert [e["text"] for e in ev][-1].startswith("zpracováno") and ev[-1]["reload"] is True
     assert any("zpracování spuštěno" in e["text"] for e in ev), "the page must see that a job started"
@@ -483,7 +485,7 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls[-1] == (rec.stem, True) and not rec.speakers_path.exists()
+    assert calls[-1][-4:] == ["run-job", "process", rec.stem, "--force"] and not rec.speakers_path.exists()
 
 
 def test_choose_language_restricts_to_expected():
@@ -1449,4 +1451,66 @@ def test_background_jobs_queue_instead_of_refusing_and_say_what_runs(tmp_path):
     assert order == ["first", "second"], "in order, one at a time"
     ends = [(e["job"], e["text"]) for e in state.events if e["job_end"]]
     assert ends == [(1, "zpracováno: s1"), (2, "zápis přegenerován: s2")]
-    assert state.jobs_state() == {"current": None, "queue": []}
+    js = state.jobs_state()
+    assert (js["current"], js["queue"], js["held"], js["asking"]) == (None, [], False, False)
+
+
+def test_a_recording_stops_the_running_job_which_resumes_after_it(tmp_path, monkeypatch):
+    """The GPU must not break the recorded sound: a job's child process is stopped when teamsrec-capture starts
+    recording (when_recording = ask, and no page to ask: stop), goes back to the front of the queue, and runs
+    again once the recording has ended."""
+    import subprocess as _sp
+    import sys as _sys
+    import time as _time
+    from teamsrec_transcribe.web import review as rv
+    runs = []
+
+    def cli(argv, on_proc, on_line):
+        runs.append(argv)
+        code = "import time; time.sleep(30)" if len(runs) == 1 else "pass"  # the first run is long, the rerun short
+        p = _sp.Popen([_sys.executable, "-c", code])
+        on_proc(p)
+        if p.wait() != 0:
+            raise RuntimeError("killed")
+    monkeypatch.setattr(rv, "run_cli", cli)
+    state = rv.ReviewState(Config(out_dir=tmp_path))
+    job, _ = state.run_job("process", ["run-job", "process", "s1"], "zpracováno", "s1", start="s1: zpracování spuštěno")
+    for _ in range(200):
+        if state.running and state.running.get("proc"):
+            break
+        _time.sleep(0.02)
+    state.set_capture({"running": True, "recording": True, "title": "Porada", "stem": "s2"})
+    for _ in range(300):
+        js = state.jobs_state()
+        if not js["current"] and js["queue"]:
+            break
+        _time.sleep(0.02)
+    js = state.jobs_state()
+    assert js["held"] is True and [q["id"] for q in js["queue"]] == [job], "stopped and back in the queue"
+    assert any("přerušeno kvůli nahrávání" in e["text"] for e in state.events)
+    assert not any(e["job_end"] for e in state.events), "a stopped job did not fail"
+    _time.sleep(0.3)
+    assert len(runs) == 1, "nothing starts while recording"
+    state.set_capture({"running": True, "recording": False})
+    for _ in range(300):
+        if not state.busy:
+            break
+        _time.sleep(0.02)
+    assert len(runs) == 2, "it ran again after the recording"
+    ends = [e for e in state.events if e["job_end"]]
+    assert len(ends) == 1 and ends[0]["job"] == job and ends[0]["level"] == "ok"
+
+
+def test_with_a_page_open_the_recording_asks_first(tmp_path, monkeypatch):
+    from teamsrec_transcribe.web import review as rv
+    import threading as _threading
+    gate = _threading.Event()
+    state = rv.ReviewState(Config(out_dir=tmp_path))
+    q = state.subscribe()  # a page is open
+    state.run_job("summary", lambda: gate.wait(5), "zápis přegenerován", "s1")
+    state.set_capture({"running": True, "recording": True, "title": "Porada"})
+    assert state.jobs_state()["asking"] is True and state.held is False, "asks, does not stop yet"
+    state.keep_running()
+    assert state.jobs_state()["asking"] is False and state.held is False
+    gate.set()
+    state.unsubscribe(q)

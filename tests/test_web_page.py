@@ -99,6 +99,18 @@ def test_review_page(script, tmp_path, monkeypatch):
         path.write_text(stamp + "\n# Zápis od " + model + "\n\nText.\n", encoding="utf-8")
         return path
     monkeypatch.setattr(review, "summarize_as", fake_summarize_as)
+
+    def fake_run_cli(argv, on_proc, on_line):  # the jobs' child process, played by the fakes above
+        args = argv[argv.index("run-job") + 1:]
+        rec = review.resolve_recording(args[1], tmp_path)
+        cfg = review.Config(out_dir=tmp_path)
+        if args[0] == "process":
+            review.do_process(cfg, rec, force="--force" in args)
+        elif args[0] == "summary":
+            review.do_summarize(cfg, rec, force=True)
+        else:
+            review.summarize_as(cfg, rec, args[args.index("--provider") + 1], args[args.index("--model") + 1])
+    monkeypatch.setattr(review, "run_cli", fake_run_cli)
     srv, state, base = _serve(tmp_path)
     capture_file = tmp_path / "teamsrec-capture.json"  # the test's own capture status, never the real one
     stop = threading.Event()

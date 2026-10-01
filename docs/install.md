@@ -59,6 +59,8 @@ icon of teamsrec-capture looks for it) and make a Start menu shortcut to it. Det
 [releases](https://github.com/drzdez/teamsrec-capture/releases) and run it. It needs no admin rights: it installs for
 the current user into `%LOCALAPPDATA%\Programs\teamsrec-capture` (a single self-contained exe, no .NET runtime
 needed), adds a Start menu shortcut and a shortcut in the Startup folder (autostart at login), and starts the app.
+Its one question is the recordings folder, prefilled with `%USERPROFILE%\meetings` – click Next to keep it. The choice
+goes into `[recordings] out_dir` of the shared configuration, so teamsrec-transcribe uses the same folder.
 
 A grey icon appears in the tray; it is red while recording, yellow means no sound is arriving. A double click opens
 the review page; **Settings…** opens its Nastavení.

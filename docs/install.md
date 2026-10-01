@@ -55,26 +55,32 @@ icon of teamsrec-capture looks for it) and make a Start menu shortcut to it. Det
 
 ## 3. Recording (teamsrec-capture)
 
+**From the MSI (recommended):** download `teamsrec-capture-<version>-x64.msi` from the
+[releases](https://github.com/drzdez/teamsrec-capture/releases) and run it. It needs no admin rights: it installs for
+the current user into `%LOCALAPPDATA%\Programs\teamsrec-capture` (a single self-contained exe, no .NET runtime
+needed), adds a Start menu shortcut and a shortcut in the Startup folder (autostart at login), and starts the app.
+
+A grey icon appears in the tray; it is red while recording, yellow means no sound is arriving. A double click opens
+the review page; **Settings…** opens its Nastavení.
+
+**To update**, run the newer MSI. It asks the running app to quit and starts it again afterwards; during a recording
+the app refuses and the installer stops with a message – run it again after the meeting. Uninstall in Settings →
+Apps (recordings and configuration stay).
+
+**From source** (development):
+
 ```
 git clone https://github.com/drzdez/teamsrec-capture
 cd teamsrec-capture\dotnet
-dotnet publish src\TeamsRec.Capture\TeamsRec.Capture.csproj -c Release -r win-x64 --self-contained false -o %LOCALAPPDATA%\Programs\teamsrec-capture
+powershell -File installer\build-msi.ps1     # -> installer\bin\x64\Release\teamsrec-capture-<version>-x64.msi
 ```
 
-Start `%LOCALAPPDATA%\Programs\teamsrec-capture\teamsrec-capture.exe`. A grey icon appears in the tray; it is red while
-recording, yellow means no sound is arriving. A double click opens the review page; **Settings…** opens its Nastavení.
+**Optional watchdog** that starts the app again should it crash or be quit (a second instance quits at once, so it
+does not matter that it runs every 5 minutes):
 
-**Starting automatically:**
-
-1. A shortcut to `teamsrec-capture.exe` in the Startup folder (Win+R → `shell:startup`).
-2. A watchdog task that starts the app again should it crash or be quit (a second instance quits at once, so it does
-   not matter that it runs every 5 minutes):
-
-   ```
-   schtasks /Create /TN teamsrec-capture /SC MINUTE /MO 5 /F /TR "\"%LOCALAPPDATA%\Programs\teamsrec-capture\teamsrec-capture.exe\""
-   ```
-
-To update: Quit the app from its tray menu, publish again into the same folder, start it.
+```
+schtasks /Create /TN teamsrec-capture /SC MINUTE /MO 5 /F /TR "\"%LOCALAPPDATA%\Programs\teamsrec-capture\teamsrec-capture.exe\""
+```
 
 **Microphones:** for on-site meetings enable the laptop's microphone array (Nastavení → Nahrávání → "Otevřít nastavení
 zvuku Windows" → Recording → right click → Enable), choose it as the on-site microphone, and try it with **Test

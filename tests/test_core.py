@@ -954,6 +954,7 @@ def test_remove_speaker_drops_segments_and_reexports(tmp_path):
 
 
 def test_tile_outline_detection():
+    pytest.importorskip("scipy")  # the [video] extra; CI installs the base package only
     import numpy as np
     from teamsrec_transcribe.video_speakers import _tile_label_box, _tile_outlines
     img = np.full((540, 960, 3), 40, dtype=np.uint8)

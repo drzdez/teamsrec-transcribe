@@ -1,0 +1,65 @@
+# Tests (Python + the review page in jsdom) and the desktop window build on every push to main and every pull
+# request. The base package only: the GPU extras (whisperx, torch, easyocr) are too big for CI and their tests skip.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: tests/web/package-lock.json
+
+      - name: Install
+        run: |
+          uv sync --frozen
+          npm ci --prefix tests/web
+
+      - name: Test
+        run: uv run --frozen pytest -q
+
+  desktop:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri
+
+      - name: Test
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Build
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: teamsrec-review-exe
+          path: desktop/src-tauri/target/release/teamsrec-review.exe
+          if-no-files-found: error

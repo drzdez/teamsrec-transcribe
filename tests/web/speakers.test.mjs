@@ -1,6 +1,8 @@
 // The Speakers tab: headings follow the name, known people are picked, names are saved on the server, two labels
 // of one person are merged, and a noise speaker is removed (with the second click).
 import assert from "node:assert/strict";
+import { readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { BOARD_OLD, WEEKLY, openPage, server, waitFor } from "./page.mjs";
 
@@ -43,7 +45,7 @@ test("naming speakers: heading follows the fields, a known person fills them, sa
 
   // two labels of one person: the page offers the merge, the server does it
   const merge = await waitFor(() => p.button("Sloučit podle osoby"), "the merge button");
-  merge.click();
+  merge.click(); merge.click();  // merging asks for a second click
   await waitFor(() => cards(p).length === 2, "the merged card list");
   assert.match(p.$("status").textContent, /sloučeno 1/);
   const after = await server(`/api/recordings/${WEEKLY}`);
@@ -63,4 +65,28 @@ test("removing a speaker's lines needs a second click", async t => {
   await waitFor(() => cards(p).length === count - 1, "the card to go");
   const r = await server(`/api/recordings/${BOARD_OLD}`);
   assert.ok(!r.speakers.some(s => s.label === "Jana Nováková"), "the server dropped the lines");
+});
+
+test("replies without a speaker: listed one by one, each given to a speaker", async t => {
+  // make the first reply of the other recording unassigned, as the diarization sometimes leaves one
+  const r0 = await server(`/api/recordings/${BOARD_OLD}`);
+  const out = dirname(process.env.TEAMSREC_TEST_CONFIG);  // the test's recordings folder
+  const tp = join(out, "2026", "09", BOARD_OLD, `${BOARD_OLD}.transcript.json`);
+  const data = JSON.parse(readFileSync(tp, "utf8"));
+  data.segments[0].speaker = null;
+  data.speakers = ["UNKNOWN", ...data.speakers.filter(x => x !== "UNKNOWN")];
+  writeFileSync(tp, JSON.stringify(data));
+  const p = await openPage(t, BOARD_OLD);
+  const card = await waitFor(() => p.doc.querySelector(".card.unassigned"), "the Nepřiřazeno card");
+  assert.match(card.querySelector(".label").textContent, /Nepřiřazeno/);
+  const rows = [...card.querySelectorAll(".reply")];
+  assert.equal(rows.length, 1);
+  const options = [...rows[0].querySelector("select.assignTo").options].map(o => o.value).filter(Boolean);
+  assert.ok(options.length >= 1 && !options.includes("UNKNOWN"), "the speakers of the recording to choose from");
+  p.change(card.querySelector("select.assignAll"), options[0]);
+  assert.equal(rows[0].querySelector("select.assignTo").value, options[0], "assign all fills every reply");
+  p.button("Uložit přiřazení", card).click();
+  await waitFor(() => /přiřazeno 1 replik/.test(p.$("status").textContent), "the assignment");
+  assert.equal(p.doc.querySelector(".card.unassigned"), null, "nothing unassigned any more");
+  assert.ok(r0.speakers.length > 0);
 });

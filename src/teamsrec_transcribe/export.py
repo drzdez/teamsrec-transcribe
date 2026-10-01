@@ -29,7 +29,7 @@ def to_txt(segments: list[Segment], title: str | None = None, header: dict | Non
     if lines:
         lines.append("")
     for seg in segments:
-        who = f"{seg.speaker}: " if seg.speaker else ""
+        who = f"{seg.speaker}: " if seg.speaker else "?: "  # "?" = the diarization gave this reply nobody
         lines.append(f"[{_hms(seg.start)}] {who}{seg.text}")
     return "\n".join(lines) + "\n"
 
@@ -37,7 +37,7 @@ def to_txt(segments: list[Segment], title: str | None = None, header: dict | Non
 def to_srt(segments: list[Segment]) -> str:
     blocks = []
     for i, seg in enumerate(segments, 1):
-        who = f"{seg.speaker}: " if seg.speaker else ""
+        who = f"{seg.speaker}: " if seg.speaker else "?: "
         blocks.append(f"{i}\n{_srt_ts(seg.start)} --> {_srt_ts(seg.end)}\n{who}{seg.text}\n")
     return "\n".join(blocks)
 

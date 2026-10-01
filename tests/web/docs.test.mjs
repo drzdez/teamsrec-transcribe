@@ -46,3 +46,19 @@ test("help opens the guides from docs/, links between them stay inside, Esc clos
   p.doc.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "Escape" }));
   assert.ok(box.hidden);
 });
+
+test("each sub-tab keeps its scroll position: back from the minutes to the speakers without scrolling up", async t => {
+  const p = await openPage(t, WEEKLY);
+  await waitFor(() => p.doc.querySelector(".card"), "the speakers");
+  const sc = p.doc.scrollingElement || p.doc.documentElement;
+  sc.scrollTop = 120;  // somewhere in the speakers
+  p.doc.querySelector('#subtabs button[data-sub="summary"]').click();
+  await waitFor(() => p.$("docMain").querySelector("h2"), "the minutes");
+  assert.equal(sc.scrollTop, 0, "the minutes open at their top");
+  sc.scrollTop = 900;  // far down in the minutes
+  p.doc.querySelector('#subtabs button[data-sub="speakers"]').click();
+  assert.equal(sc.scrollTop, 120, "back where the speakers were");
+  p.doc.querySelector('#subtabs button[data-sub="summary"]').click();
+  await waitFor(() => sc.scrollTop === 900, "and back down in the minutes");
+  assert.ok(p.doc.documentElement.style.getPropertyValue("--hdr"), "the sticky tabs know the header's height");
+});

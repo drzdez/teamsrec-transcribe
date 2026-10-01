@@ -19,6 +19,7 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/recordings/{stem}/speakers/merge         fold the labels of one person into one speaker
   POST   /api/recordings/{stem}/speakers/unmerge       undo the merges that remember their origin
   DELETE /api/recordings/{stem}/speakers/{label}       drop that speaker's segments (noise turned into text)
+  POST   /api/recordings/{stem}/segments/assign        {"segments": [{"start", "speaker"}]} unassigned replies -> a speaker
   POST   /api/recordings/{stem}/meeting                {"action": confirm|detach|attach, "candidate"?}
   GET    /api/recordings/{stem}/meeting/candidates     nearby Outlook items to link instead
   GET    /api/people / PUT /api/people                 the registry (PUT replaces it; opted-out people lose prints)
@@ -63,7 +64,8 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .. import settings
 from ..config import Config, default_config_path
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import (do_export, do_process, do_summarize, do_summarize_compare, enroll_names, summarize_as,
+from ..pipeline import (assign_segments, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
+                        summarize_as,
                         summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording, reset_names,
                         same_person_groups, set_meeting_link, unmerge_speakers)
@@ -122,6 +124,12 @@ def capture_status(path: Path = CAPTURE_STATUS) -> dict:
 
 def is_label(name: str | None) -> bool:
     return bool(name) and (name.startswith("SPEAKER_") or name == "UNKNOWN")
+
+
+def unnamed_speaker(name: str | None) -> bool:
+    """A diarization label without a name. Replies the diarization gave nobody ("UNKNOWN") are not a speaker to
+    name: they are given out one by one, and do not keep a recording unfinished."""
+    return bool(name) and name.startswith("SPEAKER_")
 
 
 # ---------------------------------------------------------------- data for the page
@@ -267,6 +275,11 @@ def build_review(cfg: Config, rec: Recording) -> dict:
             "confirmed": bool(value) and bool(manual.get(label)) and label not in voice,
             "seconds": round(secs, 1),
             "count": len(ss),
+            "unassigned": label == "UNKNOWN",
+            # unassigned replies are given out one by one: all of them, not samples
+            "replies": ([{"start": round(s.start, 3), "end": round(min(s.end, s.start + CLIP_MAX_S), 3),
+                          "at": _fmt_hms(s.start), "text": s.text[:300]} for s in ss[:300]]
+                        if label == "UNKNOWN" else []),
             **langs.get(label, {"language": data.get("language"), "own": False, "mixed": False}),
             "hint": hints.get(label, ""),
             "samples": [{"start": round(s.start, 2), "end": round(min(s.end, s.start + CLIP_MAX_S), 2),
@@ -366,7 +379,7 @@ def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
             try:
                 names = r.read_json(r.speakers_path) if r.speakers_path.exists() else {}
                 labels = r.read_json(r.transcript_path).get("speakers", [])
-                unresolved = sum(1 for l in labels if is_label(l) and not names.get(l))
+                unresolved = sum(1 for l in labels if unnamed_speaker(l) and not names.get(l))
             except Exception:
                 unresolved = None
         out.append({"stem": r.stem, "title": r.title, "start": r.sidecar.get("start"),
@@ -567,18 +580,22 @@ class ReviewState:
         self.events: list[dict] = []
         self.seq = 0
         self.subscribers: list[queue.Queue] = []  # one per open /api/events stream
+        self.jobs: list[dict] = []        # waiting background jobs, in order
+        self.current: dict | None = None  # the job running now (id, name, stem, text, started)
+        self.next_job = 0
 
     def seen(self) -> None:
         self.last_seen = time.monotonic()
 
-    def event(self, text: str, level: str = "ok", stem: str = "", reload: bool = False, job_end: bool = False) -> int:
+    def event(self, text: str, level: str = "ok", stem: str = "", reload: bool = False, job_end: bool = False,
+              job: int | None = None) -> int:
         """One line of history: what the server did, for the status bar and the list behind it. A long job is
         started and forgotten, so the page has to be able to ask later what happened. job_end marks the line that
-        closes a background job (the page waiting for it wakes on that)."""
+        closes a background job; `job` is its id (the page waiting for that job wakes on it)."""
         with self.lock:
             self.seq += 1
             e = {"n": self.seq, "at": datetime.now().strftime("%H:%M:%S"), "text": text,
-                 "level": level, "stem": stem, "reload": reload, "busy": self.busy, "job_end": job_end}
+                 "level": level, "stem": stem, "reload": reload, "busy": self.busy, "job_end": job_end, "job": job}
             self.events.append(e)
             del self.events[:-MAX_EVENTS]
             for q in self.subscribers:
@@ -633,21 +650,57 @@ class ReviewState:
         logging.getLogger("teamsrec_transcribe").addHandler(h)
         return h
 
-    def run_job(self, name: str, fn, done: str, stem: str = "", start: str = "") -> bool:
-        """Run fn() in a background thread, one job at a time. Its end is an event with job_end (SSE to the page;
-        /api/status tells the same to a client without the stream)."""
+    def jobs_state(self) -> dict:
+        """What runs and what waits, for every page (SSE `jobs`, hello, /api/status)."""
         with self.lock:
-            if self.busy:
-                return False
-            self.busy, self.message, self.error, self.job = True, name, "", name
-            if start:
-                self.event(start, "busy", stem)  # logged before the work, so the order in the log is the real one
+            return {"current": dict(self.current) if self.current else None,
+                    "queue": [{k: j[k] for k in ("id", "name", "stem", "text")} for j in self.jobs]}
 
-        def work():
+    def _push_jobs(self) -> None:
+        state = self.jobs_state()
+        with self.lock:
+            subscribers = list(self.subscribers)
+        for q in subscribers:
+            q.put({"type": "jobs", **state})
+
+    def run_job(self, name: str, fn, done: str, stem: str = "", start: str = "") -> tuple[int, int]:
+        """Queue fn() as a background job. One runs at a time (the GPU does one thing), in order; a request while
+        another runs waits instead of being refused. Returns (job id, position: 1 = runs now, 2 = next ...).
+        Its start and end are events carrying the id (the end with job_end), and every change of what runs or
+        waits goes to the pages as SSE `jobs`."""
+        with self.lock:
+            self.next_job += 1
+            job = {"id": self.next_job, "name": name, "stem": stem, "text": start or name, "fn": fn, "done": done}
+            self.jobs.append(job)
+            position = len(self.jobs) + (1 if self.busy else 0)
+            starts_worker = not self.busy
+            self.busy = True
+        if not starts_worker:
+            self.event(f"{job['text']} – ve frontě (před ní {position - 1})", "info", stem, job=job["id"])
+        self._push_jobs()
+        if starts_worker:
+            threading.Thread(target=self._work, daemon=True).start()
+        return job["id"], position
+
+    def _work(self) -> None:
+        """The one worker: runs the queued jobs one after another until the queue is empty."""
+        while True:
+            with self.lock:
+                if not self.jobs:
+                    self.busy, self.current = False, None
+                    break
+                job = self.jobs.pop(0)
+                self.current = {"id": job["id"], "name": job["name"], "stem": job["stem"], "text": job["text"],
+                                "started": datetime.now().strftime("%H:%M")}
+                self.message, self.error, self.job = job["name"], "", job["name"]
+            # logged before the work, so the order in the log is the real one
+            self.event(job["text"], "busy", job["stem"], job=job["id"])
+            self._push_jobs()
+            stem, done, name = job["stem"], job["done"], job["name"]
             outcome = (f"{done}: {stem}" if stem else done, "ok")
             errors = self._job_errors(stem)
             try:
-                fn()
+                job["fn"]()
                 with self.lock:
                     self.message = done
             except Exception as e:  # shown on the page, not fatal
@@ -657,19 +710,20 @@ class ReviewState:
             finally:
                 logging.getLogger("teamsrec_transcribe").removeHandler(errors)
                 with self.lock:
-                    self.busy = False
-            self.event(outcome[0], outcome[1], stem, reload=True, job_end=True)  # after busy clears: the page sees it idle
-        threading.Thread(target=work, daemon=True).start()
-        return True
+                    self.current = None
+                    if not self.jobs:
+                        self.busy = False  # before the end event: the page sees it idle
+            self.event(outcome[0], outcome[1], stem, reload=True, job_end=True, job=job["id"])
+            self._push_jobs()
 
-    def run_summary(self, rec: Recording) -> None:
+    def run_summary(self, rec: Recording) -> tuple[int, int]:
         def work():
             do_summarize(self.cfg, rec, force=True)
             do_summarize_compare(self.cfg, rec, force=True)  # the comparison summaries follow the new names too
-        self.run_job("summary", work, "zápis přegenerován", rec.stem, start=f"{rec.stem}: zápis se generuje"
+        return self.run_job("summary", work, "zápis přegenerován", rec.stem, start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
-    def run_process(self, rec: Recording, force: bool = False) -> bool:
+    def run_process(self, rec: Recording, force: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
         def work():
@@ -690,7 +744,8 @@ class ReviewState:
         with self.lock:
             return {"app": "teamsrec-review", "out_dir": str(self.cfg.out_dir), "job": getattr(self, "job", ""),
                     "busy": self.busy, "message": self.message, "error": self.error,
-                    "seq": self.seq, "events": self.events[-events:], "capture": self.capture}
+                    "seq": self.seq, "events": self.events[-events:], "capture": self.capture,
+                    "jobs": self.jobs_state()}
 
 
 STEM_RE_PART = r"(?P<stem>[^/]+)"
@@ -709,6 +764,7 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/merge", "merge"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/unmerge", "unmerge"),
     ("DELETE", rf"/api/recordings/{STEM_RE_PART}/speakers/(?P<label>[^/]+)", "remove_speaker"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/segments/assign", "assign_segments"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/meeting", "meeting"),
     ("GET", rf"/api/recordings/{STEM_RE_PART}/meeting/candidates", "meeting_candidates"),
     ("GET", r"/api/people", "people"),
@@ -845,29 +901,33 @@ def _handler(state: ReviewState, server_ref: dict):
                 return
             written = save_names(state.cfg, rec, body.get("names") or {})
             state.event(f"{rec.stem}: uloženo {len(written)} jmen, přepis a titulky přegenerovány", "ok", rec.stem)
-            if body.get("summary"):
-                state.run_summary(rec)
+            job = state.run_summary(rec) if body.get("summary") else None
             self._json({"ok": True, "written": written, "stem": rec.stem, "title": rec.title,
+                        "job": job[0] if job else None, "position": job[1] if job else None,
                         "status": state.status()})
 
         def r_process(self, q, body, stem):
-            started = state.run_process(self._recording(stem), force=bool(body.get("force")))
-            if not started:
-                self._json({"error": "another job is still running", "status": state.status()}, HTTPStatus.CONFLICT)
-                return
-            self._json({"ok": True, "status": state.status()})
+            job, position = state.run_process(self._recording(stem), force=bool(body.get("force")))
+            self._json({"ok": True, "job": job, "position": position, "status": state.status()})
+
+        def r_assign_segments(self, q, body, stem):
+            rec = self._recording(stem)
+            moves = body.get("segments")
+            if not isinstance(moves, list) or not moves:
+                raise ValueError("segments: [{start, speaker}] needed")
+            n = assign_segments(state.cfg, rec, moves)
+            state.event(f"{rec.stem}: přiřazeno {n} replik, přepis a titulky přegenerovány", "ok", rec.stem, reload=True)
+            self._json({"ok": True, "assigned": n})
 
         def r_summarize_as(self, q, body, stem):
             rec = self._recording(stem)
             provider, model = str(body.get("provider") or "").strip(), str(body.get("model") or "").strip()
             if provider not in ("ollama", "anthropic") or not model:
                 raise ValueError("provider (ollama | anthropic) and model are needed")
-            started = state.run_job("summary", lambda: summarize_as(state.cfg, rec, provider, model),
-                                    f"zápis {model} hotový", rec.stem, start=f"{rec.stem}: zápis {model} se generuje")
-            if not started:
-                self._json({"error": "another job is still running", "status": state.status()}, HTTPStatus.CONFLICT)
-                return
-            self._json({"ok": True, "file": summary_path_for(state.cfg, rec, provider, model).name})
+            job, position = state.run_job("summary", lambda: summarize_as(state.cfg, rec, provider, model),
+                                          f"zápis {model} hotový", rec.stem, start=f"{rec.stem}: zápis {model} se generuje")
+            self._json({"ok": True, "job": job, "position": position,
+                        "file": summary_path_for(state.cfg, rec, provider, model).name})
 
         def r_delete_summary(self, q, body, stem, file):
             rec = self._recording(stem)
@@ -997,8 +1057,8 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json({"ok": True})
 
         def r_quit(self, q, body):
-            if state.status()["busy"]:
-                self._json({"error": "a job is still running, wait for it to finish"}, HTTPStatus.CONFLICT)
+            if state.status()["busy"]:  # running or waiting jobs
+                self._json({"error": "a job is still running or waiting, wait for it to finish"}, HTTPStatus.CONFLICT)
                 return
             self._json({"ok": True})
             threading.Thread(target=server_ref["server"].shutdown, daemon=True).start()
@@ -1017,7 +1077,7 @@ def _handler(state: ReviewState, server_ref: dict):
             sub = state.subscribe()
             try:
                 self._sse("hello", {"seq": state.seq, "busy": state.busy, "replay": since is None,
-                                    "capture": state.capture})
+                                    "capture": state.capture, "jobs": state.jobs_state()})
                 for e in state.events_since(since):
                     self._sse("log", {**e, "replay": since is None}, e["n"])
                 while not getattr(server_ref.get("server"), "_teamsrec_stopping", False):
@@ -1027,8 +1087,8 @@ def _handler(state: ReviewState, server_ref: dict):
                         self.wfile.write(b": keepalive\n\n")
                         self.wfile.flush()
                         continue
-                    if e.get("type") == "capture":  # what teamsrec-capture records (no id: not replayed)
-                        self._sse("capture", {k: v for k, v in e.items() if k != "type"})
+                    if e.get("type") in ("capture", "jobs"):  # states, not history (no id: not replayed)
+                        self._sse(e["type"], {k: v for k, v in e.items() if k != "type"})
                     else:
                         self._sse("log", e, e["n"])
             except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, OSError):
@@ -1121,4 +1181,4 @@ def unresolved_labels(rec: Recording) -> list[str]:
     if not rec.transcript_path.exists():
         return []
     names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
-    return [l for l in rec.read_json(rec.transcript_path).get("speakers", []) if is_label(l) and not names.get(l)]
+    return [l for l in rec.read_json(rec.transcript_path).get("speakers", []) if unnamed_speaker(l) and not names.get(l)]

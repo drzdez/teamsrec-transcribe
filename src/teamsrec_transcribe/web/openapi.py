@@ -52,6 +52,9 @@ def spec(version: str) -> dict:
                 params=[STEM], body=_obj(force=b))},
             "/api/recordings/{stem}/recognize": {"post": _op("Match unnamed speakers against the voice prints",
                                                              params=[STEM])},
+            "/api/recordings/{stem}/segments/assign": {"post": _op(
+                "Give replies without a speaker (UNKNOWN) a speaker of this recording, one by one; exports regenerated",
+                params=[STEM], body=_obj(segments={"type": "array", "items": _obj(start={"type": "number"}, speaker=s)}))},
             "/api/recordings/{stem}/summaries": {"post": _op(
                 "Write a summary with this provider/model in the background (the configured one = the main "
                 "summary, any other = <stem>.summary.<model>.md); the end is an event with job_end",
@@ -111,7 +114,9 @@ def spec(version: str) -> dict:
             "/api/events": {"get": _op(
                 "Server-Sent Events: `event: log` with {n, at, text, level, stem, reload, busy, job_end}, and "
                 "`event: capture` {running, recording, title, stem, source, started} when teamsrec-capture starts or "
-                "stops recording (also in `hello` and /api/status); the last events are "
+                "stops recording, `event: jobs` {current, queue} when a background job starts, ends or is queued "
+                "(both also in `hello` and /api/status); job events carry `job` (the id POST .../process and "
+                ".../summaries return with `position`); the last events are "
                 "replayed on connect, and after a reconnect from Last-Event-ID", tags=("server",),
                 responses={"200": {"description": "text/event-stream", "content": {"text/event-stream": {}}}})},
             "/api/openapi.json": {"get": _op("This document", tags=("server",))},

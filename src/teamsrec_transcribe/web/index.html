@@ -24,6 +24,10 @@
   header input#title { width: 26vw; min-width: 200px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; }
   header input#title:focus { outline: 2px solid var(--accent); border-color: transparent; }
   #status.busy { color: var(--warn); font-weight: 600; }
+  #jobBadge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--warn); white-space: nowrap;
+              max-width: 52vw; overflow: hidden; text-overflow: ellipsis; }
+  #jobBadge[hidden] { display: none; }
+  #jobText { overflow: hidden; text-overflow: ellipsis; }
   #recBadge { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #e74c3c; white-space: nowrap; }
   #recBadge[hidden] { display: none; }
   #recBadge .recDot { width: 11px; height: 11px; border-radius: 50%; background: #e74c3c; animation: recPulse 1.4s ease-in-out infinite; }
@@ -86,8 +90,14 @@
     .keyRow .cancel { grid-column: 1; }
   }
   .langLine { margin: 4px 0 10px; font-size: 14px; }
+  .card.unassigned .replies { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  .card.unassigned .reply { display: grid; grid-template-columns: auto minmax(0, 1fr) 220px; gap: 10px; align-items: center; }
+  .card.unassigned .replyText { font-size: 14px; }
+  .card.unassigned select { width: auto; }
+  .card.unassigned .assignSide { display: flex; align-items: flex-end; justify-content: flex-end; }
   .chip.lang.own { color: var(--accent); }
-  #sumBar { max-width: 1000px; margin: 0 auto; padding: 8px 20px 0; }
+  #sumBar { position: sticky; top: calc(var(--hdr, 0px) + var(--sub, 0px)); z-index: 1; background: var(--bg);
+            max-width: 1000px; margin: 0 auto; padding: 8px 20px 0; }
   .sumTools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
   .sumTools input[type=text] { width: 340px; max-width: 100%; }
   .sumTools select { width: auto; }
@@ -152,7 +162,9 @@
   button.primary-btn:disabled { opacity: .5; cursor: default; }
   .empty p { margin: 6px 0; }
   .toolbar { margin: 4px 0 10px; }
-  .subtabs { max-width: 1000px; margin: 12px auto 0; padding: 0 20px; display: flex; gap: 2px; align-items: center; }
+  /* under the sticky header: the sub-tabs (and the summary tabs) stay in reach while the text scrolls */
+  .subtabs { position: sticky; top: var(--hdr, 0px); z-index: 1; background: var(--bg);
+             max-width: 1000px; margin: 0 auto; padding: 12px 20px 0; display: flex; gap: 2px; align-items: center; }
   .subtabs button { border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 5px 14px; cursor: pointer; font: inherit; border-radius: 8px 8px 0 0; border-bottom: 0; }
   .subtabs button.active { background: var(--card); font-weight: 600; }
   .subtabs select { margin-left: auto; width: auto; padding: 4px 8px; font-size: 13px; }
@@ -237,6 +249,7 @@
   <button id="histBtn" title="co server udělal, od spuštění stránky">Historie</button>
   <span id="dirty" class="meta"></span>
   <span class="meta" id="tip">Tip: <kbd>Enter</kbd> = další řečník, <kbd>Esc</kbd> = zastavit přehrávání</span>
+  <span id="jobBadge" hidden><span class="jobSpin">⏳</span><span id="jobText"></span></span>
   <span id="recBadge" hidden title="teamsrec-capture právě nahrává"><span class="recDot"></span><span id="recText">Nahrávání probíhá</span></span>
   <span id="status"></span>
 </footer>
@@ -270,7 +283,8 @@
  * @typedef {{start:number,end:number,at:string,text:string}} Sample
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
- * @typedef {{label:string,unresolved:boolean,language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{start:number,end:number,at:string,text:string}} Reply
+ * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number,voiceprint?:boolean}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
@@ -355,18 +369,48 @@ function emptyBox(/** @type {string} */ text) {
   const d = document.createElement("div"); d.className = "empty"; d.textContent = text; return d;
 }
 
-/** a delete button that needs a second click within 3 s (no browser dialogs) */
-function armedButton(/** @type {HTMLButtonElement} */ btn, /** @type {string} */ confirmText, /** @type {() => void} */ action) {
+/** An action that deletes, changes things or runs long: the first click only arms the button (it says what will
+ * happen), the second does it; Zrušit or 6 s without a second click put it back. No browser dialogs. */
+function armedButton(/** @type {HTMLButtonElement} */ btn, /** @type {string} */ confirmText, /** @type {() => void} */ action,
+                     /** @type {string=} */ question) {
   const original = btn.textContent;
+  const ask = question || "zatím se nic nesmazalo – potvrďte kliknutím na červené tlačítko, nebo Zrušit";
   const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "link cancel"; cancel.textContent = "Zrušit"; cancel.hidden = true;
-  const disarm = () => { delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = original; cancel.hidden = true; };
-  btn.insertAdjacentElement("afterend", cancel);
-  cancel.onclick = () => { disarm(); if (status.textContent.startsWith("zatím se nic")) setStatus(""); };
+  let timer = 0;
+  const disarm = () => {
+    clearTimeout(timer);
+    delete btn.dataset.armed; btn.classList.remove("armed"); btn.textContent = original; cancel.hidden = true;
+    if (status.textContent === ask) setStatus("");
+  };
+  cancel.onclick = disarm;
   btn.onclick = () => {
     if (btn.dataset.armed) { disarm(); action(); return; }
+    if (!cancel.isConnected && btn.parentElement) btn.insertAdjacentElement("afterend", cancel);
     btn.dataset.armed = "1"; btn.classList.add("armed"); btn.textContent = confirmText; cancel.hidden = false;
-    setStatus("zatím se nic nesmazalo – potvrďte kliknutím na červené tlačítko, nebo Zrušit", "busy");
+    setStatus(ask, "busy");
+    timer = window.setTimeout(() => { if (btn.dataset.armed) disarm(); }, 6000);
   };
+}
+
+/** the same for a button whose click handler is already set */
+function confirmFirst(/** @type {HTMLButtonElement} */ btn, /** @type {string} */ confirmText, /** @type {string} */ question) {
+  const act = btn.onclick;
+  armedButton(btn, confirmText, () => { if (act) act.call(btn, new MouseEvent("click")); }, question);
+}
+
+/** after a choice in a dropdown that changes things: a button to confirm it (and Zrušit) next to the dropdown */
+function confirmChoice(/** @type {HTMLSelectElement} */ sel, /** @type {(value: string) => string} */ label,
+                       /** @type {(value: string) => void} */ action) {
+  const go = document.createElement("button"); go.type = "button"; go.className = "play armed"; go.hidden = true;
+  const no = document.createElement("button"); no.type = "button"; no.className = "link cancel"; no.textContent = "Zrušit"; no.hidden = true;
+  const reset = () => { go.hidden = no.hidden = true; sel.value = ""; };
+  sel.onchange = () => {
+    if (!sel.value) { reset(); return; }
+    if (!go.isConnected) { sel.insertAdjacentElement("afterend", no); sel.insertAdjacentElement("afterend", go); }
+    go.textContent = label(sel.value); go.hidden = no.hidden = false;
+  };
+  go.onclick = () => { const v = sel.value; reset(); if (v) action(v); };
+  no.onclick = reset;
 }
 
 function escapeHtml(/** @type {string} */ s) {
@@ -497,6 +541,7 @@ async function loadRecording(/** @type {string} */ stem) {
     return;
   }
   if (seq !== loadSeq) return;  // the user already switched to another recording
+  if (!review || review.stem !== stem) scrollMemory = {};  // another recording starts at the top of each tab
   review = r;
   location.hash = stem;
   titleInput.value = r.title || "";
@@ -528,6 +573,8 @@ function renderNotTranscribed(r) {
     const b = document.createElement("button"); b.type = "button"; b.className = "primary-btn";
     b.textContent = "Ano, přepsat a zpracovat";
     b.onclick = () => startProcess(r.stem, b);
+    confirmFirst(b, `Potvrdit: přepsat a zpracovat (~${est} min)`,
+                 `přepis zabere zhruba ${est} min a vytíží grafickou kartu – potvrďte druhým kliknutím, nebo Zrušit`);
     box.appendChild(b);
   }
   main.appendChild(box);
@@ -535,15 +582,16 @@ function renderNotTranscribed(r) {
 
 async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonElement} */ btn) {
   btn.disabled = true;
-  const since = finishes;
+  /** @type {any} */ let r;
   try {
-    const r = await api(recUrl(stem, "process"), send("POST"));
+    r = await api(recUrl(stem, "process"), send("POST"));
     if (!r.ok) throw new Error(r.error || "nelze spustit");
   } catch (e) { setStatus(String(e), "err"); btn.disabled = false; return; }
   setBusy(true);
-  setStatus("zpracovávám: přepis, export, zápis… nezavírejte stránku ani okno konzole", "busy");
+  setStatus("zpracovávám: přepis, export, zápis… běží na serveru, stránku můžete obnovit i zavřít", "busy");
+  queuedNote(r, "zpracování");
   let error = "";
-  try { error = await waitForJob(since); }
+  try { error = await waitForJob(r.job); }
   catch (e) { error = String(e); }
   finally { setBusy(false); }
   await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
@@ -587,6 +635,8 @@ function renderSpeakers() {
         setStatus(n ? `poznáno ${n} mluvčích, uloženo do přepisu a titulků; zápis přegenerujte tlačítkem dole` : "nikdo nepoznán (shoda pod prahem nebo příliš krátká promluva)", n ? "ok" : "");
       } catch (e) { setStatus(String(e), "err"); b.disabled = false; }
     };
+    confirmFirst(b, "Potvrdit: poznat po hlase",
+                 "neznámí mluvčí dostanou jména podle hlasových otisků a přepis i titulky se přegenerují – potvrďte, nebo Zrušit");
     bar.appendChild(b); main.appendChild(bar);
   }
   const same = review.same_person || [];
@@ -610,6 +660,8 @@ function renderSpeakers() {
                            : "nebylo co sloučit", r.merged ? "ok" : "");
       } catch (e) { setStatus(String(e), "err"); b.disabled = false; }
     };
+    confirmFirst(b, "Potvrdit sloučení",
+                 "označení jedné osoby se spojí do jednoho mluvčího (jde vrátit tlačítkem Vrátit sloučení) – potvrďte, nebo Zrušit");
     bar.appendChild(b); main.appendChild(bar);
   }
   {
@@ -623,15 +675,16 @@ function renderSpeakers() {
     armedButton(b, `Potvrdit nový přepis (~${mins} min, jména se zahodí)`, async () => {
       const stem = review ? review.stem : "";
       setStatus("spouštím nový přepis…");
-      const since = finishes;
+      /** @type {any} */ let r;
       try {
-        const r = await api(recUrl(stem, "process"), send("POST", { force: true }));
+        r = await api(recUrl(stem, "process"), send("POST", { force: true }));
         if (!r.ok) throw new Error(r.error || "nelze spustit");
       } catch (e) { setStatus(String(e), "err"); return; }
       setBusy(true);
-      setStatus(`nový přepis běží (~${mins} min) – nezavírejte stránku ani okno konzole`, "busy");
+      setStatus(`nový přepis běží na serveru (~${mins} min)`, "busy");
+      queuedNote(r, "nový přepis");
       let error = "";
-      try { error = await waitForJob(since); }
+      try { error = await waitForJob(r.job); }
       catch (e) { error = String(e); }
       finally { setBusy(false); }
       await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
@@ -654,9 +707,10 @@ function renderSpeakers() {
         setStatus(`vráceno ${r.restored} replik pod původní označení`, "ok");
       } catch (e) { setStatus(String(e), "err"); u.disabled = false; }
     };
+    confirmFirst(u, "Potvrdit vrácení sloučení", "repliky se vrátí pod původní označení – potvrďte, nebo Zrušit");
     bar.appendChild(u); main.appendChild(bar);
   }
-  review.speakers.forEach((sp, i) => main.appendChild(card(sp, i)));
+  review.speakers.forEach((sp, i) => main.appendChild(sp.unassigned ? unassignedCard(sp) : card(sp, i)));
 }
 
 /** what the exports will print for these fields (same rules as the server) */
@@ -697,7 +751,8 @@ function meetingPanel(m) {
   const actions = document.createElement("div"); actions.className = "row2";
   const btn = (/** @type {string} */ text, /** @type {() => void} */ fn) => { const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = text; b.onclick = fn; actions.appendChild(b); return b; };
   if (cal && cal.status !== "confirmed") btn("Potvrdit spojení se schůzkou", () => meetingAction("confirm"));
-  if (cal) btn("Odpojit od schůzky", () => meetingAction("detach"));
+  if (cal) confirmFirst(btn("Odpojit od schůzky", () => meetingAction("detach")), "Potvrdit odpojení",
+                        "nahrávka přestane být spojená se schůzkou v kalendáři (účastníci z kalendáře zmizí) – potvrďte, nebo Zrušit");
   if (m.outlook_enabled) {
     const sel = document.createElement("select"); sel.className = "same"; sel.style.width = "auto";
     sel.innerHTML = '<option value="">spojit s jinou schůzkou z kalendáře…</option>';
@@ -714,8 +769,9 @@ function meetingPanel(m) {
         if (r.candidates.length === 0) { const o = document.createElement("option"); o.disabled = true; o.textContent = "v kalendáři nic v okolí"; sel.appendChild(o); }
       } catch (e) { setStatus(String(e), "err"); }
     };
-    sel.onchange = () => { if (sel.value) meetingAction("attach", JSON.parse(sel.value)); };
     actions.appendChild(sel);
+    confirmChoice(sel, v => `Potvrdit spojení s „${JSON.parse(v).subject}“ (přejmenuje složku)`,
+                  v => meetingAction("attach", JSON.parse(v)));
   }
   if (actions.children.length) box.appendChild(actions);
   return box;
@@ -782,9 +838,9 @@ function card(sp, i) {
     return wrap;
   };
   const row1 = document.createElement("div"); row1.className = "row";
-  row1.appendChild(field("first", "Jméno", "Petr")); row1.appendChild(field("last", "Příjmení", "Svoboda"));
+  row1.appendChild(field("first", "Jméno", "John")); row1.appendChild(field("last", "Příjmení", "Smith"));
   const row2 = document.createElement("div"); row2.className = "row";
-  row2.appendChild(field("nick", "Přezdívka", "Péťa"));
+  row2.appendChild(field("nick", "Přezdívka", "Joe"));
   const modeWrap = document.createElement("div");
   const modeLab = document.createElement("label"); modeLab.textContent = "V zápisu";
   const mode = document.createElement("select"); mode.dataset.key = "display";
@@ -869,6 +925,64 @@ function focusNext(/** @type {number} */ i) {
 }
 
 /** @param {HTMLButtonElement} btn @param {Sample} s @param {string=} stem */
+/** Replies the diarization gave nobody: each can be given to a speaker of the recording (or all at once). */
+function unassignedCard(/** @type {Speaker} */ sp) {
+  const c = document.createElement("section"); c.className = "card unassigned";
+  const replies = sp.replies || [];
+  const others = (review ? review.speakers : []).filter(o => !o.unassigned);
+  const who = (/** @type {Speaker} */ o) => (o.name && o.name !== o.label ? `${o.name} (${o.label})` : o.label);
+  const options = `<option value="">komu patří…</option>` +
+    others.map(o => `<option value="${escapeHtml(o.label)}">${escapeHtml(who(o))}</option>`).join("");
+  const left = document.createElement("div");
+  left.innerHTML = `<span class="label">Nepřiřazeno</span>` +
+    `<span class="chip" title="v tom čase diarizace nezachytila žádného mluvčího, takže je nejde očíslovat">diarizace nikoho nezachytila</span>` +
+    `<span class="chip">${replies.length === 1 ? "1 replika" : `${replies.length} replik`}</span>` +
+    `<p class="hint">Přehrajte repliku a vyberte, kdo ji řekl. Patří-li všechny jednomu člověku, stačí výběr „přiřadit všechny“.</p>`;
+  const all = document.createElement("select"); all.className = "assignAll";
+  all.innerHTML = options.replace("komu patří…", "přiřadit všechny…");
+  const list = document.createElement("div"); list.className = "replies";
+  for (const r of replies) {
+    const row = document.createElement("div"); row.className = "reply"; row.dataset.start = String(r.start);
+    const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = `▶ ${r.at}`;
+    b.disabled = !review || !review.has_mix; b.onclick = () => play(b, r);
+    const text = document.createElement("span"); text.className = "replyText"; text.textContent = r.text;
+    const sel = document.createElement("select"); sel.className = "assignTo"; sel.innerHTML = options;
+    row.append(b, text, sel);
+    list.appendChild(row);
+  }
+  all.onchange = () => { for (const s of list.querySelectorAll("select.assignTo")) /** @type {HTMLSelectElement} */ (s).value = all.value; };
+  const save = document.createElement("button"); save.type = "button"; save.className = "primary-btn"; save.textContent = "Uložit přiřazení";
+  save.onclick = async () => {
+    const moves = [...list.querySelectorAll(".reply")].map(row => ({
+      start: Number(/** @type {HTMLElement} */ (row).dataset.start),
+      speaker: /** @type {HTMLSelectElement} */ (row.querySelector("select.assignTo")).value,
+    })).filter(m => m.speaker);
+    if (!moves.length) { setStatus("vyberte u replik, kdo je řekl", "err"); return; }
+    save.disabled = true;
+    try {
+      const r = await api(recUrl(review ? review.stem : "", "segments", "assign"), send("POST", { segments: moves }));
+      if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+      setStatus(`přiřazeno ${r.assigned} replik, přepis a titulky přegenerovány`, "ok");
+    } catch (e) { setStatus(String(e), "err"); save.disabled = false; }
+  };
+  const tools = document.createElement("div"); tools.className = "sumTools";
+  tools.append(all, save);
+  left.append(list, tools);
+  const side = document.createElement("div"); side.className = "assignSide";
+  const rm = document.createElement("button"); rm.type = "button"; rm.className = "link danger small";
+  rm.textContent = "✕ smazat nepřiřazené repliky (šum, vymyšlený text)";
+  armedButton(rm, `Potvrdit smazání ${replies.length} replik`, async () => {
+    try {
+      const r = await api(recUrl(review ? review.stem : "", "speakers", sp.label), send("DELETE"));
+      if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+      setStatus(`smazáno ${r.removed} replik, přepis a titulky přegenerovány`, "ok");
+    } catch (e) { setStatus(String(e), "err"); }
+  });
+  side.appendChild(rm);
+  c.append(left, side);
+  return c;
+}
+
 function play(btn, s, stem) {
   if (playingBtn === btn && !audio.paused) { stopAudio(); return; }
   stopAudio();
@@ -900,7 +1014,6 @@ async function save(/** @type {boolean} */ withSummary) {
   const buttons = [$("save"), $("saveSum")].map(b => /** @type {HTMLButtonElement} */ (b));
   buttons.forEach(b => b.disabled = true);
   setStatus("ukládám…");
-  const since = finishes;
   if (!review.transcribed) {  // no transcript yet: only the title (the recording is renamed)
     try {
       const r = await api(recUrl(review.stem, "names"), send("PUT", { names: {}, title: titleInput.value }));
@@ -915,7 +1028,7 @@ async function save(/** @type {boolean} */ withSummary) {
       send("PUT", { names: collectNames(), summary: withSummary, title: titleInput.value }));
     const n = Object.keys(r.written).length;
     setStatus(`uloženo (${n} jmen), přepis a titulky přegenerovány${withSummary ? ", zápis se generuje…" : ""}`, "ok");
-    if (withSummary) { setBusy(true); try { await waitForSummary(since); } finally { setBusy(false); } }
+    if (withSummary && r.job) { queuedNote(r, "zápis"); setBusy(true); try { await waitForSummary(r.job); } finally { setBusy(false); } }
     const stem = r.stem || review.stem;  // a new title renames the folder, so the stem may have changed
     await loadList(); pick.value = stem;
     await loadRecording(stem);  // people may have been created; refresh the "v zápisu" previews
@@ -928,34 +1041,56 @@ async function save(/** @type {boolean} */ withSummary) {
   }
 }
 
-async function waitForSummary(/** @type {number} */ since) {
-  setStatus("zápis se generuje (lokální model, 1–3 min) – nezavírejte tuto stránku ani okno konzole, jinak se přeruší", "busy");
-  const error = await waitForJob(since);
+async function waitForSummary(/** @type {number} */ job) {
+  setStatus("zápis se generuje na serveru (lokální model, 1–3 min); stránku můžete obnovit i zavřít", "busy");
+  const error = await waitForJob(job);
   if (error) setStatus(`zápis se nepodařil: ${error}`, "err");
 }
 
-// a background job (processing, minutes) ended: the event stream says so at once, polling when it is down
-let finishes = 0;
-/** @type {{text:string,level:string}|null} */ let lastFinish = null;  // the event with job_end
+// background jobs (processing, minutes) run one at a time on the server, queued; each has an id. A page waits
+// for its own job: the event stream says when it ended, a status check every 10 s covers a stream that is down.
+/** @type {Map<number, {text:string,level:string}>} */ const finishedJobs = new Map();
+/** @type {Set<number>} */ const waitingFor = new Set();
 /** @type {(() => void)[]} */ let finishWaiters = [];
-function noteFinish(/** @type {{text:string,level:string}|undefined} */ ev) {
-  finishes += 1;
-  lastFinish = ev || null;
+function noteFinish(/** @type {{text:string,level:string,job?:number}|undefined} */ ev) {
+  if (ev && typeof ev.job === "number") finishedJobs.set(ev.job, ev);
   finishWaiters.splice(0).forEach(wake => wake());
 }
-/** Wait until a job that started after `since` finishes; the error text, or "" when it went well. The event
- * stream wakes this at once; without it a status check every 10 s notices the end. */
-async function waitForJob(/** @type {number} */ since) {
-  for (;;) {
-    if (finishes > since) return lastFinish && lastFinish.level === "err" ? lastFinish.text : "";
-    const woken = await new Promise(res => {
-      finishWaiters.push(() => res(true));
-      setTimeout(() => res(false), 10000);
-    });
-    if (woken) continue;
-    const s = await api("/api/status");
-    if (!s.busy) return s.error || "";
-  }
+/** The error text of job `id`, or "" when it went well. */
+async function waitForJob(/** @type {number} */ id) {
+  waitingFor.add(id);
+  try {
+    for (;;) {
+      const ev = finishedJobs.get(id);
+      if (ev) return ev.level === "err" ? ev.text : "";
+      const woken = await new Promise(res => {
+        finishWaiters.push(() => res(true));
+        setTimeout(() => res(false), 10000);
+      });
+      if (woken) continue;
+      const s = await api("/api/status");
+      const j = s.jobs || { current: null, queue: [] };
+      if (!(j.current && j.current.id === id) && !j.queue.some((/** @type {any} */ q) => q.id === id)) {
+        const end = (s.events || []).find((/** @type {any} */ e) => e.job === id && e.job_end);
+        return end && end.level === "err" ? end.text : "";
+      }
+    }
+  } finally { waitingFor.delete(id); }
+}
+
+/** "⏳ běží: … · ve frontě N" next to the status line, for every page (also after a reload, in another window) */
+function setJobs(/** @type {any} */ j) {
+  const badge = $("jobBadge");
+  if (!j || (!j.current && !(j.queue || []).length)) { badge.hidden = true; return; }
+  const cur = j.current ? `běží: ${j.current.text}${j.current.started ? ` · od ${j.current.started}` : ""}` : "";
+  const waiting = (j.queue || []).length ? `ve frontě: ${j.queue.length}` : "";
+  $("jobText").textContent = [cur, waiting].filter(Boolean).join(" · ");
+  badge.title = (j.queue || []).map((/** @type {any} */ q, /** @type {number} */ n) => `${n + 1}. ${q.text}`).join("\n") || "";
+  badge.hidden = false;
+}
+/** a job was queued behind others: say so, it starts by itself */
+function queuedNote(/** @type {any} */ r, /** @type {string} */ what) {
+  if (r && r.position > 1) setStatus(`${what} – ve frontě, před ní ${r.position - 1}; spustí se sama`, "busy");
 }
 
 // ---------------------------------------------------------------- people tab
@@ -995,7 +1130,7 @@ function personRow(p) {
     const inp = document.createElement("input"); inp.type = "text"; inp.value = /** @type {any} */ (p)[key] || ""; inp.placeholder = ph;
     inp.dataset.key = key; td.appendChild(inp); return td;
   };
-  tr.appendChild(cell("first", "Petr")); tr.appendChild(cell("last", "Svoboda")); tr.appendChild(cell("nick", "Péťa"));
+  tr.appendChild(cell("first", "John")); tr.appendChild(cell("last", "Smith")); tr.appendChild(cell("nick", "Joe"));
   const tdMode = document.createElement("td");
   const sel = document.createElement("select"); sel.dataset.key = "display";
   for (const m of ["", "first", "full", "nick"]) {
@@ -1003,7 +1138,7 @@ function personRow(p) {
   }
   tdMode.appendChild(sel); tr.appendChild(tdMode);
   const tdAl = document.createElement("td");
-  const al = document.createElement("input"); al.type = "text"; al.value = (p.aliases || []).join(", "); al.placeholder = "Petr Svoboda (NG)"; al.dataset.key = "aliases";
+  const al = document.createElement("input"); al.type = "text"; al.value = (p.aliases || []).join(", "); al.placeholder = "John Smith (NG)"; al.dataset.key = "aliases";
   tdAl.appendChild(al); tr.appendChild(tdAl);
   const tdPr = document.createElement("td");
   const ok = document.createElement("input"); ok.type = "checkbox"; ok.dataset.key = "voiceprint";
@@ -1022,8 +1157,11 @@ function personRow(p) {
     const ms = document.createElement("select"); ms.className = "same";
     ms.innerHTML = '<option value="">sloučit do…</option>' + people.filter(o => o.id && o.id !== p.id)
       .map(o => `<option value="${escapeHtml(o.id)}">${escapeHtml(`${o.first} ${o.last}`.trim() || o.nick)}</option>`).join("");
-    ms.onchange = () => { if (ms.value) mergePerson(ms.value, p.id); ms.value = ""; };
     tdMerge.appendChild(ms);
+    confirmChoice(ms, v => {
+      const k = people.find(o => o.id === v);
+      return `Potvrdit: ${`${p.first} ${p.last}`.trim() || p.nick} → ${k ? `${k.first} ${k.last}`.trim() || k.nick : v}`;
+    }, v => mergePerson(v, p.id));
   }
   tr.appendChild(tdMerge);
   const tdAct = document.createElement("td"); tdAct.className = "act";
@@ -1161,7 +1299,13 @@ function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   if (sp) { if (review) loadRecording(review.stem); } else loadPeople().catch(e => setStatus(String(e), "err"));
 }
 
+/** where each sub-tab was scrolled to, for the open recording */
+/** @type {Record<string, number>} */ let scrollMemory = {};
+const scroller = () => document.scrollingElement || document.documentElement;
+
 function showSub(/** @type {"speakers"|"transcript"|"summary"} */ which, render = true) {
+  const switching = which !== subTab;
+  if (switching) scrollMemory[subTab] = scroller().scrollTop;
   subTab = which;
   if (!busy && status.className === "busy") setStatus("");  // a question about the tab we leave (delete?) is moot
   const sp = which === "speakers";
@@ -1170,8 +1314,26 @@ function showSub(/** @type {"speakers"|"transcript"|"summary"} */ which, render 
   for (const b of $("subtabs").querySelectorAll("button")) b.classList.toggle("active", b.dataset.sub === which);
   docPick.hidden = sp || which === "summary" || docList().length < 2;
   $("sumBar").hidden = which !== "summary";
-  if (render && !sp) renderDoc();
+  const back = switching ? scrollMemory[which] || 0 : null;  // null: the same tab re-rendered, stay where we are
+  if (render && !sp) renderDoc(back);
+  else if (back !== null) scroller().scrollTop = back;
 }
+
+// keep the sticky sub-tabs right under the header, whatever its height (presets wrap, window width)
+(() => {
+  const header = document.querySelector("header"), sub = $("subtabs");
+  const measure = () => {
+    document.documentElement.style.setProperty("--hdr", `${header ? header.offsetHeight : 0}px`);
+    document.documentElement.style.setProperty("--sub", `${sub.offsetHeight}px`);
+  };
+  if (typeof ResizeObserver !== "undefined") {
+    const ro = new ResizeObserver(measure);
+    if (header) ro.observe(header);
+    ro.observe(sub);
+  }
+  window.addEventListener("resize", measure);
+  measure();
+})();
 
 /** the documents of the open sub-tab: the transcript and comparison transcripts, or the summaries */
 function docList() {
@@ -1183,7 +1345,7 @@ function docList() {
   return subTab === "summary" ? review.docs.summaries : [];
 }
 
-async function renderDoc() {
+async function renderDoc(/** @type {number|null=} */ scrollTo = null) {
   if (!review || !review.docs) { docMain.innerHTML = '<div class="empty">Nahrávka ještě nemá přepis.</div>'; return; }
   let file = null;
   const list = docList();
@@ -1204,6 +1366,7 @@ async function renderDoc() {
     const r = await api(recUrl(review.stem, "docs", file));
     docMain.innerHTML = subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text);
     externalLinks(docMain);  // a link in the minutes must not replace the page
+    if (scrollTo !== null && scrollTo !== undefined) scroller().scrollTop = scrollTo;
   } catch (e) { docMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
 }
 
@@ -1290,7 +1453,8 @@ docPick.onchange = () => renderDoc();
 $("tabSpeakers").onclick = () => showTab("speakers");
 $("tabPeople").onclick = () => showTab("people");
 $("save").onclick = () => save(false);
-$("saveSum").onclick = () => save(true);
+armedButton(/** @type {HTMLButtonElement} */ ($("saveSum")), "Potvrdit: uložit a přegenerovat zápis", () => save(true),
+            "přegenerování zápisu trvá 1–3 min a vytíží grafickou kartu (srovnávací zápisy jdou případně do cloudu) – potvrďte, nebo Zrušit");
 $("savePeople").onclick = savePeople;
 $("addPerson").onclick = addPerson;
 if (DESKTOP) $("quit").hidden = true;  // closing the window stops the server
@@ -1767,12 +1931,16 @@ function renderSumBar() {
   model.title = "Ollama běží v tomto počítači, Claude je cloud (posílá text přepisu ven)";
   const gen = document.createElement("button"); gen.type = "button"; gen.id = "sumGen"; gen.className = "play"; gen.textContent = "Vygenerovat zápis";
   gen.onclick = () => { const [provider, ...rest] = comboValue(model).split(":"); generateSummary(provider, rest.join(":")); };
+  confirmFirst(gen, "Potvrdit generování zápisu",
+               "nový zápis vybraným modelem: lokálně 1–3 min na grafické kartě, Claude posílá text přepisu do cloudu – potvrďte, nebo Zrušit");
   tools.append(model, other, gen);
   const active = shown.find(d => d.file === activeSum);
   if (active && active.provider && active.model) {
     const again = document.createElement("button"); again.type = "button"; again.className = "play"; again.id = "sumAgain";
     again.textContent = `Přegenerovat „${active.label}“`;
     again.onclick = () => generateSummary(active.provider, active.model);
+    confirmFirst(again, `Potvrdit přegenerování „${active.label}“`,
+                 `zápis „${active.label}“ se přepíše novým (${active.provider === "anthropic" ? "Claude, cloud" : "lokálně, 1–3 min"}) – potvrďte, nebo Zrušit`);
     tools.appendChild(again);
   }
   bar.appendChild(tools);
@@ -1844,14 +2012,16 @@ async function deleteSummary(/** @type {SummaryDoc} */ d) {
 async function generateSummary(/** @type {string} */ provider, /** @type {string} */ model) {
   if (!review) return;
   if (!["ollama", "anthropic"].includes(provider) || !model) { setStatus("zadejte službu a model, např. ollama:gemma4:31b nebo anthropic:claude-opus-5-5", "err"); return; }
-  const stem = review.stem, since = finishes;
-  let file = "";
-  try { file = (await api(recUrl(stem, "summaries"), send("POST", { provider, model }))).file; }
+  const stem = review.stem;
+  /** @type {any} */ let r;
+  try { r = await api(recUrl(stem, "summaries"), send("POST", { provider, model })); }
   catch (e) { setStatus(String(e), "err"); return; }
+  const file = r.file;
   setBusy(true);
-  setStatus(`zápis ${model} se generuje${provider === "anthropic" ? " (Claude, text přepisu jde do cloudu)" : " (lokálně, 1–3 min)"} – nezavírejte stránku`, "busy");
+  setStatus(`zápis ${model} se generuje${provider === "anthropic" ? " (Claude, text přepisu jde do cloudu)" : " (lokálně, 1–3 min)"}`, "busy");
+  queuedNote(r, `zápis ${model}`);
   let error = "";
-  try { error = await waitForJob(since); } catch (e) { error = String(e); } finally { setBusy(false); }
+  try { error = await waitForJob(r.job); } catch (e) { error = String(e); } finally { setBusy(false); }
   activeSum = file;
   await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
   showSub("summary");
@@ -1883,6 +2053,7 @@ async function pollStatus() {
   }
   events = s.events || [];
   setCapture(s.capture);
+  setJobs(s.jobs);
   const fresh = events.filter(e => e.n > lastSeq);
   const first = lastSeq < 0;
   lastSeq = typeof s.seq === "number" ? s.seq : lastSeq;
@@ -1906,6 +2077,12 @@ $("histBtn").addEventListener("click", () => {
   box.hidden = !box.hidden;
   renderEvents();
 });
+// the history closes with a click anywhere else (or Esc), like a menu
+document.addEventListener("click", ev => {
+  const box = $("events"), t = /** @type {Node} */ (ev.target);
+  if (!box.hidden && !box.contains(t) && !$("histBtn").contains(t)) box.hidden = true;
+});
+document.addEventListener("keydown", ev => { if (ev.key === "Escape") $("events").hidden = true; });
 /** what teamsrec-capture does: a red dot + "Nahrávání probíhá · title · od hh:mm" while it records */
 function setCapture(/** @type {any} */ c) {
   const badge = $("recBadge");
@@ -1926,7 +2103,7 @@ async function onEvents(/** @type {any[]} */ fresh, /** @type {boolean} */ busyN
   const finished = wasBusy && !busyNow;
   wasBusy = busyNow;
   // the end of a job this page started and waits for: that code reloads and writes the status line itself
-  const awaited = !replay && fresh.some(e => e.job_end) && finishWaiters.length > 0;
+  const awaited = !replay && fresh.some(e => e.job_end && typeof e.job === "number" && waitingFor.has(e.job));
   if (!replay) for (const e of fresh) if (e.job_end) noteFinish(e);
   if (replay || awaited) { renderEvents(); return; }
   const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
@@ -1956,9 +2133,11 @@ function startEvents() {
     const h = JSON.parse(/** @type {MessageEvent} */ (ev).data);
     wasBusy = !!h.busy;
     setCapture(h.capture);
+    setJobs(h.jobs);
     if (pollTimer) { clearInterval(pollTimer); pollTimer = 0; }
   });
   es.addEventListener("capture", ev => setCapture(JSON.parse(/** @type {MessageEvent} */ (ev).data)));
+  es.addEventListener("jobs", ev => setJobs(JSON.parse(/** @type {MessageEvent} */ (ev).data)));
   es.addEventListener("log", ev => {
     const e = JSON.parse(/** @type {MessageEvent} */ (ev).data);
     onEvents([e], !!e.busy, !!e.replay).catch(() => {});

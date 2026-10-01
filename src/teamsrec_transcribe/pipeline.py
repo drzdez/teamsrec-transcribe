@@ -397,6 +397,36 @@ def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
     return n
 
 
+UNASSIGNED = (None, "", "UNKNOWN")  # a reply the diarization gave nobody (no turn overlapped it)
+
+
+def assign_segments(cfg: Config, rec: Recording, moves: list[dict]) -> int:
+    """Give unassigned replies a speaker, one by one (review page): moves = [{"start": s, "speaker": label}],
+    label = one of this transcript's speakers. Marked `assigned: manual`; exports are regenerated. Returns how
+    many replies got a speaker."""
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    data = rec.read_json(rec.transcript_path)
+    labels = {lab for lab in data.get("speakers", []) if lab not in UNASSIGNED}
+    n = 0
+    for m in moves:
+        label, start = str(m.get("speaker") or ""), float(m.get("start", -1))
+        if label not in labels:
+            raise RecordingError(f"{rec.stem}: no speaker {label!r} in this recording")
+        for s in data["segments"]:
+            if s.get("speaker") in UNASSIGNED and abs(float(s["start"]) - start) < 0.01:
+                s["speaker"], s["assigned"] = label, "manual"
+                n += 1
+                break
+    if n:
+        if not any(s.get("speaker") in UNASSIGNED for s in data["segments"]):
+            data["speakers"] = [lab for lab in data.get("speakers", []) if lab not in UNASSIGNED]
+        rec.write_json(rec.transcript_path, data)
+        do_export(cfg, rec)
+        log.info("%s: %d unassigned replies got a speaker", rec.stem, n)
+    return n
+
+
 # ---------------------------------------------------------------- meeting <-> calendar link (review page)
 
 def meeting_info(cfg: Config, rec: Recording) -> dict:
@@ -759,7 +789,7 @@ def is_finished(rec: Recording) -> bool:
         return False
     labels = rec.read_json(rec.transcript_path).get("speakers", [])
     names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
-    return not any((l.startswith("SPEAKER_") or l == "UNKNOWN") and not names.get(l) for l in labels)
+    return not any(l.startswith("SPEAKER_") and not names.get(l) for l in labels)  # unassigned replies are no speaker
 
 
 def purge_audio(cfg: Config, days: int, *, dry_run: bool = False, now: datetime | None = None) -> list[dict]:

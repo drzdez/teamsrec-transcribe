@@ -107,8 +107,10 @@ def apply_mic_track(segments: list[Segment], mic_wav: Path, me: str) -> dict[str
         if seg.speaker in mapping:
             seg.speaker = me
             n_label += 1
-        elif (seg.speaker and seg.speaker.startswith("SPEAKER_") and seg.end - seg.start >= SEGMENT_MIN_SECONDS
+        elif ((not seg.speaker or seg.speaker == "UNKNOWN" or seg.speaker.startswith("SPEAKER_"))
+              and seg.end - seg.start >= SEGMENT_MIN_SECONDS
               and _active_fraction(active, frame_s, seg.start, seg.end) >= SEGMENT_MIN_ACTIVE):
+            # also a reply the diarization gave nobody: the mic says it was the user
             seg.speaker = me
             n_seg += 1
     log.info("speakers from mic track: %d segments via label mapping, %d via segment activity", n_label, n_seg)

@@ -148,10 +148,10 @@ def test_txt_and_srt():
     segs = [Segment(0.5, 2.25, "Ahoj.", "Jana"), Segment(3661, 3662.5, "Konec", None)]
     txt = to_txt(segs, title="T", header={"language": "cs"})
     assert txt.splitlines()[0] == "# T"
-    assert "[00:00:00] Jana: Ahoj." in txt and "[01:01:01] Konec" in txt
+    assert "[00:00:00] Jana: Ahoj." in txt and "[01:01:01] ?: Konec" in txt  # ? = nobody assigned
     srt = to_srt(segs)
     assert "00:00:00,500 --> 00:00:02,250\nJana: Ahoj." in srt
-    assert "01:01:01,000 --> 01:01:02,500\nKonec" in srt
+    assert "01:01:01,000 --> 01:01:02,500\n?: Konec" in srt
 
 
 # ---------------------------------------------------------------- config
@@ -1375,3 +1375,78 @@ def test_the_capture_status_file_is_read_and_changes_reach_the_pages(tmp_path):
     assert any(i.get("type") == "capture" and i["recording"] is False for i in items)
     ended = [i for i in state.events if "nahrávání skončilo" in i["text"]]
     assert ended and ended[0]["reload"] is True and ended[0]["stem"] == "2026-09-30_1827_planovani"
+
+
+def test_unassigned_replies_are_given_out_one_by_one_and_are_no_speaker_to_name(tmp_path):
+    from teamsrec_transcribe.pipeline import assign_segments, is_finished
+    from teamsrec_transcribe.web.review import build_review, list_recordings, unresolved_labels
+    rec = _make_transcribed(tmp_path)
+    data = rec.read_json(rec.transcript_path)
+    data["segments"][0]["speaker"] = None  # "Dobrý den…" at 0 s: no diarization turn
+    data["segments"][3]["speaker"] = None  # "Rozpočet je hotový…" at 12 s
+    data["speakers"] = ["UNKNOWN", "SPEAKER_00", "SPEAKER_01", "Jana Nováková"]
+    rec.write_json(rec.transcript_path, data)
+    r = build_review(Config(out_dir=tmp_path), rec)
+    un = next(s for s in r["speakers"] if s["unassigned"])
+    assert [x["at"] for x in un["replies"]] == ["00:00:00", "00:00:12"], "every unassigned reply, in order"
+    assert "UNKNOWN" not in unresolved_labels(rec), "not a speaker to name"
+    assert list_recordings(Config(out_dir=tmp_path))[0]["unresolved"] == 2  # SPEAKER_00 and SPEAKER_01 only
+    with pytest.raises(RecordingError):
+        assign_segments(Config(out_dir=tmp_path), rec, [{"start": 0, "speaker": "SPEAKER_99"}])
+    assert assign_segments(Config(out_dir=tmp_path), rec, [{"start": 0.0, "speaker": "SPEAKER_00"}]) == 1
+    data = rec.read_json(rec.transcript_path)
+    assert data["segments"][0]["speaker"] == "SPEAKER_00" and data["segments"][0]["assigned"] == "manual"
+    assert "UNKNOWN" in data["speakers"], "one is still unassigned"
+    assert "[00:00:12] ?: Rozpočet je hotový" in rec.file(".txt").read_text(encoding="utf-8")
+    assign_segments(Config(out_dir=tmp_path), rec, [{"start": 12, "speaker": "Jana Nováková"}])
+    assert "UNKNOWN" not in rec.read_json(rec.transcript_path)["speakers"]
+    assert not any(s["unassigned"] for s in build_review(Config(out_dir=tmp_path), rec)["speakers"])
+
+
+def test_the_mic_takes_an_unassigned_reply_when_the_user_spoke(tmp_path):
+    import wave
+    import numpy as np
+    from teamsrec_transcribe.mic_speakers import apply_mic_track
+    sr = 16000
+    t = np.arange(sr * 30) / sr
+    sig = np.zeros_like(t)
+    sig[0:5 * sr] = 0.3 * np.sin(2 * np.pi * 220 * t[0:5 * sr])  # the user, 0-5 s
+    wav = tmp_path / "mic.wav"
+    with wave.open(str(wav), "wb") as w:
+        w.setnchannels(1); w.setsampwidth(2); w.setframerate(sr)
+        w.writeframes((sig * 32767).astype(np.int16).tobytes())
+    segs = [Segment(0, 4, "Ahoj", None), Segment(10, 14, "Dobrý den", None), Segment(20, 30, "x", "SPEAKER_01")]
+    apply_mic_track(segs, wav, "Jan Novák")
+    assert [s.speaker for s in segs] == ["Jan Novák", None, "SPEAKER_01"], "only where the mic was on"
+
+
+def test_background_jobs_queue_instead_of_refusing_and_say_what_runs(tmp_path):
+    import threading as _threading
+    import time as _time
+    from teamsrec_transcribe.web.review import ReviewState
+    state = ReviewState(Config(out_dir=tmp_path))
+    gate, order = _threading.Event(), []
+
+    def first():
+        gate.wait(5); order.append("first")
+
+    a = state.run_job("process", first, "zpracováno", "s1", start="s1: zpracování spuštěno")
+    b = state.run_job("summary", lambda: order.append("second"), "zápis přegenerován", "s2", start="s2: zápis se generuje")
+    assert a == (1, 1) and b == (2, 2), "the second waits, it is not refused"
+    for _ in range(100):
+        if state.jobs_state()["current"]:
+            break
+        _time.sleep(0.01)
+    js = state.jobs_state()
+    assert js["current"]["id"] == 1 and js["current"]["text"] == "s1: zpracování spuštěno"
+    assert [q["id"] for q in js["queue"]] == [2]
+    assert state.status()["busy"] is True and state.status()["jobs"]["queue"][0]["stem"] == "s2"
+    gate.set()
+    for _ in range(200):
+        if not state.busy:
+            break
+        _time.sleep(0.01)
+    assert order == ["first", "second"], "in order, one at a time"
+    ends = [(e["job"], e["text"]) for e in state.events if e["job_end"]]
+    assert ends == [(1, "zpracováno: s1"), (2, "zápis přegenerován: s2")]
+    assert state.jobs_state() == {"current": None, "queue": []}

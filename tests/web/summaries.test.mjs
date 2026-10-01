@@ -30,7 +30,7 @@ test("summaries: tabs by model, generate another, reorder by dragging, close = d
                    ["Ollama – v tomto počítači", "Claude – cloud (text přepisu jde ven)"]);
 
   p.change(p.$("sumModel"), "anthropic:claude-opus-5-5");
-  p.$("sumGen").click();
+  p.$("sumGen").click(); p.$("sumGen").click();  // generating asks for a second click
   await waitFor(() => p.$("quit").disabled, "the job running");
   await waitFor(() => tabs(p).length === 2 && !p.$("quit").disabled, "the new summary's tab");
   assert.equal(p.$("status").textContent, "zápis claude-opus-5-5 hotový");
@@ -64,7 +64,7 @@ test("summaries: the order of the tabs is stored for the recording", async t => 
   p.$("sumModel").dispatchEvent(new p.window.Event("focus"));
   await waitFor(() => p.$("sumModel").options.length === 3, "the live lists");
   p.change(p.$("sumModel"), "anthropic:claude-opus-5-5");
-  p.$("sumGen").click();
+  p.$("sumGen").click(); p.$("sumGen").click();  // generating asks for a second click
   await waitFor(() => tabs(p).length === 2 && !p.$("quit").disabled, "a second summary");
   const drop = new p.window.Event("drop", { bubbles: true, cancelable: true });
   Object.defineProperty(drop, "dataTransfer", { value: { getData: () => tab(p, "claude-opus-5-5").dataset.file } });

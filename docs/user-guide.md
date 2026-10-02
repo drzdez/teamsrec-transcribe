@@ -295,7 +295,7 @@ recording in the list shows how far it got: `✓ hotovo` (transcript and minutes
 
 Under the selector are two rows. **Předvolby:** has a button for every meeting that repeats (with its count), the
 meeting with the newest recording first. **Stav:** filters by processing: `◐ nezpracované` (something is still
-missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), and `1× neopakující se` (meetings with a single
+missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), `⏳ zpracovává se nebo ve frontě`, and `1× neopakující se` (meetings with a single
 recording). **Kdy:** `dnes`, `včera`, `týden` (this week, from Monday), `‹ týden` (last week), `měsíc`, `‹ měsíc`,
 `« starší` (before last month) – the small number is how many recordings fall there, the tooltip gives the full name
 and the dates – and 📅 od – do for any range (both days included); a button fills od – do with its range, so it can be
@@ -338,7 +338,7 @@ stopped after 10 s without an answer, or at once when no page is open), stop at 
 goes back to the front of the queue and finishes by itself after the recording; a job asked for during a recording waits for its end too (unless the setting is to let it run). The same tape says when the page has
 lost its server (open the review page again from the tray icon).
 
-Jobs run one at a time, in order. A recording that waits in the queue shows its place ("Je ve frontě – 2. v pořadí")
+Jobs run one at a time, in order. The recordings list marks them `[⏳ zpracovává se]` or `[⏳ ve frontě, 2.]`. A recording that waits in the queue shows its place ("Je ve frontě – 2. v pořadí")
 instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and
 **Zpracovat hned** (asks first: the running job stops, goes right behind this one and starts again from the
 beginning – what it had done is lost). **Zrušit zpracování** takes a waiting recording out of the queue at once; on the one being

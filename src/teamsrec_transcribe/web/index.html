@@ -514,6 +514,8 @@ function rowMatcher(/** @type {string} */ text) {
 /** @param {boolean} [jump] switch to the newest match instead of keeping what is open (preset filters) */
 /** what is done with a recording: the dropdown has no colours, so it says it in words */
 function rowState(/** @type {RecordingRow} */ r) {
+  const q = queuePlace(r.stem);  // asked for: say where it is rather than what is missing
+  if (q) return { key: "queued", text: q.running ? "⏳ zpracovává se" : `⏳ ve frontě, ${q.place}.` };
   if (!r.transcribed) return { key: "no-transcript", text: "○ bez přepisu" };
   const missing = [];
   if (r.summary === false) missing.push("bez zápisu");  // undefined = an older server that does not say
@@ -532,6 +534,8 @@ const STATE_FILTERS = [
     test: (/** @type {RecordingRow} */ r) => !r.transcribed },
   { key: "unresolved", label: "? nepojmenované", title: "přepsané nahrávky, kde zůstal někdo nepojmenovaný",
     test: (/** @type {RecordingRow} */ r) => !!r.transcribed && !!r.unresolved },
+  { key: "queued", label: "⏳ zpracovává se nebo ve frontě", title: "nahrávky, které se právě zpracovávají nebo čekají ve frontě",
+    test: (/** @type {RecordingRow} */ r) => !!queuePlace(r.stem) },
   { key: "single", label: "1× neopakující se", title: "schůzky, které mají jen jednu nahrávku (opakované jsou v předvolbách)",
     test: (/** @type {RecordingRow} */ r) => titleCount(r) === 1 },
 ];
@@ -1391,9 +1395,11 @@ let askTimer = 0;
 function setJobs(/** @type {any} */ j) {
   const before = JSON.stringify(jobsState && [jobsState.current, jobsState.queue, jobsState.held]);
   jobsState = j;
-  // an open recording without a transcript shows its place in the queue: keep it current
-  if (review && !review.transcribed && main.querySelector("[data-queued]")
-      && before !== JSON.stringify(j && [j.current, j.queue, j.held])) renderNotTranscribed(review);
+  if (before !== JSON.stringify(j && [j.current, j.queue, j.held])) {
+    if (allRows.length) renderPick();  // the list says what is being processed or waits
+    // an open recording without a transcript shows its place in the queue: keep it current
+    if (review && !review.transcribed && main.querySelector("[data-queued]")) renderNotTranscribed(review);
+  }
   // a recording started while something runs: ask (the server stops it by itself if nobody answers in time)
   const ask = $("recAsk");
   if (j && j.asking) {

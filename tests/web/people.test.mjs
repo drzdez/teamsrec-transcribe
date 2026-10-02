@@ -21,3 +21,13 @@ test("people list, detail and back", async t => {
   back.click();
   await waitFor(() => pm.querySelectorAll("tbody tr").length === 2 && !pm.querySelector(".person-h"), "the list again");
 });
+
+test("the recording filters are not on the People tab, and come back with Schůzka", async t => {
+  const p = await openPage(t);
+  p.$("tabPeople").click();
+  await waitFor(() => !p.$("peopleMain").hidden, "the people list");
+  assert.ok(p.$("filterRows").hidden && p.$("filter").hidden, "no filters for the shared people list");
+  p.$("tabSpeakers").click();
+  assert.ok(!p.$("filterRows").hidden && !p.$("filter").hidden);
+  assert.ok(p.$("peopleMain").hidden);
+});

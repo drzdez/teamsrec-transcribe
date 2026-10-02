@@ -246,6 +246,7 @@
   .meeting button.play { margin-left: 4px; }
   button.play { border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 8px; padding: 3px 9px; cursor: pointer; font-size: 13px; }
   button.play.playing { border-color: var(--accent); color: var(--accent); }
+  #settingsClose, #helpClose { white-space: nowrap; flex: none; }
   footer { position: fixed; bottom: 0; left: 0; right: 0; background: var(--card); border-top: 1px solid var(--line);
            padding: 10px 20px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   footer button { padding: 9px 16px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
@@ -631,6 +632,7 @@ function titleCount(/** @type {RecordingRow} */ r) {
 }
 
 function renderPick(jump) {
+  if (jump && !peopleMain.hidden) showTab("speakers", false);  // a filter picks a recording: show it, not the people
   const match = rowMatcher(filterInput.value);
   const inState = STATE_FILTERS.find(f => f.key === stateFilter);
   const inDates = dateMatcher();

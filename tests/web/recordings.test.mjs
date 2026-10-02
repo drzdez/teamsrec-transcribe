@@ -50,7 +50,7 @@ test("a preset shows one meeting and opens its newest recording; a second click 
 
 test("the unfinished preset counts and picks what still needs work", async t => {
   const p = await openPage(t);
-  const todo = [...p.doc.querySelectorAll("#titles button")].find(b => b.textContent.startsWith("◐ nezpracované"));
+  const todo = [...p.doc.querySelectorAll("#states button")].find(b => b.textContent.startsWith("◐ nezpracované"));
   assert.ok(todo, "the preset exists");
   assert.equal(todo.textContent, "◐ nezpracované (3)", "unnamed speakers and a missing transcript both count");
   todo.click();
@@ -97,4 +97,23 @@ test("the list looks again when the window comes back, and a lost server is said
   p.window.setOnline(true);
   assert.ok(offline.hidden);
   await waitFor(() => lists() > now, "back online: what was missed comes in");
+});
+
+test("presets for repeating meetings by their newest recording; processing states and one-offs in a second row", async t => {
+  const p = await openPage(t);
+  const meetings = [...p.doc.querySelectorAll("#titles button")].map(b => b.textContent);
+  // an earlier test renamed recordings; whatever repeats is a preset, newest meeting first
+  assert.ok(meetings.every(m => /\(\d+\)$/.test(m) && !/\(1\)$/.test(m)), meetings.join(" | "));
+  assert.equal(p.$("titles").hidden, meetings.length === 0, "no repeating meeting: no presets row");
+  const states = [...p.doc.querySelectorAll("#states button")].map(b => b.textContent.replace(/ \(\d+\)$/, ""));
+  assert.deepEqual(states.filter(x => x !== "? nepojmenované"), ["◐ nezpracované", "○ bez přepisu", "1× neopakující se"]);
+  const pickText = () => p.$("pick").selectedOptions[0].textContent;
+  [...p.doc.querySelectorAll("#states button")].find(b => b.textContent.startsWith("○ bez přepisu")).click();
+  await waitFor(() => /bez přepisu/.test(pickText()), "a recording without a transcript");
+  assert.ok([...p.$("pick").options].every(o => /bez přepisu|mimo filtr/.test(o.textContent)));
+  [...p.doc.querySelectorAll("#states button")].find(b => b.textContent.startsWith("1×")).click();
+  const counts = [...p.$("pick").options].filter(o => !o.textContent.includes("mimo filtr")).map(o => o.textContent);
+  assert.ok(counts.length >= 1, "one-off meetings listed");
+  assert.equal(p.$("states").querySelectorAll("button.on").length, 1, "one state at a time");
+  assert.equal(p.window.getComputedStyle(p.$("titles")).flexWrap, "nowrap", "one row that scrolls sideways");
 });

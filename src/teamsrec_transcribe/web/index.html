@@ -197,10 +197,14 @@
   .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
   #filter { min-width: 160px; }
   #filter.bad { border-color: var(--warn); }
-  .titles { display: flex; gap: 6px; flex-wrap: wrap; flex-basis: 100%; align-items: center; }
-  .titles .presetLabel { color: var(--muted); font-size: 12px; margin-right: 2px; }
+  /* one row each, never wrapping: what does not fit scrolls sideways (wheel, touch, or drag with the mouse) */
+  .titles { display: flex; gap: 6px; flex-wrap: nowrap; flex-basis: 100%; min-width: 0; align-items: center;
+            overflow-x: auto; scrollbar-width: thin; padding-bottom: 2px; cursor: grab; user-select: none; }
+  .titles.dragging { cursor: grabbing; }
+  .titles .presetLabel { color: var(--muted); font-size: 12px; margin-right: 2px; flex: none; position: sticky; left: 0;
+                         background: var(--card); padding-right: 4px; z-index: 1; }
   .titles button { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px;
-                   padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+                   padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; flex: none; white-space: nowrap; }
   .titles button:hover { color: var(--fg); }
   .titles button.on { border-color: var(--accent); color: var(--accent); }
   .badge { display: inline-block; border-radius: 999px; padding: 0 8px; font-size: 12px; background: var(--chip); color: var(--muted); margin-left: 4px; }
@@ -232,6 +236,7 @@
   <span class="meta" id="meta"></span>
   <span class="meta" id="scope" hidden>společný seznam lidí pro všechny nahrávky</span>
   <div id="titles" class="titles"><span class="presetLabel">Předvolby:</span></div>
+  <div id="states" class="titles"><span class="presetLabel">Stav:</span></div>
   <div class="tabs">
     <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
@@ -478,11 +483,27 @@ function rowState(/** @type {RecordingRow} */ r) {
 
 /** @type {string} */
 let stateFilter = "";
+/** the processing-state filters (second row); one at a time, a second click clears it */
+const STATE_FILTERS = [
+  { key: "todo", label: "◐ nezpracované", title: "nahrávky bez přepisu, bez zápisu nebo s nepojmenovanými mluvčími",
+    test: (/** @type {RecordingRow} */ r) => rowState(r).key !== "done" },
+  { key: "no-transcript", label: "○ bez přepisu", title: "nahrávky, které ještě nemají přepis",
+    test: (/** @type {RecordingRow} */ r) => !r.transcribed },
+  { key: "unresolved", label: "? nepojmenované", title: "přepsané nahrávky, kde zůstal někdo nepojmenovaný",
+    test: (/** @type {RecordingRow} */ r) => !!r.transcribed && !!r.unresolved },
+  { key: "single", label: "1× neopakující se", title: "schůzky, které mají jen jednu nahrávku (opakované jsou v předvolbách)",
+    test: (/** @type {RecordingRow} */ r) => titleCount(r) === 1 },
+];
+/** how many recordings share this recording's meeting title (the same grouping as the presets) */
+function titleCount(/** @type {RecordingRow} */ r) {
+  const t = (r.title || "").trim();
+  return t ? allRows.filter(x => (x.title || "").trim() === t).length : 1;
+}
 
 function renderPick(jump) {
   const match = rowMatcher(filterInput.value);
-  const shown = allRows.filter(r => match(r) && (!stateFilter || rowState(r).key === stateFilter
-    || (stateFilter === "todo" && rowState(r).key !== "done")));
+  const inState = STATE_FILTERS.find(f => f.key === stateFilter);
+  const shown = allRows.filter(r => match(r) && (!inState || inState.test(r)));
   const hits = shown.length;
   let current = pick.value;
   if (jump && hits && !shown.some(r => r.stem === current)) current = shown[0].stem;
@@ -511,36 +532,79 @@ function renderTitles() {
     const t = (r.title || "").trim();
     if (t) counts.set(t, (counts.get(t) || 0) + 1);
   }
-  const top = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "cs")).slice(0, 10);
+  // the meetings in the order of their newest recording (the list comes newest first)
+  /** @type {Map<string, string>} */ const newest = new Map();
+  for (const r of allRows) {
+    const t = (r.title || "").trim();
+    if (t && (!newest.has(t) || String(r.start) > /** @type {string} */ (newest.get(t)))) newest.set(t, String(r.start));
+  }
+  // presets only for meetings that repeat; the one-off ones are the "neopakující se" filter in the second row
+  const top = [...counts.entries()].filter(([, n]) => n > 1)
+    .sort((a, b) => String(newest.get(b[0])).localeCompare(String(newest.get(a[0]))) || a[0].localeCompare(b[0], "cs"));
   const active = foldText(filterInput.value.trim());
   box.innerHTML = '<span class="presetLabel">Předvolby:</span>';
-  const todo = allRows.filter(r => rowState(r).key !== "done").length;
-  if (todo) {
+  const states = $("states");
+  states.innerHTML = '<span class="presetLabel">Stav:</span>';
+  for (const f of STATE_FILTERS) {
+    const n = allRows.filter(f.test).length;
+    if (!n && stateFilter !== f.key) continue;
     const b = document.createElement("button");
     b.type = "button";
-    b.textContent = `◐ nezpracované (${todo})`;
-    b.title = "nahrávky bez přepisu, bez zápisu nebo s nepojmenovanými mluvčími";
-    if (stateFilter === "todo") b.classList.add("on");
+    b.textContent = `${f.label} (${n})`;
+    b.title = f.title;
+    if (stateFilter === f.key) b.classList.add("on");
     b.onclick = () => {
-      stateFilter = stateFilter === "todo" ? "" : "todo";
+      if (dragMoved) return;
+      stateFilter = stateFilter === f.key ? "" : f.key;
       const stem = renderPick(true);
       if (stem && (!review || stem !== review.stem)) loadRecording(stem);
     };
-    box.appendChild(b);
+    states.appendChild(b);
   }
+  states.hidden = states.childElementCount < 2;
+  box.hidden = !top.length;
   for (const [title, n] of top) {
     const b = document.createElement("button");
     b.type = "button";
-    b.textContent = n > 1 ? `${title} (${n})` : title;
+    b.textContent = `${title} (${n})`;
     b.title = `zobrazit jen nahrávky „${title}“`;
     if (active && foldText(title) === active) b.classList.add("on");
     b.onclick = () => {
+      if (dragMoved) return;
       filterInput.value = b.classList.contains("on") ? "" : title;
       const stem = renderPick(true);  // a preset shows its own recordings, so open the newest one
       if (stem && (!review || stem !== review.stem)) loadRecording(stem);
     };
     box.appendChild(b);
   }
+}
+
+/** drag a preset row sideways with the mouse (touch and the wheel scroll it natively); a drag is not a click */
+let dragMoved = false;
+for (const row of [$("titles"), $("states")]) {
+  let startX = 0, startScroll = 0, down = false;
+  row.addEventListener("pointerdown", ev => {
+    if (ev.pointerType !== "mouse" || ev.button !== 0) return;
+    down = true; dragMoved = false; startX = ev.clientX; startScroll = row.scrollLeft;
+  });
+  row.addEventListener("pointermove", ev => {
+    if (!down) return;
+    const dx = ev.clientX - startX;
+    if (!dragMoved && Math.abs(dx) < 5) return;
+    if (!dragMoved) { dragMoved = true; row.classList.add("dragging"); row.setPointerCapture(ev.pointerId); }
+    row.scrollLeft = startScroll - dx;
+  });
+  const end = () => {
+    down = false; row.classList.remove("dragging");
+    window.setTimeout(() => { dragMoved = false; }, 0);  // after the click that ends the drag
+  };
+  row.addEventListener("pointerup", end);
+  row.addEventListener("pointercancel", end);
+  // a plain wheel scrolls the row sideways when it overflows
+  row.addEventListener("wheel", ev => {
+    if (row.scrollWidth <= row.clientWidth || Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) return;
+    row.scrollLeft += ev.deltaY; ev.preventDefault();
+  }, { passive: false });
 }
 
 async function loadList() {

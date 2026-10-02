@@ -293,9 +293,11 @@ one — `^archi` only titles starting with archi, `board|standup` both, `2026-09
 recording in the list shows how far it got: `✓ hotovo` (transcript and minutes, everybody named), `◐ bez zápisu`,
 `◐ 2 nepojmenovaných` (or both) and `○ bez přepisu`.
 
-Under the selector is the row **Předvolby:** — the first button `◐ nezpracované (N)` keeps only those where something is
-still missing; after it come meeting titles as buttons, the most frequent with a count. One click shows only that
-meeting's recordings and opens its newest; a second click clears the filter. When you type the filter by hand, the
+Under the selector are two rows. **Předvolby:** has a button for every meeting that repeats (with its count), the
+meeting with the newest recording first. **Stav:** filters by processing: `◐ nezpracované` (something is still
+missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), and `1× neopakující se` (meetings with a single
+recording). One click shows only those recordings and opens the newest; a second click clears the filter. What does
+not fit the width scrolls sideways – drag the row with the mouse, or use the wheel. When you type the filter by hand, the
 open recording does not disappear from the list (it is marked as open, outside the filter), so the selection does not
 jump.
 

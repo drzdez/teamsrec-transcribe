@@ -862,7 +862,8 @@ def test_rest_api_routes_errors_and_openapi(tmp_path):
                 continue
             as_doc = (pattern.replace("(?P<stem>[^/]+)", "{stem}").replace("(?P<file>[^/]+)", "{file}")
                       .replace("(?P<label>[^/]+)", "{label}").replace("(?P<pid>[^/]+)", "{id}")
-                      .replace("(?P<doc>[^/]+)", "{doc}").replace("(?P<name>[^/]+)", "{name}").replace("\\.", "."))
+                      .replace("(?P<doc>[^/]+)", "{doc}").replace("(?P<name>[^/]+)", "{name}")
+                      .replace("(?P<job>[^/]+)", "{job}").replace("\\.", "."))
             assert as_doc in documented, f"{method} {as_doc} missing in openapi.py"
             assert method.lower() in spec["paths"][as_doc], f"{method} {as_doc} not documented"
     finally:
@@ -1239,6 +1240,36 @@ def test_review_single_instance_and_idle_exit(tmp_path):
     assert not lock.exists()
 
 
+def test_review_stays_up_while_a_page_holds_its_event_stream(tmp_path, monkeypatch):
+    """A hidden or minimized window throttles its 15 s pings; an open /api/events stream still counts as a page
+    (2026-10-02: the desktop window lost its server and did not show new recordings)."""
+    import http.client
+    import json as _json
+    import threading
+    import time
+    from urllib.parse import urlparse
+    from teamsrec_transcribe.web import review as rv
+    monkeypatch.setattr(rv, "SSE_KEEPALIVE_S", 0.3)  # a closed page is noticed at the next keepalive write
+    cfg = Config(out_dir=tmp_path)
+    lock = tmp_path / "lock.json"
+    t = threading.Thread(target=lambda: rv.serve(cfg, None, open_browser=False, idle_s=1.0, lock=lock), daemon=True)
+    t.start()
+    for _ in range(50):
+        if lock.exists():
+            break
+        time.sleep(0.05)
+    u = urlparse(_json.loads(lock.read_text(encoding="utf-8"))["url"])
+    conn = http.client.HTTPConnection(u.hostname, u.port, timeout=10)
+    conn.request("GET", "/api/events")
+    resp = conn.getresponse()
+    assert resp.status == 200
+    time.sleep(3.0)                      # three idle periods without a single ping
+    assert t.is_alive()
+    resp.close(); conn.close()           # the page goes away: the server stops after a failed keepalive + idle
+    t.join(timeout=15)
+    assert not t.is_alive()
+
+
 def test_clean_headings_strips_copied_instructions():
     from teamsrec_transcribe.summarize import HEADINGS, clean_headings
     raw = ("## Shrnutí — 5 to 10 sentences: purpose of the meeting.\nText.\n"
@@ -1456,7 +1487,7 @@ def test_background_jobs_queue_instead_of_refusing_and_say_what_runs(tmp_path):
     assert (js["current"], js["queue"], js["held"], js["asking"]) == (None, [], False, False)
 
 
-def test_a_recording_stops_the_running_job_which_resumes_after_it(tmp_path, monkeypatch):
+def test_a_recording_stops_the_running_job_which_resumes_after_it(tmp_path, monkeypatch, _no_real_ollama_unload):
     """The GPU must not break the recorded sound: a job's child process is stopped when teamsrec-capture starts
     recording (when_recording = ask, and no page to ask: stop), goes back to the front of the queue, and runs
     again once the recording has ended."""
@@ -1491,6 +1522,7 @@ def test_a_recording_stops_the_running_job_which_resumes_after_it(tmp_path, monk
     assert any("přerušeno kvůli nahrávání" in e["text"] for e in state.events)
     assert not any(e["job_end"] for e in state.events), "a stopped job did not fail"
     _time.sleep(0.3)
+    assert _no_real_ollama_unload == ["gemma4:31b"], "the summary model leaves the GPU for the meeting"
     assert len(runs) == 1, "nothing starts while recording"
     state.set_capture({"running": True, "recording": False})
     for _ in range(300):
@@ -1500,6 +1532,77 @@ def test_a_recording_stops_the_running_job_which_resumes_after_it(tmp_path, monk
     assert len(runs) == 2, "it ran again after the recording"
     ends = [e for e in state.events if e["job_end"]]
     assert len(ends) == 1 and ends[0]["job"] == job and ends[0]["level"] == "ok"
+
+
+def test_a_waiting_job_can_go_next_or_stop_the_running_one(tmp_path, monkeypatch):
+    """"jako další" moves a waiting job to the front; "hned" also stops the running job, which goes right behind it
+    and starts over."""
+    import subprocess as _sp
+    import sys as _sys
+    import time as _time
+    import pytest as _pytest
+    from teamsrec_transcribe.web import review as rv
+    runs = []
+
+    def cli(argv, on_proc, on_line):
+        runs.append(argv[-1])
+        long = argv[-1] == "a" and runs.count("a") == 1  # the first run of "a" is long: it gets stopped
+        p = _sp.Popen([_sys.executable, "-c", "import time; time.sleep(30)" if long else "pass"])
+        on_proc(p)
+        if p.wait() != 0:
+            raise RuntimeError("killed")
+    monkeypatch.setattr(rv, "run_cli", cli)
+    state = rv.ReviewState(Config(out_dir=tmp_path))
+    ids = {s: state.run_job("process", ["run-job", "process", s], "zpracováno", s)[0] for s in ("a", "b", "c")}
+    for _ in range(200):
+        if state.running and state.running.get("proc"):
+            break
+        _time.sleep(0.02)
+    assert [q["stem"] for q in state.jobs_state()["queue"]] == ["b", "c"]
+    assert "jako další" in state.move_job(ids["c"])
+    assert [q["stem"] for q in state.jobs_state()["queue"]] == ["c", "b"]
+    with _pytest.raises(ValueError):
+        state.move_job(ids["a"])  # running, not waiting
+    assert "pokračuje po něm" in state.move_job(ids["c"], now=True)
+    for _ in range(300):
+        if not state.busy:
+            break
+        _time.sleep(0.02)
+    assert runs == ["a", "c", "a", "b"], "c at once, the stopped a right behind it, then b"
+    assert any("přerušeno kvůli přednostnímu zpracování" in e["text"] for e in state.events)
+    ends = [e for e in state.events if e["job_end"]]
+    assert len(ends) == 3 and all(e["level"] == "ok" for e in ends), "the stopped run is not a failure"
+
+
+def test_a_job_asked_for_during_a_recording_waits_for_its_end(tmp_path, monkeypatch):
+    """Nothing ran when the recording started, so nothing was stopped – but a job asked for during it must not
+    start either (the GPU would break the recorded sound); with when_recording = continue it runs."""
+    import time as _time
+    from teamsrec_transcribe.web import review as rv
+    runs = []
+    monkeypatch.setattr(rv, "run_cli", lambda argv, on_proc, on_line: runs.append(argv[-1]))
+    state = rv.ReviewState(Config(out_dir=tmp_path))
+    state.set_capture({"running": True, "recording": True, "title": "Porada"})
+    assert state.jobs_state()["held"] is True
+    state.run_job("process", ["run-job", "process", "s1"], "zpracováno", "s1", start="s1: zpracování spuštěno")
+    _time.sleep(0.3)
+    assert runs == [] and [q["stem"] for q in state.jobs_state()["queue"]] == ["s1"]
+    assert any("čeká na konec nahrávání" in e["text"] for e in state.events)
+    state.set_capture({"running": True, "recording": False})
+    for _ in range(200):
+        if not state.busy:
+            break
+        _time.sleep(0.02)
+    assert runs == ["s1"], "it ran after the recording"
+
+    cont = rv.ReviewState(Config(out_dir=tmp_path, transcribe=TranscribeSettings(when_recording="continue")))
+    cont.set_capture({"running": True, "recording": True, "title": "Porada"})
+    cont.run_job("process", ["run-job", "process", "s2"], "zpracováno", "s2")
+    for _ in range(200):
+        if not cont.busy:
+            break
+        _time.sleep(0.02)
+    assert runs == ["s1", "s2"], "continue: it runs during the recording"
 
 
 def test_with_a_page_open_the_recording_asks_first(tmp_path, monkeypatch):

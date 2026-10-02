@@ -28,12 +28,19 @@
               max-width: 52vw; overflow: hidden; text-overflow: ellipsis; }
   #jobBadge[hidden] { display: none; }
   #jobText { overflow: hidden; text-overflow: ellipsis; }
-  #recAsk { position: fixed; top: 0; left: 0; right: 0; z-index: 40; display: flex; gap: 12px; align-items: center;
-            justify-content: center; flex-wrap: wrap; padding: 12px 20px; background: #7f1d1d; color: #fff; font-weight: 600;
-            box-shadow: 0 4px 16px rgba(0,0,0,.45); }
-  #recAsk[hidden] { display: none; }
-  #recAsk .recDot { width: 12px; height: 12px; border-radius: 50%; background: #ff6b5b; animation: recPulse 1.4s ease-in-out infinite; }
-  #recAsk button.play { color: #fff; border-color: rgba(255,255,255,.6); }
+  /* Warnings that must not be missed: the yellow-black tape of the sister viewer (markdownz) in the middle of the
+     window, square corners (border-image ignores border-radius), no animation. Unlike there it stays until the
+     user answers or the cause goes away, and it takes clicks. */
+  .tape { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 60; max-width: min(720px, 92vw);
+          display: flex; gap: 12px 16px; align-items: center; justify-content: center; flex-wrap: wrap; text-align: center;
+          padding: 14px 28px; border: 12px solid transparent;
+          border-image: repeating-linear-gradient(-45deg, #111111 0 12px, #ffd400 12px 24px) 12; border-radius: 0;
+          background: #ffd400; color: #111111; font-size: 18px; font-weight: 700; box-shadow: 0 12px 40px rgb(0 0 0 / 45%); }
+  .tape[hidden] { display: none; }
+  .tape .tapeText { flex-basis: 100%; }
+  .tape button { font: inherit; font-size: 16px; padding: 6px 16px; border-radius: 0; cursor: pointer;
+                 background: #111111; color: #ffd400; border: 2px solid #111111; }
+  .tape button.alt { background: transparent; color: #111111; }
   #recBadge { display: inline-flex; align-items: center; gap: 7px; font-weight: 600; color: #e74c3c; white-space: nowrap; }
   #recBadge[hidden] { display: none; }
   #recBadge .recDot { width: 11px; height: 11px; border-radius: 50%; background: #e74c3c; animation: recPulse 1.4s ease-in-out infinite; }
@@ -260,11 +267,14 @@
   <span id="status"></span>
 </footer>
 <div id="events" hidden></div>
-<div id="recAsk" hidden role="alertdialog" aria-live="assertive">
-  <span class="recDot"></span>
-  <span id="recAskText">Začalo nahrávání a běží zpracování – může rozbít nahrávaný zvuk.</span>
-  <button id="recAskStop" type="button" class="primary">Přerušit (doběhne po nahrávání)</button>
-  <button id="recAskGo" type="button" class="play">Nechat běžet</button>
+<div id="recAsk" class="tape" hidden role="alertdialog" aria-live="assertive">
+  <span id="recAskText" class="tapeText">Začalo nahrávání a běží zpracování – může rozbít nahrávaný zvuk.</span>
+  <button id="recAskStop" type="button">Přerušit (doběhne po nahrávání)</button>
+  <button id="recAskGo" type="button" class="alt">Nechat běžet</button>
+</div>
+<div id="offline" class="tape" hidden role="alert">
+  <span class="tapeText">Spojení se serverem přepisů je přerušené. Otevřete přepisy znovu (poklepáním na ikonu v liště).</span>
+  <button id="offlineHide" type="button" class="alt">Skrýt</button>
 </div>
 <div id="settings" hidden>
   <div class="setBar">
@@ -575,11 +585,62 @@ async function loadRecording(/** @type {string} */ stem) {
 }
 
 /** @param {Review} r */
+/** Where a recording is in the job queue: "running", its 1-based place among the waiting ones, or null. */
+function queuePlace(/** @type {string} */ stem) {
+  const j = jobsState;
+  if (!j) return null;
+  if (j.current && j.current.stem === stem) return { running: true, since: j.current.started || "", held: false };
+  const at = (j.queue || []).findIndex((/** @type {any} */ q) => q.stem === stem);
+  return at < 0 ? null : { running: false, id: j.queue[at].id, place: at + 1, held: !!j.held,
+                           before: j.current ? j.current.stem : "" };
+}
+
+/** a waiting job forward: "next" = right after the running one, "now" = stop the running one (it runs again after) */
+async function moveJob(/** @type {number} */ id, /** @type {string} */ how, /** @type {HTMLButtonElement} */ btn) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/jobs/${id}/${how}`, send("POST"));
+    setStatus(r.text || "pořadí změněno", "ok");
+    if (r.jobs) setJobs(r.jobs);
+  } catch (e) { setStatus(String(e), "err"); btn.disabled = false; }
+}
+
 function renderNotTranscribed(r) {
   main.innerHTML = "";
   const box = document.createElement("div"); box.className = "empty";
+  box.dataset.queued = r.stem;
   const mins = Math.round((r.duration_s || 0) / 60);
   const est = Math.max(2, Math.round(mins / 6) + 3);
+  const q = queuePlace(r.stem);
+  if (q) {  // already asked for: say where it is instead of offering it again
+    box.innerHTML = `<p><b>${escapeHtml(r.title)}</b> ještě nemá přepis.</p>` + (q.running
+      ? `<p class="queued">⏳ Právě se zpracovává${q.since ? ` (od ${escapeHtml(q.since)})` : ""} – přepis, export a zápis, zhruba ${est} min.</p>`
+      : `<p class="queued">⏳ Je ve frontě na zpracování – <b>${q.place}. v pořadí</b>.` +
+        (q.held ? " Čeká na konec nahrávání." : q.before ? ` Teď běží ${escapeHtml(q.before)}.` : "") + `</p>`) +
+      `<p>Až doběhne, přepis se tu ukáže sám.</p>`;
+    if (!q.running) {
+      const row = document.createElement("p"); row.className = "queueActs";
+      if (q.place > 1) {
+        const next = document.createElement("button"); next.type = "button";
+        next.textContent = "Zpracovat jako další";
+        next.title = "Zařadí se hned za to, co právě běží";
+        next.onclick = () => moveJob(q.id, "next", next);
+        row.appendChild(next);
+      }
+      if (q.before) {
+        const now = document.createElement("button"); now.type = "button";
+        now.textContent = "Zpracovat hned";
+        now.title = `Přeruší ${q.before}; to poběží znovu od začátku hned po této nahrávce (co už udělalo, se zahodí)`;
+        now.onclick = () => moveJob(q.id, "now", now);
+        confirmFirst(now, "Potvrdit: přerušit a zpracovat hned",
+                     `${q.before} se přeruší a poběží znovu od začátku – dosavadní práce se zahodí. Potvrďte druhým kliknutím, nebo Zrušit`);
+        row.appendChild(now);
+      }
+      if (row.childElementCount) box.appendChild(row);
+    }
+    main.appendChild(box);
+    return;
+  }
   box.innerHTML = `<p><b>${escapeHtml(r.title)}</b> ještě nemá přepis, takže není co kontrolovat.</p>` +
     (r.has_mix ? `<p>Přepsat, exportovat a udělat zápis teď? Zhruba ${est} min, grafická karta bude po tu dobu vytížená.</p>`
                : `<p>Nahrávka nemá zvuk (chybí mix i stopy), přepsat ji nejde.</p>`);
@@ -1097,16 +1158,40 @@ async function waitForJob(/** @type {number} */ id) {
 }
 
 /** "⏳ běží: … · ve frontě N" next to the status line, for every page (also after a reload, in another window) */
+/** A warning appeared: when the window is not in front, make it come forward – the desktop window flashes in the
+ * taskbar until focused (Tauri), a browser tab gets a system notification (if allowed) and a marked title. */
+function callAttention(/** @type {string} */ text) {
+  if (document.visibilityState === "visible" && document.hasFocus()) return;
+  const w = /** @type {any} */ (window);
+  try { w.__TAURI__?.window?.getCurrentWindow?.().requestUserAttention(1); } catch { /* an old desktop window */ }
+  if (!document.title.startsWith("⚠ ")) document.title = "⚠ " + document.title;
+  try {
+    if (!DESKTOP && "Notification" in window) {
+      if (Notification.permission === "granted") new Notification("teamsrec", { body: text });
+      else if (Notification.permission === "default") Notification.requestPermission().catch(() => {});
+    }
+  } catch { /* notifications not available */ }
+}
+window.addEventListener("focus", () => { document.title = document.title.replace(/^⚠ /, ""); });
+
 let askTimer = 0;
+/** the last job queue state from the server (SSE or a poll) */
+/** @type {any} */ let jobsState = null;
 function setJobs(/** @type {any} */ j) {
+  const before = JSON.stringify(jobsState && [jobsState.current, jobsState.queue, jobsState.held]);
+  jobsState = j;
+  // an open recording without a transcript shows its place in the queue: keep it current
+  if (review && !review.transcribed && main.querySelector("[data-queued]")
+      && before !== JSON.stringify(j && [j.current, j.queue, j.held])) renderNotTranscribed(review);
   // a recording started while something runs: ask (the server stops it by itself if nobody answers in time)
   const ask = $("recAsk");
   if (j && j.asking) {
     if (ask.hidden) {
-      let left = Math.round(j.ask_s || 30);
+      let left = Math.round(j.ask_s || 10);
       const show = () => { $("recAskText").textContent = `Začalo nahrávání a běží zpracování – může rozbít nahrávaný zvuk. Bez odpovědi se za ${left} s přeruší.`; };
       show(); clearInterval(askTimer);
       askTimer = window.setInterval(() => { left = Math.max(0, left - 1); show(); }, 1000);
+      callAttention("Začalo nahrávání – zpracování se za chvíli přeruší.");
     }
     ask.hidden = false;
   } else { ask.hidden = true; clearInterval(askTimer); }
@@ -1130,7 +1215,9 @@ $("recAskGo").onclick = async () => {
 
 /** a job was queued behind others: say so, it starts by itself */
 function queuedNote(/** @type {any} */ r, /** @type {string} */ what) {
-  if (r && r.position > 1) setStatus(`${what} – ve frontě, před ní ${r.position - 1}; spustí se sama`, "busy");
+  if (r && r.status && r.status.jobs && r.status.jobs.held)
+    setStatus(`${what} – čeká na konec nahrávání, pak se spustí sama`, "busy");
+  else if (r && r.position > 1) setStatus(`${what} – ve frontě, před ní ${r.position - 1}; spustí se sama`, "busy");
 }
 
 // ---------------------------------------------------------------- people tab
@@ -2094,8 +2181,10 @@ async function pollStatus() {
   try {
     s = await api("/api/status");
   } catch {
+    setOnline(false);
     return;  // the server is gone or busy; the next tick tries again
   }
+  setOnline(true);
   events = s.events || [];
   setCapture(s.capture);
   setJobs(s.jobs);
@@ -2129,9 +2218,14 @@ document.addEventListener("click", ev => {
 });
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") $("events").hidden = true; });
 /** what teamsrec-capture does: a red dot + "Nahrávání probíhá · title · od hh:mm" while it records */
+let captureWasRecording = false;
 function setCapture(/** @type {any} */ c) {
   const badge = $("recBadge");
-  if (!c || !c.recording) { badge.hidden = true; return; }
+  const recording = !!(c && c.recording);
+  // a recording ended: it appears in the list once its sidecar is written (after the mix), so look twice
+  if (captureWasRecording && !recording) for (const ms of [20000, 90000]) window.setTimeout(refreshList, ms);
+  captureWasRecording = recording;
+  if (!recording) { badge.hidden = true; return; }
   const since = c.started ? String(c.started).slice(11, 16) : "";
   const kind = { onsite: "na místě", playback: "přehrávání", manual: "ruční" }[/** @type {string} */ (c.source)] || "";
   $("recText").textContent = ["Nahrávání probíhá", c.title || c.stem, since ? `od ${since}` : "", kind].filter(Boolean).join(" · ");
@@ -2161,6 +2255,23 @@ async function onEvents(/** @type {any[]} */ fresh, /** @type {boolean} */ busyN
   renderEvents();
 }
 
+/** new recordings in the list without touching what is open (selection and unsaved edits stay) */
+async function refreshList() {
+  try { await loadList(); } catch { /* the server is gone: the offline line says so */ }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") refreshList(); });
+
+/** the server stopped answering: say so instead of looking idle (a new server has another address) */
+let offlineMisses = 0;
+function setOnline(/** @type {boolean} */ ok) {
+  offlineMisses = ok ? 0 : offlineMisses + 1;
+  const box = $("offline"), wasOff = !box.hidden;
+  if (ok) box.hidden = true;
+  else if (offlineMisses === 2) { box.hidden = false; callAttention("Spojení se serverem přepisů je přerušené."); }
+  if (ok && wasOff) refreshList();
+}
+$("offlineHide").onclick = () => { $("offline").hidden = true; };
+
 let pollTimer = 0;
 function startPolling() {
   if (pollTimer) return;
@@ -2175,6 +2286,7 @@ function startEvents() {
   let failures = 0;
   es.addEventListener("hello", ev => {
     failures = 0;
+    setOnline(true);
     const h = JSON.parse(/** @type {MessageEvent} */ (ev).data);
     wasBusy = !!h.busy;
     setCapture(h.capture);

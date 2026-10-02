@@ -22,6 +22,11 @@ double click, as `[capture] tray_open` (`app` | `web`) says.
 What the page does differently with `?app=desktop`: no Zavřít button (closing the window does it) and no
 `target="_blank"` on links (the window routes them). Covered by `tests/web/desktop.test.mjs`.
 
+The page gets one Tauri call, nothing else: when a warning appears while the window is not in front (a recording
+started while processing runs, the server is gone), it flashes the window in the taskbar
+(`requestUserAttention`). `withGlobalTauri` exposes `window.__TAURI__` and `src-tauri/capabilities/review-page.json`
+allows only that permission, only for pages from `http://127.0.0.1`.
+
 ## Build and run
 
 Needs Rust (rustup, MSVC toolchain), Node.js and WebView2 (part of Windows 11).

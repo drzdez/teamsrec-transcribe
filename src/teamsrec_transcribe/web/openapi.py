@@ -112,6 +112,13 @@ def spec(version: str) -> dict:
                                             tags=("server",))},
             "/api/jobs/continue": {"post": _op("Let the jobs run during the recording (answers the question)",
                                                tags=("server",))},
+            "/api/jobs/{job}/next": {"post": _op("Move a waiting job to the front: it runs right after the current one",
+                                                 tags=("server",), params=[{"name": "job", "in": "path", "required": True,
+                                                                             "schema": {"type": "integer"}}])},
+            "/api/jobs/{job}/now": {"post": _op("Run a waiting job at once: the current job stops and runs again from "
+                                                "the beginning right after it", tags=("server",),
+                                                params=[{"name": "job", "in": "path", "required": True,
+                                                         "schema": {"type": "integer"}}])},
             "/api/system/sound-settings": {"post": _op("Open the Windows sound dialog (mmsys.cpl)", tags=("settings",))},
             "/api/help/{doc}": {"get": _op("A guide: user-guide | install | privacy", tags=("server",), params=[
                 {"name": "doc", "in": "path", "required": True, "schema": {"enum": ["user-guide", "install", "privacy"]}}])},

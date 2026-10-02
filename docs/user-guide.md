@@ -326,9 +326,16 @@ do not look at old names. With unsaved changes the page does not reload by itsel
 reload. While teamsrec-capture records, a red dot "Nahrávání probíhá · …" shows next to the status line.
 
 When a recording starts while a transcription or minutes are being generated, the recorded sound can break up (the
-GPU and CPU are busy). The setting "Když začne nahrávání a běží zpracování" decides: ask (a red bar with **Přerušit**
-and **Nechat běžet**; stopped after 30 s without an answer, or at once when no page is open), stop at once, or let it
-run. A stopped job goes back to the front of the queue and finishes by itself after the recording.
+GPU and CPU are busy). The setting "Když začne nahrávání a běží zpracování" decides: ask (a yellow-black warning tape
+in the middle of the window with **Přerušit** and **Nechat běžet**; the desktop window also flashes in the taskbar;
+stopped after 10 s without an answer, or at once when no page is open), stop at once, or let it run. A stopped job
+goes back to the front of the queue and finishes by itself after the recording; a job asked for during a recording waits for its end too (unless the setting is to let it run). The same tape says when the page has
+lost its server (open the review page again from the tray icon).
+
+Jobs run one at a time, in order. A recording that waits in the queue shows its place ("Je ve frontě – 2. v pořadí")
+instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and
+**Zpracovat hned** (asks first: the running job stops, goes right behind this one and starts again from the
+beginning – what it had done is lost).
 
 Keys: Enter = next speaker, Esc = stop playback. An empty name means keeping the label.
 

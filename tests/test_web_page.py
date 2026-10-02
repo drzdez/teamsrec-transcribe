@@ -59,8 +59,9 @@ def _folder(out: Path) -> None:
 
 
 def _fake_process(cfg, rec: Recording, force: bool = False) -> None:
-    """Stands in for transcription: a short job that leaves a transcript, so the page sees busy -> done."""
-    time.sleep(0.6)
+    """Stands in for transcription: a short job that leaves a transcript, so the page sees busy -> done. A new
+    transcript from scratch takes longer, so a page test can act on the jobs queued behind it."""
+    time.sleep(2.0 if force else 0.6)
     rec.write_json(rec.transcript_path, {
         "format": 1, "language": "cs", "speaker_sources": ["diarization"], "speakers": ["SPEAKER_00"],
         "segments": [{"start": 0, "end": 5, "text": "Nová nahrávka je přepsaná.", "speaker": "SPEAKER_00"}]})

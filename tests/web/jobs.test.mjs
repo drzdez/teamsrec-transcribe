@@ -121,3 +121,4 @@ test("an armed action goes back by itself or with Zrušit, and does nothing", as
   await waitFor(() => b.textContent === "Uložit a přegenerovat zápis", "back after 6 s", 8000);
   assert.ok(!p.requests.some(r => r.startsWith("PUT ")), "nothing happened");
 });
+

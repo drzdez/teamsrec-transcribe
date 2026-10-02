@@ -30,6 +30,8 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   PUT    /api/secrets/{name} / DELETE                  {"value"} an API key into / out of the Credential Manager
   POST   /api/jobs/pause                               stop the running job for a recording (it resumes after it)
   POST   /api/jobs/continue                            let it run during the recording
+  POST   /api/jobs/{id}/next                           a waiting job runs right after the current one
+  POST   /api/jobs/{id}/now                            ... or at once: the current one stops and runs again after it
   POST   /api/system/sound-settings                    open the Windows sound dialog (devices, levels, the mic array)
   GET    /api/settings/models                          the model lists asked live (Ollama on this PC, Claude API)
   GET    /api/help/{doc}                               user-guide | install | privacy
@@ -91,7 +93,7 @@ CAPTURE_STATUS = Path(tempfile.gettempdir()) / "teamsrec-capture.json"  # writte
 CAPTURE_POLL_S = 2.0
 
 
-RECORDING_ASK_S = 30.0  # with when_recording = ask: no answer within this -> stop (the sound is breaking meanwhile)
+RECORDING_ASK_S = 10.0  # with when_recording = ask: no answer within this -> stop (the sound is breaking meanwhile)
 
 
 def run_cli(argv: list[str], on_proc, on_line) -> None:
@@ -669,9 +671,14 @@ class ReviewState:
             working = bool(self.current or self.jobs)
             mode = self.cfg.transcribe.when_recording
             pages = bool(self.subscribers)
-        if not working or mode == "continue":
+        if mode == "continue":
             if working:
                 self.event("zpracování běží dál i během nahrávání (nastavení: nechat běžet)", "info")
+            return
+        if not working:  # nothing to stop, but what is asked for during the recording waits for its end
+            with self.lock:
+                self.held = True
+            self._push_jobs()
             return
         if mode == "ask" and pages:
             with self.lock:
@@ -696,9 +703,38 @@ class ReviewState:
                 job["stopped"] = True
         if job and job.get("proc"):
             _kill_tree(job["proc"])
+        # Ollama keeps the summary model in VRAM for minutes after the last request (2026-10-02: 21 GB held
+        # through a call); let the GPU go to the meeting as well
+        threading.Thread(target=_unload_ollama, args=(self.cfg,), daemon=True).start()
         self.event("zpracování přerušeno kvůli nahrávání" + (f" ({why})" if why else "")
                    + ", doběhne samo po jeho konci", "info")
         self._push_jobs()
+
+    def move_job(self, job_id: int, now: bool = False) -> str:
+        """Move a waiting job to the front of the queue. now: also stop the running job; it goes back right behind
+        the moved one and starts again from the beginning (what it had done so far is lost). Returns what happened,
+        for the page."""
+        with self.lock:
+            job = next((j for j in self.jobs if j["id"] == job_id), None)
+            if job is None:
+                raise ValueError(f"job {job_id} is not waiting (it runs, finished, or never was)")
+            self.jobs.remove(job)
+            self.jobs.insert(0, job)
+            run = self.running
+            stoppable = bool(now and run and run.get("proc") and not run.get("stopped"))
+            if stoppable:
+                run["stopped"] = "preempted"
+            current = run["stem"] if run else ""
+        if stoppable:
+            _kill_tree(run["proc"])
+            text = f"{job['stem'] or job['name']}: zpracuje se hned, {current} se přerušilo a pokračuje po něm od začátku"
+        elif now and run:
+            text = f"{job['stem'] or job['name']}: zpracuje se hned po {current} (to se zastavit nedá)"
+        else:
+            text = f"{job['stem'] or job['name']}: zpracuje se jako další"
+        self.event(text, "info", job["stem"], job=job["id"])
+        self._push_jobs()
+        return text
 
     def keep_running(self) -> None:
         with self.lock:
@@ -773,10 +809,14 @@ class ReviewState:
             if isinstance(fn, list):  # a command: run in a child process that can be stopped
                 job["argv"], job["fn"] = fn, None
             self.jobs.append(job)
-            position = len(self.jobs) + (1 if self.busy else 0)
+            position = len(self.jobs) + (1 if self.current else 0)
             starts_worker = not self.busy
             self.busy = True
-        if not starts_worker:
+            held = self.held
+        if held:
+            self.event(f"{job['text']} – čeká na konec nahrávání" + (f" (před ní {position - 1})" if position > 1 else ""),
+                       "info", stem, job=job["id"])
+        elif not starts_worker:
             self.event(f"{job['text']} – ve frontě (před ní {position - 1})", "info", stem, job=job["id"])
         self._push_jobs()
         if starts_worker:
@@ -820,11 +860,16 @@ class ReviewState:
                     self.current = self.running = None
                     stopped = job.pop("stopped", False)
                     job.pop("proc", None)
-                    if stopped:  # stopped for a recording: back to the front, it runs again after it
+                    if stopped == "preempted":  # another job goes first, this one right behind it
+                        self.jobs.insert(1 if self.jobs else 0, job)
+                    elif stopped:  # stopped for a recording: back to the front, it runs again after it
                         self.jobs.insert(0, job)
                     if not self.jobs:
                         self.busy = False  # before the end event: the page sees it idle
-            if stopped:
+            if stopped == "preempted":
+                self.event(f"{job['text']} – přerušeno kvůli přednostnímu zpracování, poběží znovu po něm", "info",
+                           stem, job=job["id"])
+            elif stopped:
                 self.event(f"{job['text']} – přerušeno, pokračuje po konci nahrávání", "info", stem, job=job["id"])
             else:
                 self.event(outcome[0], outcome[1], stem, reload=True, job_end=True, job=job["id"])
@@ -917,6 +962,8 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", r"/api/system/sound-settings", "sound_settings"),
     ("POST", r"/api/jobs/pause", "jobs_pause"),
     ("POST", r"/api/jobs/continue", "jobs_continue"),
+    ("POST", r"/api/jobs/(?P<job>[^/]+)/next", "job_next"),
+    ("POST", r"/api/jobs/(?P<job>[^/]+)/now", "job_now"),
     ("GET", r"/api/help/(?P<doc>[^/]+)", "help"),
     ("GET", r"/api/status", "status"),
     ("GET", r"/api/events", "events"),
@@ -1183,6 +1230,12 @@ def _handler(state: ReviewState, server_ref: dict):
             state.keep_running()
             self._json({"ok": True, "jobs": state.jobs_state()})
 
+        def r_job_next(self, q, body, job):
+            self._json({"ok": True, "text": state.move_job(_job_id(job)), "jobs": state.jobs_state()})
+
+        def r_job_now(self, q, body, job):
+            self._json({"ok": True, "text": state.move_job(_job_id(job), now=True), "jobs": state.jobs_state()})
+
         def r_sound_settings(self, q, body):
             if os.name != "nt":
                 raise ValueError("the sound dialog is a Windows thing")
@@ -1267,10 +1320,38 @@ def running_instance(cfg: Config, lock: Path = LOCK) -> str | None:
     return None
 
 
+def _job_id(text: str) -> int:
+    if not text.isdigit():
+        raise ValueError(f"not a job id: {text}")
+    return int(text)
+
+
+def _unload_ollama(cfg: Config) -> None:
+    """Ask Ollama to drop the configured summary model from memory now (keep_alive 0). Quiet when Ollama is not
+    used or not running."""
+    sm = cfg.summarize
+    if sm.provider != "ollama" and not any(c.startswith("ollama:") for c in sm.compare):
+        return
+    body = json.dumps({"model": sm.model, "keep_alive": 0}).encode("utf-8")
+    req = urllib.request.Request(sm.ollama_url.rstrip("/") + "/api/generate", data=body,
+                                 headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=10).read()
+        log.info("ollama: %s unloaded for the recording", sm.model)
+    except Exception as e:  # not running, another model: nothing to free
+        log.debug("ollama unload: %s", e)
+
+
 def _idle_watchdog(state: ReviewState, server: ThreadingHTTPServer, idle_s: float) -> None:
-    """Stop the server once the page has gone quiet (tab closed). Never while a summary is being generated."""
+    """Stop the server once the page has gone quiet (tab closed). Never while a job runs, and never while a page
+    holds its event stream open: a hidden or minimized window throttles its timers, so its pings may stop for
+    minutes (2026-10-02: the desktop window lost its server and did not show new recordings). A stream whose page
+    is gone fails on the next keepalive and unsubscribes."""
     while True:
         time.sleep(min(5.0, idle_s / 3))
+        with state.lock:
+            if state.subscribers:
+                state.last_seen = time.monotonic()
         if state.last_seen and not state.busy and time.monotonic() - state.last_seen > idle_s:
             log.info("review page closed, stopping")
             threading.Thread(target=server.shutdown, daemon=True).start()

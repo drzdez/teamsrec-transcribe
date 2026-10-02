@@ -77,3 +77,24 @@ test("a new #stem from outside (a click on the Saved balloon) switches the open 
   p.window.dispatchEvent(new p.window.HashChangeEvent("hashchange"));
   await waitFor(() => p.$("pick").value === BOARD_OLD && p.$("title").value === "Archi board", "the other recording");
 });
+
+test("the list looks again when the window comes back, and a lost server is said out loud", async t => {
+  const p = await openPage(t);
+  const lists = () => p.requests.filter(r => r.startsWith("GET /api/recordings?")).length;
+  const before = lists();
+  Object.defineProperty(p.doc, "visibilityState", { value: "visible", configurable: true });
+  p.doc.dispatchEvent(new p.window.Event("visibilitychange"));
+  await waitFor(() => lists() > before, "a fresh recordings list");
+
+  const offline = p.$("offline");
+  assert.ok(offline.hidden);
+  p.window.setOnline(false);
+  assert.ok(offline.hidden, "one missed answer is not yet an outage");
+  p.window.setOnline(false);
+  assert.ok(!offline.hidden, "two are");
+  assert.match(offline.textContent, /přerušené/);
+  const now = lists();
+  p.window.setOnline(true);
+  assert.ok(offline.hidden);
+  await waitFor(() => lists() > now, "back online: what was missed comes in");
+});

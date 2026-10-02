@@ -106,7 +106,7 @@ SECTIONS: tuple[Section, ...] = (
               "Přepis i lokální zápis vytíží počítač a nahrávaný zvuk se pak může trhat. Přerušená úloha se vrátí "
               "do fronty a doběhne sama po konci nahrávání.",
               choices=("ask", "stop", "continue"),
-              labels=("Zeptat se (bez odpovědi do 30 s nebo bez otevřené stránky přerušit)",
+              labels=("Zeptat se (bez odpovědi do 10 s nebo bez otevřené stránky přerušit)",
                       "Hned přerušit, doběhne po nahrávání", "Nechat běžet (zvuk se může trhat)")),
     )),
     Section("transcribe", "Přepis", "Cloudové služby posílají zvuk mimo počítač (docs/privacy.md).", (

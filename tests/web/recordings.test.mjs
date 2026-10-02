@@ -117,3 +117,36 @@ test("presets for repeating meetings by their newest recording; processing state
   assert.equal(p.$("states").querySelectorAll("button.on").length, 1, "one state at a time");
   assert.equal(p.window.getComputedStyle(p.$("titles")).flexWrap, "nowrap", "one row that scrolls sideways");
 });
+
+test("the text filter finds dates as the list shows them, in Czech, and as a regexp", async t => {
+  const p = await openPage(t);
+  const filter = p.$("filter");
+  for (const q of ["2026-09-03", "2026-09-03 09:00", "3.9.2026", "2026-09-0[3]"]) {
+    p.input(filter, q);
+    assert.equal(p.$("filterCount").textContent, "1 z 3", q);
+  }
+  p.input(filter, "2026-09-0[34]");
+  assert.equal(p.$("filterCount").textContent, "2 z 3");
+  p.input(filter, "");
+});
+
+test("a third row filters by when: ranges fill od/do, typed dates work, a second click clears", async t => {
+  const p = await openPage(t);
+  const btn = key => p.doc.querySelector(`#dateBtns button[data-key="${key}"]`);
+  assert.deepEqual([...p.doc.querySelectorAll("#dateBtns button")].map(b => b.dataset.key),
+                   ["today", "yesterday", "week", "lastweek", "month", "lastmonth", "older"]);
+  assert.match(btn("lastweek").title, /^minulý týden: \d{4}-\d{2}-\d{2} – \d{4}-\d{2}-\d{2}/, "the full name in the tooltip");
+  btn("today").click();
+  assert.equal(p.$("dateFrom").value, p.$("dateTo").value, "today is one day");
+  assert.ok(btn("today").classList.contains("on"));
+  btn("today").click();
+  assert.equal(p.$("dateFrom").value, "", "a second click clears it");
+  assert.equal(p.$("filterCount").textContent, "");
+  p.change(p.$("dateFrom"), "2026-09-03");
+  p.change(p.$("dateTo"), "2026-09-04");
+  assert.equal(p.$("filterCount").textContent, "2 z 3", "od–do inclusive");
+  assert.ok(![...p.doc.querySelectorAll("#dateBtns button")].some(b => b.classList.contains("on")), "typed: no button");
+  p.change(p.$("dateFrom"), "");
+  p.change(p.$("dateTo"), "");
+  assert.equal(p.$("filterCount").textContent, "");
+});

@@ -296,8 +296,12 @@ recording in the list shows how far it got: `✓ hotovo` (transcript and minutes
 Under the selector are two rows. **Předvolby:** has a button for every meeting that repeats (with its count), the
 meeting with the newest recording first. **Stav:** filters by processing: `◐ nezpracované` (something is still
 missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), and `1× neopakující se` (meetings with a single
-recording). One click shows only those recordings and opens the newest; a second click clears the filter. What does
-not fit the width scrolls sideways – drag the row with the mouse, or use the wheel. When you type the filter by hand, the
+recording). **Kdy:** `dnes`, `včera`, `týden` (this week, from Monday), `‹ týden` (last week), `měsíc`, `‹ měsíc`,
+`« starší` (before last month) – the small number is how many recordings fall there, the tooltip gives the full name
+and the dates – and 📅 od – do for any range (both days included); a button fills od – do with its range, so it can be
+adjusted. One click shows only those recordings and opens the newest; a second click clears the filter. The rows
+combine (a meeting, a state and a time). What does not fit the width scrolls sideways – drag the row with the mouse,
+or use the wheel. The text filter also finds dates: `2026-09-03`, `3.9.2026`, or a regexp such as `2026-09-0[34]`. When you type the filter by hand, the
 open recording does not disappear from the list (it is marked as open, outside the filter), so the selection does not
 jump.
 

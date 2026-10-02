@@ -201,6 +201,13 @@
   .titles { display: flex; gap: 6px; flex-wrap: nowrap; flex-basis: 100%; min-width: 0; align-items: center;
             overflow-x: auto; scrollbar-width: thin; padding-bottom: 2px; cursor: grab; user-select: none; }
   .titles.dragging { cursor: grabbing; }
+  #dateBtns { display: contents; }
+  .titles button .cnt { font-size: 10px; opacity: .65; margin-left: 4px; vertical-align: 1px; }
+  .titles button.none { opacity: .45; }
+  .titles .dateRange { display: inline-flex; align-items: center; gap: 3px; flex: none; margin-left: 6px; font-size: 12px; }
+  .titles input[type=date] { font: inherit; font-size: 12px; padding: 1px 4px; cursor: text; background: transparent;
+                             color: var(--fg); border: 1px solid var(--line); border-radius: 999px; color-scheme: dark light; }
+  .titles .dateSep { color: var(--muted); }
   .titles .presetLabel { color: var(--muted); font-size: 12px; margin-right: 2px; flex: none; position: sticky; left: 0;
                          background: var(--card); padding-right: 4px; z-index: 1; }
   .titles button { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px;
@@ -237,6 +244,9 @@
   <span class="meta" id="scope" hidden>společný seznam lidí pro všechny nahrávky</span>
   <div id="titles" class="titles"><span class="presetLabel">Předvolby:</span></div>
   <div id="states" class="titles"><span class="presetLabel">Stav:</span></div>
+  <div id="dates" class="titles"><span class="presetLabel">Kdy:</span><span id="dateBtns"></span>
+    <span class="dateRange" title="vlastní rozsah: od – do (oba dny včetně); tlačítko vlevo ho vyplní za vás">📅
+      <input id="dateFrom" type="date" aria-label="od" title="od (včetně)"><span class="dateSep">–</span><input id="dateTo" type="date" aria-label="do" title="do (včetně)"></span></div>
   <div class="tabs">
     <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
@@ -392,6 +402,11 @@ function setBusy(/** @type {boolean} */ on) {
 window.addEventListener("beforeunload", ev => { if (busy || isDirty()) { ev.preventDefault(); ev.returnValue = ""; } });
 function fmtMin(/** @type {number} */ s) { return s >= 60 ? `${(s / 60).toFixed(1)} min` : `${Math.round(s)} s`; }
 function fmtDate(/** @type {string} */ iso) { return iso ? iso.replace("T", " ").slice(0, 16) : ""; }
+/** "2.10.2026" – how a date is written in Czech, so the filter finds it typed that way too */
+function czDate(/** @type {string} */ iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || "");
+  return m ? `${Number(m[3])}.${Number(m[2])}.${m[1]}` : "";
+}
 function emptyBox(/** @type {string} */ text) {
   const d = document.createElement("div"); d.className = "empty"; d.textContent = text; return d;
 }
@@ -465,7 +480,7 @@ function rowMatcher(/** @type {string} */ text) {
   try { re = new RegExp(q); } catch { re = null; }
   filterInput.classList.toggle("bad", re === null && /[[\](){}*+?|\\^$]/.test(q));
   return (/** @type {RecordingRow} */ r) => {
-    const hay = foldText(`${r.title} ${r.stem}`);
+    const hay = foldText(`${r.title} ${r.stem} ${fmtDate(r.start)} ${czDate(r.start)}`);
     return re ? re.test(hay) : hay.includes(q);
   };
 }
@@ -494,6 +509,73 @@ const STATE_FILTERS = [
   { key: "single", label: "1× neopakující se", title: "schůzky, které mají jen jednu nahrávku (opakované jsou v předvolbách)",
     test: (/** @type {RecordingRow} */ r) => titleCount(r) === 1 },
 ];
+// ---- the third row: when. A button fills od/do with its range (so it is visible and can be adjusted); the
+// list then filters by od/do. A second click on the active button clears it.
+const dateFrom = /** @type {HTMLInputElement} */ ($("dateFrom")), dateTo = /** @type {HTMLInputElement} */ ($("dateTo"));
+/** @type {string} */ let dateKey = "";
+function isoDay(/** @type {Date} */ d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+function addDays(/** @type {Date} */ d, /** @type {number} */ n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+/** the ranges as [from, to] day strings, both inclusive ("" = open); weeks start on Monday */
+function dateRanges(now = new Date()) {
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const monday = addDays(today, -((today.getDay() + 6) % 7));
+  const month = new Date(today.getFullYear(), today.getMonth(), 1);
+  const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  return [
+    // short labels (the row stays one line), the full name in the tooltip
+    { key: "today", label: "dnes", name: "dnes", from: isoDay(today), to: isoDay(today) },
+    { key: "yesterday", label: "včera", name: "včera", from: isoDay(addDays(today, -1)), to: isoDay(addDays(today, -1)) },
+    { key: "week", label: "týden", name: "tento týden", from: isoDay(monday), to: isoDay(today) },
+    { key: "lastweek", label: "‹ týden", name: "minulý týden", from: isoDay(addDays(monday, -7)), to: isoDay(addDays(monday, -1)) },
+    { key: "month", label: "měsíc", name: "tento měsíc", from: isoDay(month), to: isoDay(today) },
+    { key: "lastmonth", label: "‹ měsíc", name: "minulý měsíc", from: isoDay(lastMonth), to: isoDay(addDays(month, -1)) },
+    { key: "older", label: "« starší", name: "starší (před minulým měsícem)", from: "", to: isoDay(addDays(lastMonth, -1)) },
+  ];
+}
+function inRange(/** @type {RecordingRow} */ r, /** @type {string} */ from, /** @type {string} */ to) {
+  const day = String(r.start || "").slice(0, 10);
+  return !!day && (!from || day >= from) && (!to || day <= to);
+}
+function dateMatcher() {
+  const from = dateFrom.value, to = dateTo.value;
+  return (/** @type {RecordingRow} */ r) => (!from && !to) || inRange(r, from, to);
+}
+function renderDates() {
+  const box = $("dateBtns");
+  box.innerHTML = "";
+  for (const d of dateRanges()) {
+    const n = allRows.filter(r => inRange(r, d.from, d.to)).length;
+    const b = document.createElement("button");
+    b.type = "button";
+    b.dataset.key = d.key;
+    b.textContent = d.label;
+    const cnt = document.createElement("span"); cnt.className = "cnt"; cnt.textContent = String(n);
+    b.appendChild(cnt);
+    b.title = `${d.name}: ${d.from === d.to ? d.from : `${d.from || "…"} – ${d.to || "…"}`} (${n} nahrávek)`;
+    if (!n && dateKey !== d.key) b.classList.add("none");
+    if (dateKey === d.key) b.classList.add("on");
+    b.onclick = () => {
+      if (dragMoved) return;
+      const off = dateKey === d.key;
+      dateKey = off ? "" : d.key;
+      dateFrom.value = off ? "" : d.from;
+      dateTo.value = off ? "" : d.to;
+      const stem = renderPick(true);
+      if (stem && (!review || stem !== review.stem)) loadRecording(stem);
+    };
+    box.appendChild(b);
+  }
+}
+for (const input of [dateFrom, dateTo]) {
+  input.addEventListener("change", () => {
+    dateKey = "";  // typed by hand: no button is the range any more
+    const stem = renderPick(true);
+    if (stem && (!review || stem !== review.stem)) loadRecording(stem);
+  });
+}
+
 /** how many recordings share this recording's meeting title (the same grouping as the presets) */
 function titleCount(/** @type {RecordingRow} */ r) {
   const t = (r.title || "").trim();
@@ -503,7 +585,8 @@ function titleCount(/** @type {RecordingRow} */ r) {
 function renderPick(jump) {
   const match = rowMatcher(filterInput.value);
   const inState = STATE_FILTERS.find(f => f.key === stateFilter);
-  const shown = allRows.filter(r => match(r) && (!inState || inState.test(r)));
+  const inDates = dateMatcher();
+  const shown = allRows.filter(r => match(r) && (!inState || inState.test(r)) && inDates(r));
   const hits = shown.length;
   let current = pick.value;
   if (jump && hits && !shown.some(r => r.stem === current)) current = shown[0].stem;
@@ -520,7 +603,8 @@ function renderPick(jump) {
     pick.appendChild(o);
   }
   if (current && shown.some(r => r.stem === current)) pick.value = current;
-  $("filterCount").textContent = filterInput.value.trim() || stateFilter ? `${hits} z ${allRows.length}` : "";
+  $("filterCount").textContent = filterInput.value.trim() || stateFilter || dateFrom.value || dateTo.value
+    ? `${hits} z ${allRows.length}` : "";
   renderTitles();
   return pick.value;
 }
@@ -562,6 +646,7 @@ function renderTitles() {
     states.appendChild(b);
   }
   states.hidden = states.childElementCount < 2;
+  renderDates();
   box.hidden = !top.length;
   for (const [title, n] of top) {
     const b = document.createElement("button");
@@ -581,10 +666,11 @@ function renderTitles() {
 
 /** drag a preset row sideways with the mouse (touch and the wheel scroll it natively); a drag is not a click */
 let dragMoved = false;
-for (const row of [$("titles"), $("states")]) {
+for (const row of [$("titles"), $("states"), $("dates")]) {
   let startX = 0, startScroll = 0, down = false;
   row.addEventListener("pointerdown", ev => {
     if (ev.pointerType !== "mouse" || ev.button !== 0) return;
+    if (/** @type {HTMLElement} */ (ev.target).closest("input")) return;  // the date fields take their own clicks
     down = true; dragMoved = false; startX = ev.clientX; startScroll = row.scrollLeft;
   });
   row.addEventListener("pointermove", ev => {

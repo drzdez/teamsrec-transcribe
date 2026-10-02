@@ -210,9 +210,11 @@
   .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
   #filter { min-width: 160px; }
   #filter.bad { border-color: var(--warn); }
-  #clearFilters { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px;
-                  padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
-  #clearFilters:hover { color: var(--fg); border-color: var(--accent); }
+  /* stands out while any filter is on: the list is not complete */
+  #clearFilters { border: 1px solid transparent; background: var(--warn); color: #111111; border-radius: 999px;
+                  padding: 3px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
+                  box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent); }
+  #clearFilters:hover { filter: brightness(1.1); }
   /* The filter rows share a line with the tabs: the tabs sit at the right, their top edge with the first row's; when
      both do not fit, the tabs wrap below, still at the right. */
   /* second header row: the filter rows and, at the right, the tabs with their top edge on the first row's; when both do

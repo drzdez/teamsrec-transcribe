@@ -536,9 +536,10 @@ const STATE_FILTERS = [
     test: (/** @type {RecordingRow} */ r) => !!r.transcribed && !!r.unresolved },
   { key: "queued", label: "⏳ zpracovává se nebo ve frontě", title: "nahrávky, které se právě zpracovávají nebo čekají ve frontě",
     test: (/** @type {RecordingRow} */ r) => !!queuePlace(r.stem) },
-  { key: "single", label: "1× neopakující se", title: "schůzky, které mají jen jednu nahrávku (opakované jsou v předvolbách)",
-    test: (/** @type {RecordingRow} */ r) => titleCount(r) === 1 },
 ];
+/** "1×" in the presets row: only meetings with a single recording (the repeating ones have their own presets).
+ * It combines with the state and time rows; a meeting preset and it exclude each other. */
+let singleOnly = false;
 // ---- the third row: when. A button fills od/do with its range (so it is visible and can be adjusted); the
 // list then filters by od/do. A second click on the active button clears it.
 const dateFrom = /** @type {HTMLInputElement} */ ($("dateFrom")), dateTo = /** @type {HTMLInputElement} */ ($("dateTo"));
@@ -616,7 +617,8 @@ function renderPick(jump) {
   const match = rowMatcher(filterInput.value);
   const inState = STATE_FILTERS.find(f => f.key === stateFilter);
   const inDates = dateMatcher();
-  const shown = allRows.filter(r => match(r) && (!inState || inState.test(r)) && inDates(r));
+  const shown = allRows.filter(r => match(r) && (!inState || inState.test(r)) && inDates(r)
+                                && (!singleOnly || titleCount(r) === 1));
   const hits = shown.length;
   let current = pick.value;
   if (jump && hits && !shown.some(r => r.stem === current)) current = shown[0].stem;
@@ -633,7 +635,7 @@ function renderPick(jump) {
     pick.appendChild(o);
   }
   if (current && shown.some(r => r.stem === current)) pick.value = current;
-  $("filterCount").textContent = filterInput.value.trim() || stateFilter || dateFrom.value || dateTo.value
+  $("filterCount").textContent = filterInput.value.trim() || stateFilter || singleOnly || dateFrom.value || dateTo.value
     ? `${hits} z ${allRows.length}` : "";
   renderTitles();
   return pick.value;
@@ -657,6 +659,23 @@ function renderTitles() {
     .sort((a, b) => String(newest.get(b[0])).localeCompare(String(newest.get(a[0]))) || a[0].localeCompare(b[0], "cs"));
   const active = foldText(filterInput.value.trim());
   box.innerHTML = '<span class="presetLabel">Předvolby:</span>';
+  const singles = allRows.filter(r => titleCount(r) === 1).length;
+  if (singles || singleOnly) {
+    const one = document.createElement("button");
+    one.type = "button";
+    one.id = "singleBtn";
+    one.textContent = `1× (${singles})`;
+    one.title = "schůzky, které mají jen jednu nahrávku (opakované jsou v dalších předvolbách)";
+    if (singleOnly) one.classList.add("on");
+    one.onclick = () => {
+      if (dragMoved) return;
+      singleOnly = !singleOnly;
+      if (singleOnly && top.some(([t]) => foldText(t) === active)) filterInput.value = "";  // a meeting preset repeats
+      const stem = renderPick(true);
+      if (stem && (!review || stem !== review.stem)) loadRecording(stem);
+    };
+    box.appendChild(one);
+  }
   const states = $("states");
   states.innerHTML = '<span class="presetLabel">Stav:</span>';
   for (const f of STATE_FILTERS) {
@@ -677,7 +696,7 @@ function renderTitles() {
   }
   states.hidden = states.childElementCount < 2;
   renderDates();
-  box.hidden = !top.length;
+  box.hidden = !top.length && !singles && !singleOnly;
   for (const [title, n] of top) {
     const b = document.createElement("button");
     b.type = "button";
@@ -687,6 +706,7 @@ function renderTitles() {
     b.onclick = () => {
       if (dragMoved) return;
       filterInput.value = b.classList.contains("on") ? "" : title;
+      singleOnly = false;  // a repeating meeting is not a one-off
       const stem = renderPick(true);  // a preset shows its own recordings, so open the newest one
       if (stem && (!review || stem !== review.stem)) loadRecording(stem);
     };

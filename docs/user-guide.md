@@ -293,10 +293,9 @@ one — `^archi` only titles starting with archi, `board|standup` both, `2026-09
 recording in the list shows how far it got: `✓ hotovo` (transcript and minutes, everybody named), `◐ bez zápisu`,
 `◐ 2 nepojmenovaných` (or both) and `○ bez přepisu`.
 
-Under the selector are two rows. **Předvolby:** has a button for every meeting that repeats (with its count), the
-meeting with the newest recording first. **Stav:** filters by processing: `◐ nezpracované` (something is still
-missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), `⏳ zpracovává se nebo ve frontě`, and `1× neopakující se` (meetings with a single
-recording). **Kdy:** `dnes`, `včera`, `týden` (this week, from Monday), `‹ týden` (last week), `měsíc`, `‹ měsíc`,
+Under the selector are the filter rows. **Předvolby:** starts with `1×` (meetings with a single recording), then a
+button for every meeting that repeats (with its count), the meeting with the newest recording first. **Stav:** filters by processing: `◐ nezpracované` (something is still
+missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), and `⏳ zpracovává se nebo ve frontě`. **Kdy:** `dnes`, `včera`, `týden` (this week, from Monday), `‹ týden` (last week), `měsíc`, `‹ měsíc`,
 `« starší` (before last month) – the small number is how many recordings fall there, the tooltip gives the full name
 and the dates – and 📅 od – do for any range (both days included); a button fills od – do with its range, so it can be
 adjusted. One click shows only those recordings and opens the newest; a second click clears the filter. The rows

@@ -23,6 +23,12 @@
   header select { max-width: 40vw; }
   header input#title { width: 26vw; min-width: 200px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; font-weight: 600; }
   header input#title:focus { outline: 2px solid var(--accent); border-color: transparent; }
+  header .titleBox { display: inline-flex; gap: 6px; align-items: center; }
+  header .titleBox[hidden] { display: none; }
+  #saveTitle { padding: 6px 12px; border-radius: 8px; border: 1px solid var(--line); background: transparent; color: var(--fg);
+               font: inherit; cursor: pointer; }
+  #saveTitle:not(:disabled) { background: var(--accent); color: var(--accent-fg); border-color: transparent; font-weight: 600; }
+  #saveTitle:disabled { opacity: .45; cursor: default; }
   #status.busy { color: var(--warn); font-weight: 600; }
   #jobBadge { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--warn); white-space: nowrap;
               max-width: 52vw; overflow: hidden; text-overflow: ellipsis; }
@@ -130,7 +136,7 @@
   main.doc a { color: var(--accent); }
   #dirty.changed { color: var(--warn); font-weight: 600; }
   #dirty.clean { color: var(--ok); }
-  .tabs { display: flex; gap: 2px; margin-left: auto; }
+  .tabs { display: flex; gap: 2px; margin-left: auto; align-self: flex-start; }
   .tabs button { border: 1px solid var(--line); background: transparent; color: var(--fg); padding: 5px 12px; cursor: pointer; font: inherit; }
   .tabs button:first-child { border-radius: 8px 0 0 8px; } .tabs button:last-child { border-radius: 0 8px 8px 0; }
   .tabs button.active { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
@@ -197,6 +203,13 @@
   .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
   #filter { min-width: 160px; }
   #filter.bad { border-color: var(--warn); }
+  /* The filter rows share a line with the tabs: the tabs sit at the right, their top edge with the first row's; when
+     both do not fit, the tabs wrap below, still at the right. */
+  /* second header row: the filter rows and, at the right, the tabs with their top edge on the first row's; when both do
+     not fit, the tabs wrap below, still at the right */
+  #headRow2 { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: flex-start; }
+  #filterRows { display: flex; flex-direction: column; gap: 8px; flex: 1 1 560px; min-width: 0; }
+  #filterRows .titles { flex-basis: auto; }
   /* one row each, never wrapping: what does not fit scrolls sideways (wheel, touch, or drag with the mouse) */
   .titles { display: flex; gap: 6px; flex-wrap: nowrap; flex-basis: 100%; min-width: 0; align-items: center;
             overflow-x: auto; scrollbar-width: thin; padding-bottom: 2px; cursor: grab; user-select: none; }
@@ -239,19 +252,23 @@
   <input id="filter" type="search" placeholder="filtr (text nebo regexp)"
          title="Omezí seznam nahrávek: píšete text (nezáleží na velikosti písmen ani diakritice) nebo regulární výraz, třeba ^archi|standup$">
   <span class="meta" id="filterCount"></span>
-  <input id="title" type="text" placeholder="název schůzky" title="název schůzky – uloží se tlačítkem Uložit; složka i soubory nahrávky se přejmenují podle něj">
+  <span class="titleBox"><input id="title" type="text" placeholder="název schůzky" title="název schůzky – uloží ho tlačítko vedle (nebo Uložit dole); složka i soubory nahrávky se přejmenují podle něj"><button id="saveTitle" type="button" disabled title="uložit jen název schůzky (složka a soubory se přejmenují); jména mluvčích zůstanou, jak jsou">Uložit</button></span>
   <span class="meta" id="meta"></span>
   <span class="meta" id="scope" hidden>společný seznam lidí pro všechny nahrávky</span>
+  <div id="headRow2">
+  <div id="filterRows">
   <div id="titles" class="titles"><span class="presetLabel">Předvolby:</span></div>
   <div id="states" class="titles"><span class="presetLabel">Stav:</span></div>
   <div id="dates" class="titles"><span class="presetLabel">Kdy:</span><span id="dateBtns"></span>
     <span class="dateRange" title="vlastní rozsah: od – do (oba dny včetně); tlačítko vlevo ho vyplní za vás">📅
       <input id="dateFrom" type="date" aria-label="od" title="od (včetně)"><span class="dateSep">–</span><input id="dateTo" type="date" aria-label="do" title="do (včetně)"></span></div>
+  </div>
   <div class="tabs">
     <button id="tabSpeakers" class="active" type="button">Schůzka</button>
     <button id="tabPeople" type="button">Lidé (společné)</button>
     <button id="settingsBtn" type="button" title="nastavení přepisu, zápisu, nahrávání a klíče API (sdílený teamsrec.toml)">Nastavení</button>
     <button id="helpBtn" type="button" title="uživatelská příručka, instalace a konfigurace, soukromí">Nápověda</button>
+  </div>
   </div>
 </header>
 <nav id="subtabs" class="subtabs">
@@ -355,6 +372,8 @@ function snapshot() { return JSON.stringify({ names: collectNames(), title: titl
 function markClean() { baseline = snapshot(); updateDirty(); }
 function isDirty() { return baseline !== "" && snapshot() !== baseline; }
 function updateDirty() {
+  const st = /** @type {HTMLButtonElement} */ ($("saveTitle"));
+  st.disabled = !review || !titleInput.value.trim() || titleInput.value.trim() === (review.title || "").trim();
   const d = $("dirty");
   if (!review) { d.textContent = ""; d.className = "meta"; return; }
   if (!review.transcribed) {  // only the title can change before the transcript exists
@@ -1270,6 +1289,28 @@ async function save(/** @type {boolean} */ withSummary) {
   }
 }
 
+/** The title only: the recording is renamed (folder and files); unsaved names on the cards stay where they are. */
+async function saveTitle() {
+  if (!review) return;
+  const btn = /** @type {HTMLButtonElement} */ ($("saveTitle"));
+  btn.disabled = true;
+  try {
+    const r = await api(recUrl(review.stem, "title"), send("PUT", { title: titleInput.value }));
+    const names = JSON.parse(baseline || "{}").names;  // what was saved before: name edits stay unsaved
+    review.stem = r.stem; review.title = r.title;
+    titleInput.value = r.title;
+    location.hash = r.stem;
+    baseline = JSON.stringify({ names: names === undefined ? collectNames() : names, title: r.title.trim() });
+    await loadList(); pick.value = r.stem;
+    updateDirty();
+    setStatus(`název uložen: ${r.title}`, "ok");
+  } catch (e) { setStatus(String(e), "err"); updateDirty(); }
+}
+$("saveTitle").onclick = () => { saveTitle(); };
+titleInput.addEventListener("keydown", ev => {
+  if (ev.key === "Enter" && !(/** @type {HTMLButtonElement} */ ($("saveTitle"))).disabled) { ev.preventDefault(); saveTitle(); }
+});
+
 async function waitForSummary(/** @type {number} */ job) {
   setStatus("zápis se generuje na serveru (lokální model, 1–3 min); stránku můžete obnovit i zavřít", "busy");
   const error = await waitForJob(job);
@@ -1567,7 +1608,7 @@ const docMain = $("docMain"), docPick = /** @type {HTMLSelectElement} */ ($("doc
 function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   const sp = which === "speakers";
   peopleMain.hidden = sp; $("subtabs").hidden = !sp;
-  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("scope").hidden = sp;  // the people registry is shared
+  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("saveTitle").hidden = !sp; $("scope").hidden = sp;  // the people registry is shared
   $("peopleButtons").hidden = sp;
   $("tabSpeakers").classList.toggle("active", sp); $("tabPeople").classList.toggle("active", !sp);
   setStatus("");

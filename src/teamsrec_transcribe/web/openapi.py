@@ -112,6 +112,9 @@ def spec(version: str) -> dict:
                                             tags=("server",))},
             "/api/jobs/continue": {"post": _op("Let the jobs run during the recording (answers the question)",
                                                tags=("server",))},
+            "/api/recordings/{stem}/title": {"put": _op(
+                "Rename the meeting only (folder and files follow); returns the new stem", params=[STEM],
+                body=_obj(title=s))},
             "/api/jobs/{job}/next": {"post": _op("Move a waiting job to the front: it runs right after the current one",
                                                  tags=("server",), params=[{"name": "job", "in": "path", "required": True,
                                                                              "schema": {"type": "integer"}}])},

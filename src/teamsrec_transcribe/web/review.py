@@ -11,6 +11,7 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   GET    /api/recordings/{stem}/clip?start=&end=       a WAV clip cut from the 16 kHz mix (max CLIP_MAX_S seconds)
   GET    /api/recordings/{stem}/docs/{file}            a transcript .txt or a .summary*.md of the recording
   PUT    /api/recordings/{stem}/names                  {"names": {label: name|fields}, "title"?, "summary"?}
+  PUT    /api/recordings/{stem}/title                  {"title"} rename the meeting only (folder and files follow)
   POST   /api/recordings/{stem}/process                {"force"?} transcribe + export + summarize in the background
   POST   /api/recordings/{stem}/recognize              match unnamed labels against the voice prints
   POST   /api/recordings/{stem}/summaries              {"provider", "model"} a summary with that model, in the background
@@ -938,6 +939,7 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("GET", rf"/api/recordings/{STEM_RE_PART}/clip", "clip"),
     ("GET", rf"/api/recordings/{STEM_RE_PART}/docs/(?P<file>[^/]+)", "doc"),
     ("PUT", rf"/api/recordings/{STEM_RE_PART}/names", "save_names"),
+    ("PUT", rf"/api/recordings/{STEM_RE_PART}/title", "save_title"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/process", "process"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/recognize", "recognize"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/summaries", "summarize_as"),
@@ -1091,6 +1093,14 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json({"ok": True, "written": written, "stem": rec.stem, "title": rec.title,
                         "job": job[0] if job else None, "position": job[1] if job else None,
                         "status": state.status()})
+
+        def r_save_title(self, q, body, stem):
+            title = str(body.get("title") or "").strip()
+            if not title:
+                raise ValueError("title: an empty title is not a title")
+            rec = save_title(state.cfg, self._recording(stem), title)
+            state.event(f"{rec.stem}: název uložen („{rec.title}“)", "ok", rec.stem)
+            self._json({"ok": True, "stem": rec.stem, "title": rec.title})
 
         def r_process(self, q, body, stem):
             job, position = state.run_process(self._recording(stem), force=bool(body.get("force")))

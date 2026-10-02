@@ -179,6 +179,8 @@
   button.link.cancel { margin-left: 8px; font-size: 13px; color: var(--muted); }
   button.primary-btn { padding: 10px 18px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.primary-btn:disabled { opacity: .5; cursor: default; }
+  .voiceCell { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+  .voiceCell .prints { min-width: 2.2ch; text-align: right; font-variant-numeric: tabular-nums; color: var(--muted); }
   .queueActs { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
   .queueActs button { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
                       color: var(--fg); font: inherit; cursor: pointer; }
@@ -1525,16 +1527,21 @@ function personRow(p) {
   const al = document.createElement("input"); al.type = "text"; al.value = (p.aliases || []).join(", "); al.placeholder = "John Smith (NG)"; al.dataset.key = "aliases";
   tdAl.appendChild(al); tr.appendChild(tdAl);
   const tdPr = document.createElement("td");
+  const voice = document.createElement("span"); voice.className = "voiceCell";  // one line, the same columns in every row
   const ok = document.createElement("input"); ok.type = "checkbox"; ok.dataset.key = "voiceprint";
   ok.checked = p.voiceprint !== false;
   ok.title = "poznávat po hlase (ukládat hlasový otisk); zrušení smaže jeho otisky při Uložit lidi";
-  tdPr.appendChild(ok);
+  voice.appendChild(ok);
+  const count = document.createElement("span"); count.className = "prints";
+  count.textContent = p.id ? String(p.prints || 0) : ""; count.title = "počet uložených hlasových otisků";
+  voice.appendChild(count);
   if (p.id) {
     const b = document.createElement("button"); b.type = "button"; b.className = "link";
-    b.textContent = ` ${p.prints || 0} · detail`; b.title = "uložené hlasové otisky a ukázky";
+    b.textContent = "detail"; b.title = "uložené hlasové otisky a ukázky";
     b.onclick = () => openPerson(p.id);
-    tdPr.appendChild(b);
+    voice.appendChild(b);
   }
+  tdPr.appendChild(voice);
   tr.appendChild(tdPr);
   const tdMerge = document.createElement("td");
   if (p.id) {
@@ -1674,7 +1681,10 @@ const docMain = $("docMain"), docPick = /** @type {HTMLSelectElement} */ ($("doc
 function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   const sp = which === "speakers";
   peopleMain.hidden = sp; $("subtabs").hidden = !sp;
-  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("saveTitle").hidden = !sp; $("scope").hidden = sp;  // the people registry is shared
+  pick.hidden = !sp; meta.hidden = !sp; titleInput.hidden = !sp; $("saveTitle").hidden = !sp; $("scope").hidden = sp;
+  // the recording filters mean nothing for the shared people list
+  $("filterRows").hidden = !sp; filterInput.hidden = !sp; $("filterCount").hidden = !sp;
+  if (!sp) $("clearFilters").hidden = true; else renderPick();  // the people registry is shared
   $("peopleButtons").hidden = sp;
   $("tabSpeakers").classList.toggle("active", sp); $("tabPeople").classList.toggle("active", !sp);
   setStatus("");

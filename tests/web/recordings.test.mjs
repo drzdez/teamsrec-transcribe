@@ -155,3 +155,21 @@ test("a third row filters by when: ranges fill od/do, typed dates work, a second
   p.change(p.$("dateTo"), "");
   assert.equal(p.$("filterCount").textContent, "");
 });
+
+test("one button next to the count clears every filter, the open recording stays", async t => {
+  const p = await openPage(t);
+  const clear = p.$("clearFilters");
+  assert.ok(clear.hidden, "nothing to clear");
+  p.input(p.$("filter"), "archi");
+  [...p.doc.querySelectorAll("#states button")].find(b => b.textContent.startsWith("◐ nezpracované")).click();
+  p.change(p.$("dateFrom"), "2026-09-01");
+  assert.ok(!clear.hidden);
+  const open = p.$("pick").value;
+  clear.click();
+  assert.equal(p.$("filter").value, "");
+  assert.equal(p.$("dateFrom").value, "");
+  assert.equal(p.doc.querySelectorAll("#filterRows button.on").length, 0, "no preset, state or time left on");
+  assert.equal(p.$("filterCount").textContent, "");
+  assert.ok(clear.hidden);
+  assert.equal(p.$("pick").value, open, "what is open stays open");
+});

@@ -210,6 +210,9 @@
   .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
   #filter { min-width: 160px; }
   #filter.bad { border-color: var(--warn); }
+  #clearFilters { border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: 999px;
+                  padding: 2px 10px; font: inherit; font-size: 12px; cursor: pointer; white-space: nowrap; }
+  #clearFilters:hover { color: var(--fg); border-color: var(--accent); }
   /* The filter rows share a line with the tabs: the tabs sit at the right, their top edge with the first row's; when
      both do not fit, the tabs wrap below, still at the right. */
   /* second header row: the filter rows and, at the right, the tabs with their top edge on the first row's; when both do
@@ -259,6 +262,7 @@
   <input id="filter" type="search" placeholder="filtr (text nebo regexp)"
          title="Omezí seznam nahrávek: píšete text (nezáleží na velikosti písmen ani diakritice) nebo regulární výraz, třeba ^archi|standup$">
   <span class="meta" id="filterCount"></span>
+  <button id="clearFilters" type="button" hidden title="smazat všechny filtry: text, předvolbu, stav i datum">✕ smazat filtry</button>
   <span class="titleBox"><input id="title" type="text" placeholder="název schůzky" title="název schůzky – uloží ho tlačítko vedle (nebo Uložit dole); složka i soubory nahrávky se přejmenují podle něj"><button id="saveTitle" type="button" disabled title="uložit jen název schůzky (složka a soubory se přejmenují); jména mluvčích zůstanou, jak jsou">Uložit</button></span>
   <span class="meta" id="meta"></span>
   <span class="meta" id="scope" hidden>společný seznam lidí pro všechny nahrávky</span>
@@ -607,6 +611,15 @@ for (const input of [dateFrom, dateTo]) {
   });
 }
 
+/** next to the count "N z M": every filter off at once (text, preset, 1×, state, dates); what is open stays open */
+$("clearFilters").onclick = () => {
+  filterInput.value = "";
+  stateFilter = ""; singleOnly = false;
+  dateKey = ""; dateFrom.value = ""; dateTo.value = "";
+  filterInput.classList.remove("bad");
+  renderPick();
+};
+
 /** how many recordings share this recording's meeting title (the same grouping as the presets) */
 function titleCount(/** @type {RecordingRow} */ r) {
   const t = (r.title || "").trim();
@@ -635,8 +648,9 @@ function renderPick(jump) {
     pick.appendChild(o);
   }
   if (current && shown.some(r => r.stem === current)) pick.value = current;
-  $("filterCount").textContent = filterInput.value.trim() || stateFilter || singleOnly || dateFrom.value || dateTo.value
-    ? `${hits} z ${allRows.length}` : "";
+  const filtered = !!(filterInput.value.trim() || stateFilter || singleOnly || dateFrom.value || dateTo.value);
+  $("filterCount").textContent = filtered ? `${hits} z ${allRows.length}` : "";
+  $("clearFilters").hidden = !filtered;
   renderTitles();
   return pick.value;
 }
@@ -743,8 +757,12 @@ for (const row of [$("titles"), $("states"), $("dates")]) {
   }, { passive: false });
 }
 
+let listSeq = 0;
 async function loadList() {
-  allRows = await api("/api/recordings?limit=500");
+  const seq = ++listSeq;
+  const rows = await api("/api/recordings?limit=500");
+  if (seq !== listSeq) return;  // a newer request is on its way (e.g. after a rename): never go back to older rows
+  allRows = rows;
   const wanted = location.hash.slice(1);
   if (wanted && allRows.some(r => r.stem === wanted)) pick.value = wanted;
   renderPick();

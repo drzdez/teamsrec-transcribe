@@ -299,7 +299,7 @@ missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), and `�
 `« starší` (before last month) – the small number is how many recordings fall there, the tooltip gives the full name
 and the dates – and 📅 od – do for any range (both days included); a button fills od – do with its range, so it can be
 adjusted. One click shows only those recordings and opens the newest; a second click clears the filter. The rows
-combine (a meeting, a state and a time). What does not fit the width scrolls sideways – drag the row with the mouse,
+combine (a meeting, a state and a time); **✕ smazat filtry** next to the count "N z M" turns them all off at once. What does not fit the width scrolls sideways – drag the row with the mouse,
 or use the wheel. The text filter also finds dates: `2026-09-03`, `3.9.2026`, or a regexp such as `2026-09-0[34]`. When you type the filter by hand, the
 open recording does not disappear from the list (it is marked as open, outside the filter), so the selection does not
 jump.

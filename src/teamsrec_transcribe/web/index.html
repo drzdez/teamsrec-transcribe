@@ -179,6 +179,13 @@
   button.link.cancel { margin-left: 8px; font-size: 13px; color: var(--muted); }
   button.primary-btn { padding: 10px 18px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.primary-btn:disabled { opacity: .5; cursor: default; }
+  .queueActs { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-top: 14px; }
+  .queueActs button { padding: 8px 16px; border-radius: 8px; border: 1px solid var(--line); background: transparent;
+                      color: var(--fg); font: inherit; cursor: pointer; }
+  .queueActs button:hover { border-color: var(--accent); color: var(--accent); }
+  .queueActs button.danger { color: var(--err); border-color: color-mix(in srgb, var(--err) 45%, transparent); }
+  .queueActs button.danger:hover { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); }
+  .queueActs button:disabled { opacity: .5; cursor: default; }
   .empty p { margin: 6px 0; }
   .toolbar { margin: 4px 0 10px; }
   /* under the sticky header: the sub-tabs (and the summary tabs) stay in reach while the text scrolls */
@@ -758,7 +765,8 @@ async function loadRecording(/** @type {string} */ stem) {
 function queuePlace(/** @type {string} */ stem) {
   const j = jobsState;
   if (!j) return null;
-  if (j.current && j.current.stem === stem) return { running: true, since: j.current.started || "", held: false };
+  if (j.current && j.current.stem === stem)
+    return { running: true, id: j.current.id, since: j.current.started || "", held: false };
   const at = (j.queue || []).findIndex((/** @type {any} */ q) => q.stem === stem);
   return at < 0 ? null : { running: false, id: j.queue[at].id, place: at + 1, held: !!j.held,
                            before: j.current ? j.current.stem : "" };
@@ -787,8 +795,8 @@ function renderNotTranscribed(r) {
       : `<p class="queued">⏳ Je ve frontě na zpracování – <b>${q.place}. v pořadí</b>.` +
         (q.held ? " Čeká na konec nahrávání." : q.before ? ` Teď běží ${escapeHtml(q.before)}.` : "") + `</p>`) +
       `<p>Až doběhne, přepis se tu ukáže sám.</p>`;
+    const row = document.createElement("p"); row.className = "queueActs";
     if (!q.running) {
-      const row = document.createElement("p"); row.className = "queueActs";
       if (q.place > 1) {
         const next = document.createElement("button"); next.type = "button";
         next.textContent = "Zpracovat jako další";
@@ -805,8 +813,18 @@ function renderNotTranscribed(r) {
                      `${q.before} se přeruší a poběží znovu od začátku – dosavadní práce se zahodí. Potvrďte druhým kliknutím, nebo Zrušit`);
         row.appendChild(now);
       }
-      if (row.childElementCount) box.appendChild(row);
     }
+    // cancel: a waiting job goes out of the queue at once; the running one asks first (its work so far is lost)
+    const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "danger";
+    cancel.textContent = "Zrušit zpracování";
+    cancel.onclick = () => moveJob(q.id, "cancel", cancel);
+    if (q.running) {
+      cancel.title = "Zastaví zpracování; co dosud udělalo, se zahodí. Nahrávku jde zpracovat znovu.";
+      confirmFirst(cancel, "Potvrdit: zastavit zpracování",
+                   "zpracování se zastaví a dosavadní práce se zahodí – potvrďte druhým kliknutím, nebo Zrušit");
+    } else cancel.title = "Vyřadí nahrávku z fronty; zpracovat ji jde znovu kdykoli";
+    row.appendChild(cancel);
+    box.appendChild(row);
     main.appendChild(box);
     return;
   }
@@ -839,7 +857,9 @@ async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonEle
   catch (e) { error = String(e); }
   finally { setBusy(false); }
   await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
+  const end = finishedJobs.get(r.job);
   if (error) setStatus(`zpracování selhalo: ${error}`, "err");
+  else if (end && /zrušeno/.test(end.text)) setStatus(end.text, "ok");  // cancelled from the page
   else setStatus("hotovo: přepis, titulky i zápis", "ok");
 }
 

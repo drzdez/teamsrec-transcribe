@@ -23,3 +23,4 @@ test("a waiting recording can go next, or right now (asks first: the running job
   assert.ok(!p.requests.some(r => r.endsWith("/now")), "the first click only asks");
   await waitFor(() => p.doc.querySelector(".card"), "its transcript in the end");
 });
+

@@ -341,7 +341,8 @@ lost its server (open the review page again from the tray icon).
 Jobs run one at a time, in order. A recording that waits in the queue shows its place ("Je ve frontě – 2. v pořadí")
 instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and
 **Zpracovat hned** (asks first: the running job stops, goes right behind this one and starts again from the
-beginning – what it had done is lost).
+beginning – what it had done is lost). **Zrušit zpracování** takes a waiting recording out of the queue at once; on the one being
+processed it asks first and stops it for good (its work so far is lost; the recording can be processed again).
 
 Keys: Enter = next speaker, Esc = stop playback. An empty name means keeping the label.
 

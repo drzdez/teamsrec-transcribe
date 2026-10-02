@@ -1605,6 +1605,42 @@ def test_a_job_asked_for_during_a_recording_waits_for_its_end(tmp_path, monkeypa
     assert runs == ["s1", "s2"], "continue: it runs during the recording"
 
 
+def test_cancel_drops_a_waiting_job_and_stops_the_running_one_for_good(tmp_path, monkeypatch):
+    import subprocess as _sp
+    import sys as _sys
+    import time as _time
+    from teamsrec_transcribe.web import review as rv
+    runs = []
+
+    def cli(argv, on_proc, on_line):
+        runs.append(argv[-1])
+        p = _sp.Popen([_sys.executable, "-c", "import time; time.sleep(30)" if argv[-1] == "a" else "pass"])
+        on_proc(p)
+        if p.wait() != 0:
+            raise RuntimeError("killed")
+    monkeypatch.setattr(rv, "run_cli", cli)
+    state = rv.ReviewState(Config(out_dir=tmp_path))
+    ids = {s: state.run_job("process", ["run-job", "process", s], "zpracováno", s)[0] for s in ("a", "b", "c")}
+    for _ in range(200):
+        if state.running and state.running.get("proc"):
+            break
+        _time.sleep(0.02)
+    assert "vyřazeno z fronty" in state.cancel_job(ids["b"])
+    assert [q["stem"] for q in state.jobs_state()["queue"]] == ["c"]
+    assert "ruší" in state.cancel_job(ids["a"])
+    for _ in range(300):
+        if not state.busy:
+            break
+        _time.sleep(0.02)
+    assert runs == ["a", "c"], "b never ran, a was not run again"
+    ends = {e["job"]: e for e in state.events if e["job_end"]}
+    assert "zrušeno" in ends[ids["a"]]["text"] and ends[ids["a"]]["level"] == "info", "cancelled is not a failure"
+    assert "zrušeno" in ends[ids["b"]]["text"] and ends[ids["c"]]["level"] == "ok"
+    import pytest as _pytest
+    with _pytest.raises(ValueError):
+        state.cancel_job(ids["c"])  # finished: nothing to cancel
+
+
 def test_with_a_page_open_the_recording_asks_first(tmp_path, monkeypatch):
     from teamsrec_transcribe.web import review as rv
     import threading as _threading

@@ -33,6 +33,7 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/jobs/continue                            let it run during the recording
   POST   /api/jobs/{id}/next                           a waiting job runs right after the current one
   POST   /api/jobs/{id}/now                            ... or at once: the current one stops and runs again after it
+  POST   /api/jobs/{id}/cancel                         drop a waiting job, or stop the running one for good
   POST   /api/system/sound-settings                    open the Windows sound dialog (devices, levels, the mic array)
   GET    /api/settings/models                          the model lists asked live (Ollama on this PC, Claude API)
   GET    /api/help/{doc}                               user-guide | install | privacy
@@ -737,6 +738,29 @@ class ReviewState:
         self._push_jobs()
         return text
 
+    def cancel_job(self, job_id: int) -> str:
+        """Drop a waiting job, or stop the running one for good (what it did so far stays as it is, half done; the
+        recording can be processed again). Returns what happened, for the page."""
+        with self.lock:
+            job = next((j for j in self.jobs if j["id"] == job_id), None)
+            if job is not None:
+                self.jobs.remove(job)
+            run = self.running if self.running and self.running["id"] == job_id else None
+            if job is None and run is None:
+                raise ValueError(f"job {job_id} is neither waiting nor running")
+            if run is not None:
+                if not run.get("proc"):
+                    raise ValueError("this job cannot be stopped, it finishes by itself")
+                run["stopped"] = "cancelled"
+        if run is not None:
+            _kill_tree(run["proc"])  # the worker notes the end and goes on with the queue
+            self._push_jobs()
+            return f"{run['stem'] or run['name']}: zpracování se ruší"
+        text = f"{job['stem'] or job['name']}: zpracování zrušeno, vyřazeno z fronty"
+        self.event(text, "info", job["stem"], reload=True, job_end=True, job=job["id"])
+        self._push_jobs()
+        return text
+
     def keep_running(self) -> None:
         with self.lock:
             self.asking = False
@@ -861,13 +885,18 @@ class ReviewState:
                     self.current = self.running = None
                     stopped = job.pop("stopped", False)
                     job.pop("proc", None)
-                    if stopped == "preempted":  # another job goes first, this one right behind it
+                    if stopped == "cancelled":  # the user dropped it: not back into the queue
+                        pass
+                    elif stopped == "preempted":  # another job goes first, this one right behind it
                         self.jobs.insert(1 if self.jobs else 0, job)
                     elif stopped:  # stopped for a recording: back to the front, it runs again after it
                         self.jobs.insert(0, job)
                     if not self.jobs:
                         self.busy = False  # before the end event: the page sees it idle
-            if stopped == "preempted":
+            if stopped == "cancelled":
+                self.event(f"{stem or name}: zpracování zrušeno (zastaveno během běhu)", "info", stem, reload=True,
+                           job_end=True, job=job["id"])
+            elif stopped == "preempted":
                 self.event(f"{job['text']} – přerušeno kvůli přednostnímu zpracování, poběží znovu po něm", "info",
                            stem, job=job["id"])
             elif stopped:
@@ -966,6 +995,7 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", r"/api/jobs/continue", "jobs_continue"),
     ("POST", r"/api/jobs/(?P<job>[^/]+)/next", "job_next"),
     ("POST", r"/api/jobs/(?P<job>[^/]+)/now", "job_now"),
+    ("POST", r"/api/jobs/(?P<job>[^/]+)/cancel", "job_cancel"),
     ("GET", r"/api/help/(?P<doc>[^/]+)", "help"),
     ("GET", r"/api/status", "status"),
     ("GET", r"/api/events", "events"),
@@ -1245,6 +1275,9 @@ def _handler(state: ReviewState, server_ref: dict):
 
         def r_job_now(self, q, body, job):
             self._json({"ok": True, "text": state.move_job(_job_id(job), now=True), "jobs": state.jobs_state()})
+
+        def r_job_cancel(self, q, body, job):
+            self._json({"ok": True, "text": state.cancel_job(_job_id(job)), "jobs": state.jobs_state()})
 
         def r_sound_settings(self, q, body):
             if os.name != "nt":

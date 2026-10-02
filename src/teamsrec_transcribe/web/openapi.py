@@ -118,6 +118,9 @@ def spec(version: str) -> dict:
             "/api/jobs/{job}/next": {"post": _op("Move a waiting job to the front: it runs right after the current one",
                                                  tags=("server",), params=[{"name": "job", "in": "path", "required": True,
                                                                              "schema": {"type": "integer"}}])},
+            "/api/jobs/{job}/cancel": {"post": _op("Drop a waiting job, or stop the running one for good",
+                                                   tags=("server",), params=[{"name": "job", "in": "path", "required": True,
+                                                                               "schema": {"type": "integer"}}])},
             "/api/jobs/{job}/now": {"post": _op("Run a waiting job at once: the current job stops and runs again from "
                                                 "the beginning right after it", tags=("server",),
                                                 params=[{"name": "job", "in": "path", "required": True,

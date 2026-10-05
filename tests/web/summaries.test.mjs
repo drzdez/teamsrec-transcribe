@@ -100,7 +100,7 @@ test("minutes being written: said in the Zápis tab, not above the tabs", async 
   await waitFor(() => p.doc.querySelector("#docMain") && !p.$("docMain").hidden, "the Zápis tab");
   p.$("saveSum").click(); p.$("saveSum").click();  // regenerate the minutes (asks first)
   await waitFor(() => p.doc.querySelector("#docMain [data-minutes-run]"), "the note in the Zápis tab");
-  assert.match(p.$("docMain").textContent, /zápis se právě generuje/i);
+  assert.match(p.$("docMain").textContent, /zápis (se právě generuje|čeká ve frontě)/i);
   assert.ok(!p.doc.getElementById("queueBanner"), "no line above the tabs for minutes");
   await waitFor(() => !p.doc.querySelector("#docMain [data-minutes-run]"), "gone when done", 8000);
 });

@@ -1940,3 +1940,23 @@ def test_the_list_flags_transcripts_without_word_alignment(tmp_path):
     assert list_recordings(Config(out_dir=tmp_path))[0]["unaligned"] is True
     assert not is_unaligned({"provider": "whisperx", "timings": {"align_s": 12.0}})
     assert not is_unaligned({"provider": "elevenlabs", "timings": {}}), "the cloud brings its own word times"
+
+
+def test_a_copy_of_the_minutes_goes_where_this_meeting_went_last_time(tmp_path):
+    from teamsrec_transcribe import exports
+    out = tmp_path / "out"
+    rec = _make_transcribed(out)
+    target = tmp_path / "Zápisy" / "Týdenní sync"
+    assert exports.folder_for(out, rec.title) == ""
+    first = exports.save_copy(rec, rec.summary_path.name, str(target), out)
+    start = rec.sidecar["start"]
+    assert first.name == f"{start[:10]} {start[11:13]}{start[14:16]} {rec.title} – zápis.md", "date and time first"
+    assert first.read_text(encoding="utf-8") == rec.summary_path.read_text(encoding="utf-8")
+    second = exports.save_copy(rec, rec.summary_path.name, str(target), out)
+    assert second.name.endswith(" (2).md"), "never overwrites"
+    assert exports.folder_for(out, rec.title.upper()) == str(target), "the same meeting name, any case"
+    assert exports.folder_for(out, "Jiná schůzka") == ""
+    with pytest.raises(RecordingError):
+        exports.save_copy(rec, "../secret.md", str(target), out)
+    with pytest.raises(RecordingError):
+        exports.save_copy(rec, rec.summary_path.name, "relative/folder", out)

@@ -126,6 +126,14 @@ def spec(version: str) -> dict:
             "/api/recordings/{stem}/voices": {"post": _op(
                 "Fast-track post-processing: local diarization lends voice embeddings to the groups of a cloud "
                 "transcript, then voice recognition runs (background job)", params=[STEM])},
+            "/api/recordings/{stem}/summaries/{file}/export": {
+                "get": _op("The folder remembered for this meeting name and the name of the copy", params=[STEM, {
+                    "name": "file", "in": "path", "required": True, "schema": {"type": "string"}}]),
+                "post": _op("Save a copy of the minutes into a folder and remember it for the meeting name",
+                            params=[STEM, {"name": "file", "in": "path", "required": True, "schema": {"type": "string"}}],
+                            body=_obj(folder=s))},
+            "/api/system/pick-folder": {"post": _op("Open the Windows folder dialog on this PC; '' when cancelled",
+                                                    tags=("settings",), body=_obj(initial=s))},
             "/api/jobs/{job}/cancel": {"post": _op("Drop a waiting job, or stop the running one for good",
                                                    tags=("server",), params=[{"name": "job", "in": "path", "required": True,
                                                                                "schema": {"type": "integer"}}])},

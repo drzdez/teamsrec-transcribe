@@ -117,6 +117,10 @@
   }
   .langLine { margin: 4px 0 10px; font-size: 14px; }
   .timings { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+  .exportBox { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 6px 0 8px; }
+  .exportBox input { flex: 1 1 320px; min-width: 200px; }
+  .exportBox button.primary { padding: 4px 14px; border-radius: 8px; border: 0; background: var(--accent);
+                              color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
   .minutesRunNote { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--card);
                     color: var(--accent); font-size: 13px; }
   .timings > summary { cursor: pointer; }
@@ -403,7 +407,7 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,export_folder?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean,unaligned?:boolean}} RecordingRow
  */
 
@@ -1712,7 +1716,9 @@ function setJobs(/** @type {any} */ j) {
     if (allRows.length) renderPick();  // the list says what is being processed or waits
     renderQueueBanner();
     // the Zápis tab says that minutes are being written; at their end the page reloads the recording by itself
-    if (review && subTab === "summary" && !docMain.hidden && minutesJob() && !docMain.querySelector("[data-minutes-run]"))
+    const note = docMain.querySelector("[data-minutes-run]");
+    if (review && subTab === "summary" && !docMain.hidden && minutesJob()
+        && (!note || !(note.textContent || "").includes(minutesJob())))
       renderDoc();
     // an open recording without a transcript shows its place in the queue: keep it current
     if (review && !review.transcribed && main.querySelector("[data-queued]")) renderNotTranscribed(review);
@@ -2644,6 +2650,53 @@ async function loadSummaryModels(/** @type {boolean} */ live = false) {
   return summaryModels;
 }
 
+/** "Uložit jako…": a copy of the shown minutes into a folder – the one used last time for this meeting name is
+ * offered, "Jiný adresář…" opens the Windows folder dialog on this PC. */
+async function saveSummaryCopy(/** @type {string} */ file, /** @type {string} */ folder, /** @type {HTMLButtonElement} */ btn) {
+  if (!review) return;
+  btn.disabled = true;
+  try {
+    const r = await api(recUrl(review.stem, "summaries", file, "export"), send("POST", { folder }));
+    review.export_folder = r.folder;
+    setStatus(`kopie uložena: ${r.path}`, "ok");
+    return r;
+  } catch (e) { setStatus(String(e), "err"); return null; }
+  finally { btn.disabled = false; }
+}
+
+async function exportSummary(/** @type {string} */ file, /** @type {HTMLElement} */ where) {
+  if (!review) return;
+  const stem = review.stem;
+  document.getElementById("exportBox")?.remove();
+  /** @type {any} */ let info;
+  try { info = await api(recUrl(stem, "summaries", file, "export")); } catch (e) { setStatus(String(e), "err"); return; }
+  const box = document.createElement("div"); box.id = "exportBox"; box.className = "exportBox";
+  box.innerHTML = `<span class="meta">Uložit kopii jako <b>${escapeHtml(info.name)}</b> do:</span>`;
+  const folder = document.createElement("input"); folder.type = "text"; folder.value = info.folder || "";
+  folder.placeholder = "adresář (celá cesta) – nebo vyberte"; folder.id = "exportFolder";
+  const pickB = document.createElement("button"); pickB.type = "button"; pickB.className = "play"; pickB.textContent = "Vybrat…";
+  pickB.onclick = async () => {
+    pickB.disabled = true;
+    setStatus("vyberte adresář v okně Windows (může být za tímto oknem)…", "busy");
+    try {
+      const r = await api("/api/system/pick-folder", send("POST", { initial: folder.value }));
+      if (r.folder) folder.value = r.folder;
+      setStatus(r.folder ? "" : "výběr zrušen", r.folder ? "ok" : "busy");
+    } catch (e) { setStatus(String(e), "err"); }
+    finally { pickB.disabled = false; }
+  };
+  const save = document.createElement("button"); save.type = "button"; save.className = "primary"; save.textContent = "Uložit";
+  save.onclick = async () => {
+    if (await saveSummaryCopy(file, folder.value, save)) { box.remove(); renderSumBar(); }  // now "Uložit jako minule" too
+  };
+  const cancel = document.createElement("button"); cancel.type = "button"; cancel.className = "play"; cancel.textContent = "Zrušit";
+  cancel.onclick = () => box.remove();
+  box.append(folder, pickB, save, cancel);
+  where.insertAdjacentElement("afterend", box);
+  if (!info.folder) pickB.click();  // the first time for this meeting: straight to the folder dialog
+  else folder.focus();
+}
+
 function renderSumBar() {
   const bar = $("sumBar");
   if (!review || !review.docs) { bar.innerHTML = ""; return; }
@@ -2667,6 +2720,20 @@ function renderSumBar() {
     confirmFirst(again, `Potvrdit přegenerování „${active.label}“`,
                  `zápis „${active.label}“ se přepíše novým (${active.provider === "anthropic" ? "Claude, cloud" : "lokálně, 1–3 min"}) – potvrďte, nebo Zrušit`);
     tools.appendChild(again);
+  }
+  if (active) {
+    if (review.export_folder) {  // this meeting name was saved before: one click, the same folder
+      const again = document.createElement("button"); again.type = "button"; again.className = "play"; again.id = "sumExportAgain";
+      again.textContent = "Uložit jako minule";
+      again.title = `kopie tohoto zápisu do ${review.export_folder}`;
+      again.onclick = () => saveSummaryCopy(active.file, String(review?.export_folder || ""), again);
+      tools.appendChild(again);
+    }
+    const exp = document.createElement("button"); exp.type = "button"; exp.className = "play"; exp.id = "sumExport";
+    exp.textContent = "Uložit jako…";
+    exp.title = "kopie tohoto zápisu do vybraného adresáře; adresář si stránka pamatuje podle jména schůzky";
+    exp.onclick = () => exportSummary(active.file, tools);
+    tools.appendChild(exp);
   }
   bar.appendChild(tools);
   setCombo(model, other, [], "");

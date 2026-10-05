@@ -359,6 +359,11 @@ analysis, the transcription with its own phases (model, speech, word alignment, 
 the cloud service), naming the speakers, the exports and each minutes – kept in `<stem>.timings.json` (the last 10
 jobs; derived, deletable). Information only.
 
+**Uložit jako…** in the Zápis tab saves a copy of the shown minutes into a folder (the Windows folder dialog opens; it
+may appear behind the window). The copy is named `<date> <time> <meeting> – zápis.md`, so copies sort by when the
+meeting was; nothing is overwritten. The folder is remembered by the meeting name (`<OUT_DIR>/_export_folders.json`),
+so the next meeting of the same name offers it, and **Uložit jako minule** saves there with one click.
+
 Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
 `⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as
 it is until its turn – a slim line pinned above the tabs says where it is in the queue, the page can be read and

@@ -37,6 +37,9 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/jobs/{id}/next                           a waiting job runs right after the current one
   POST   /api/jobs/{id}/now                            ... or at once: the current one stops and runs again after it
   POST   /api/jobs/{id}/cancel                         drop a waiting job, or stop the running one for good
+  GET    /api/recordings/{stem}/summaries/{file}/export   the folder remembered for this meeting name, the copy's name
+  POST   /api/recordings/{stem}/summaries/{file}/export   {"folder"} save a copy there (and remember the folder)
+  POST   /api/system/pick-folder                       {"initial"?} the Windows folder dialog -> {"folder"} ("" = cancel)
   POST   /api/system/sound-settings                    open the Windows sound dialog (devices, levels, the mic array)
   GET    /api/settings/models                          the model lists asked live (Ollama on this PC, Claude API)
   GET    /api/help/{doc}                               user-guide | install | privacy
@@ -79,7 +82,7 @@ from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
                         same_person_groups, set_meeting_link, unmerge_speakers)
 from ..voiceprints import Voiceprints, _unit, cosine, speech_seconds
-from .. import timings
+from .. import exports, timings
 from ..fasttrack import cloud_ready, needs_voices  # the emergency fast track, separate from the local path
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
@@ -371,6 +374,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "has_summary": has_minutes(rec), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "cloud": cloud_ready(cfg),
         "timings": timings.latest(rec),  # how long each part of the last jobs took
+        "export_folder": exports.folder_for(cfg.out_dir, rec.title),  # "Uložit jako minule" for this meeting name
         "voices_missing": needs_voices(data),  # a fast-track transcript: voices can be added locally
         "voices_mixed": sorted(((data.get("voices_from") or {}).get("mixed") or {}).keys()),
         "speakers": speakers, "known_names": known_names(cfg, people),
@@ -1034,6 +1038,9 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", rf"/api/recordings/{STEM_RE_PART}/recognize", "recognize"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/summaries", "summarize_as"),
     ("DELETE", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)", "delete_summary"),
+    ("GET", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)/export", "export_info"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)/export", "export_summary"),
+    ("POST", r"/api/system/pick-folder", "pick_folder"),
     ("GET", r"/api/summary-models", "summary_models"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/merge", "merge"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/unmerge", "unmerge"),
@@ -1353,6 +1360,21 @@ def _handler(state: ReviewState, server_ref: dict):
 
         def r_job_cancel(self, q, body, job):
             self._json({"ok": True, "text": state.cancel_job(_job_id(job)), "jobs": state.jobs_state()})
+
+        def r_export_info(self, q, body, stem, file):
+            rec = self._recording(stem)
+            path = rec.dir / unquote(file)
+            self._json({"folder": exports.folder_for(state.cfg.out_dir, rec.title),
+                        "name": exports.copy_name(rec, path)})
+
+        def r_export_summary(self, q, body, stem, file):
+            rec = self._recording(stem)
+            target = exports.save_copy(rec, unquote(file), str(body.get("folder") or ""), state.cfg.out_dir)
+            state.event(f"{rec.stem}: kopie zápisu uložena do {target}", "ok", rec.stem)
+            self._json({"ok": True, "path": str(target), "folder": str(target.parent)})
+
+        def r_pick_folder(self, q, body):
+            self._json({"folder": exports.pick_folder(str(body.get("initial") or ""))})
 
         def r_sound_settings(self, q, body):
             if os.name != "nt":

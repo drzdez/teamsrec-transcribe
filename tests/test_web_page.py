@@ -90,7 +90,7 @@ def test_review_page(script, tmp_path, monkeypatch):
         for var in secret.env:
             monkeypatch.delenv(var, raising=False)
     monkeypatch.setattr(review, "do_process", _fake_process)
-    monkeypatch.setattr(review, "do_summarize", lambda cfg, rec, force=False: time.sleep(0.3))
+    monkeypatch.setattr(review, "do_summarize", lambda cfg, rec, force=False: time.sleep(1.0))
     monkeypatch.setattr(review, "do_summarize_compare", lambda cfg, rec, force=False: [])
 
     def fake_summarize_as(cfg, rec, provider, model):

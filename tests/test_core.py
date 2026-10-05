@@ -1731,3 +1731,23 @@ def test_a_recording_is_not_recognised_by_its_own_prints(tmp_path):
     ranked = vp.scores([1.0, 0.0], exclude_stem="2026-10-01_0900_a")  # Jana's only print is from this recording
     assert [pid for pid, _ in ranked] == ["petr"]
     assert vp.recognize({"SPEAKER_00": [1.0, 0.0]}, 0.5, 0.1, exclude_stem="2026-10-01_0900_a") == {"SPEAKER_00": ("petr", 0.6)}
+
+
+def test_replies_of_a_mixed_group_move_to_another_speaker_a_new_one_or_unassigned(tmp_path):
+    from teamsrec_transcribe.pipeline import NEW_SPEAKER, assign_segments, speaker_replies
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    assert [r["start"] for r in speaker_replies(rec, "SPEAKER_00")] == [0, 20]
+    n = assign_segments(cfg, rec, [{"start": 0, "from": "SPEAKER_00", "speaker": "SPEAKER_01"},
+                                   {"start": 20, "from": "SPEAKER_00", "speaker": NEW_SPEAKER},
+                                   {"start": 4, "from": "SPEAKER_01", "speaker": NEW_SPEAKER},  # the same new one
+                                   {"start": 12, "from": "Jana Nováková", "speaker": "UNKNOWN"}])
+    assert n == 4
+    data = rec.read_json(rec.transcript_path)
+    who = {s["start"]: s["speaker"] for s in data["segments"]}
+    assert who == {0: "SPEAKER_01", 4: "SPEAKER_02", 5: "SPEAKER_01", 12: None, 20: "SPEAKER_02"}
+    assert data["speakers"] == ["SPEAKER_01", "SPEAKER_02", "UNKNOWN"], "emptied groups go, the new one is there"
+    assert [s.get("assigned") for s in data["segments"]] == ["manual", "manual", None, None, "manual"]
+    assert "SPEAKER_02" in rec.file(".txt").read_text(encoding="utf-8"), "exports regenerated"
+    with pytest.raises(RecordingError):
+        assign_segments(cfg, rec, [{"start": 5, "from": "SPEAKER_01", "speaker": "SPEAKER_77"}])

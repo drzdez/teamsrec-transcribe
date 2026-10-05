@@ -400,31 +400,67 @@ def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
 UNASSIGNED = (None, "", "UNKNOWN")  # a reply the diarization gave nobody (no turn overlapped it)
 
 
+NEW_SPEAKER = "@new"  # a move target: one new speaker for the whole request (a voice the diarization missed)
+
+
 def assign_segments(cfg: Config, rec: Recording, moves: list[dict]) -> int:
-    """Give unassigned replies a speaker, one by one (review page): moves = [{"start": s, "speaker": label}],
-    label = one of this transcript's speakers. Marked `assigned: manual`; exports are regenerated. Returns how
-    many replies got a speaker."""
+    """Move replies to another speaker, one by one (review page): moves = [{"start": s, "speaker": label,
+    "from"?: label}]. Without `from` the reply is an unassigned one (the "Nepřiřazeno" card); with it, a reply of that
+    speaker (a group that mixes two voices). The target is one of this transcript's speakers, NEW_SPEAKER (a new
+    SPEAKER_NN, the same one for every such move of the request) or "UNKNOWN" (back to unassigned). Marked
+    `assigned: manual`; exports are regenerated. Returns how many replies moved."""
     if not rec.transcript_path.exists():
         raise RecordingError(f"{rec.stem}: no transcript yet")
     data = rec.read_json(rec.transcript_path)
-    labels = {lab for lab in data.get("speakers", []) if lab not in UNASSIGNED}
+    speakers = list(data.get("speakers", []))
+    labels = {lab for lab in speakers if lab not in UNASSIGNED}
+    new_label = ""
     n = 0
     for m in moves:
         label, start = str(m.get("speaker") or ""), float(m.get("start", -1))
-        if label not in labels:
+        source = m.get("from")
+        if label == NEW_SPEAKER:
+            if not new_label:
+                taken = {s.get("speaker") for s in data["segments"]} | set(speakers)
+                new_label = next(f"SPEAKER_{i:02d}" for i in range(100) if f"SPEAKER_{i:02d}" not in taken)
+                speakers.append(new_label)
+            label = new_label
+        elif label not in labels and label != "UNKNOWN":
             raise RecordingError(f"{rec.stem}: no speaker {label!r} in this recording")
         for s in data["segments"]:
-            if s.get("speaker") in UNASSIGNED and abs(float(s["start"]) - start) < 0.01:
-                s["speaker"], s["assigned"] = label, "manual"
+            here = s.get("speaker") in UNASSIGNED if source in (None, "", "UNKNOWN") else s.get("speaker") == source
+            if here and abs(float(s["start"]) - start) < 0.01:
+                if label == "UNKNOWN":
+                    s["speaker"] = None
+                    s.pop("assigned", None)
+                    if "UNKNOWN" not in speakers:
+                        speakers.append("UNKNOWN")
+                else:
+                    s["speaker"], s["assigned"] = label, "manual"
                 n += 1
                 break
     if n:
-        if not any(s.get("speaker") in UNASSIGNED for s in data["segments"]):
-            data["speakers"] = [lab for lab in data.get("speakers", []) if lab not in UNASSIGNED]
+        present = {s.get("speaker") for s in data["segments"]}
+        unassigned_left = any(s.get("speaker") in UNASSIGNED for s in data["segments"])
+        emptied = {str(m.get("from")) for m in moves if m.get("from")} - present  # every reply moved away
+        data["speakers"] = [lab for lab in speakers if lab not in emptied
+                            and (lab not in UNASSIGNED or unassigned_left)]
         rec.write_json(rec.transcript_path, data)
         do_export(cfg, rec)
-        log.info("%s: %d unassigned replies got a speaker", rec.stem, n)
+        log.info("%s: %d replies moved to another speaker", rec.stem, n)
     return n
+
+
+def speaker_replies(rec: Recording, label: str) -> list[dict]:
+    """All replies of one speaker, for going through them on the page (play, read, move)."""
+    if not rec.transcript_path.exists():
+        raise RecordingError(f"{rec.stem}: no transcript yet")
+    data = rec.read_json(rec.transcript_path)
+    want = (lambda s: s.get("speaker") in UNASSIGNED) if label in UNASSIGNED else (lambda s: s.get("speaker") == label)
+    return [{"start": round(float(s["start"]), 3), "end": round(min(float(s["end"]), float(s["start"]) + 20.0), 3),
+             "at": f"{int(s['start']) // 3600:02d}:{int(s['start']) % 3600 // 60:02d}:{int(s['start']) % 60:02d}",
+             "text": (s.get("text") or "")[:300], "manual": s.get("assigned") == "manual"}
+            for s in data.get("segments") or [] if want(s)]
 
 
 # ---------------------------------------------------------------- meeting <-> calendar link (review page)

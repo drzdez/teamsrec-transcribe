@@ -169,6 +169,23 @@ def _pkg_version(name: str) -> str:
         return "unknown"
 
 
+def _load_align_model(whisperx, language: str, device: str):
+    """The word-alignment model, from the Hugging Face cache when the hub cannot give it. 2026-10-05: with an invalid
+    stored hub token the hub answered 401 and whisperx reported the Slovak model as "could not be found", while the
+    cached copy works – alignment was skipped, replies stayed ~25 s long and mixed several voices. Without alignment
+    there are no speaker turns inside a reply, so it is worth the second try."""
+    try:
+        return whisperx.load_align_model(language_code=language, device=device)
+    except ValueError as first:
+        try:
+            got = whisperx.load_align_model(language_code=language, device=device, model_cache_only=True)
+        except Exception:
+            raise first
+        log.warning("alignment model for %s loaded from the local cache (the hub failed: %s)", language,
+                    str(first)[:120])
+        return got
+
+
 class WhisperXProvider:
     name = "whisperx"
 
@@ -218,7 +235,7 @@ class WhisperXProvider:
         if settings.align:
             t = time.time()
             try:
-                align_model, meta = whisperx.load_align_model(language_code=detected, device=device)
+                align_model, meta = _load_align_model(whisperx, detected, device)
                 result = whisperx.align(result["segments"], align_model, meta, wav, device,
                                         return_char_alignments=False)
                 del align_model
@@ -228,6 +245,7 @@ class WhisperXProvider:
                 timings["align_s"] = round(time.time() - t, 1)
             except ValueError as e:  # no alignment model for this language
                 log.warning("alignment skipped: %s", e)
+                timings["align_skipped"] = str(e)[:200]  # replies stay ~30 s long and mix voices: the page says so
 
         embeddings = None
         if diarize:
@@ -303,7 +321,7 @@ class WhisperXProvider:
             lang = switch[speaker]
             if settings.align and new:
                 try:
-                    align_model, meta = whisperx.load_align_model(language_code=lang, device=device)
+                    align_model, meta = _load_align_model(whisperx, lang, device)
                     aligned = whisperx.align(new, align_model, meta, wav, device, return_char_alignments=False)
                     del align_model
                     new = aligned["segments"]

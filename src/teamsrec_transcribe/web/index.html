@@ -109,7 +109,16 @@
     .keyRow .cancel { grid-column: 1; }
   }
   .langLine { margin: 4px 0 10px; font-size: 14px; }
+  .langLine .unaligned { color: var(--warn); }
   .card.unassigned .replies { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+  /* going through the replies of one speaker: a group that mixes voices is split by moving replies */
+  .walk { margin: 10px 0 0; }
+  .walk > summary { cursor: pointer; color: var(--accent); font-size: 14px; }
+  .walk .replies { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; max-height: 420px; overflow-y: auto; }
+  .walk .reply { display: grid; grid-template-columns: auto minmax(0, 1fr) 190px; gap: 10px; align-items: center; }
+  .walk .reply.moved .replyText { color: var(--accent); }
+  .walk .replyText { font-size: 13px; }
+  .walk select { width: auto; font-size: 13px; }
   .card.unassigned .reply { display: grid; grid-template-columns: auto minmax(0, 1fr) 220px; gap: 10px; align-items: center; }
   .card.unassigned .replyText { font-size: 14px; }
   .card.unassigned select { width: auto; }
@@ -374,7 +383,7 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,transcribed_with?:{provider:string,model:string,languages:string[]}}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean}} RecordingRow
  */
 
@@ -988,7 +997,9 @@ function languageLine(/** @type {Review} */ r) {
   p.innerHTML = `<b>Jazyk přepisu:</b> ${escapeHtml(langName(r.language))}` +
     (w.languages && w.languages.length ? ` <span class="meta">(zjištěn automaticky z ${escapeHtml(w.languages.join(", "))})</span>` : "") +
     (own.length ? ` · ${own.length === 1 ? "jeden mluvčí přepsán" : `${own.length} mluvčí přepsáni`} zvlášť ve vlastním jazyce` : "") +
-    (w.provider ? ` · <span class="meta">${escapeHtml(w.provider)}${w.model ? " " + escapeHtml(w.model) : ""}</span>` : "");
+    (w.provider ? ` · <span class="meta">${escapeHtml(w.provider)}${w.model ? " " + escapeHtml(w.model) : ""}</span>` : "") +
+    (w.unaligned ? `<br><span class="unaligned">⚠ Přepis je bez zarovnání slov: repliky jsou dlouhé (kolem 30 s) a jedna ` +
+      `může obsahovat víc hlasů. Pomůže Přepsat znovu od nuly.</span>` : "");
   return p;
 }
 
@@ -1206,6 +1217,7 @@ function card(sp, i) {
       left.appendChild(p);
     }
   }
+  left.appendChild(walkReplies(sp));
   const samples = document.createElement("div"); samples.className = "samples";
   if (!review || !review.has_mix) samples.innerHTML = '<span class="excerpt">zvuk nahrávky chybí</span>';
   for (const s of sp.samples) {
@@ -1316,6 +1328,53 @@ function focusNext(/** @type {number} */ i) {
   const sides = /** @type {HTMLElement[]} */ ([...main.querySelectorAll(".side")]);
   const next = sides[i + 1] ? /** @type {HTMLInputElement|null} */ (sides[i + 1].querySelector('[data-key="first"]')) : null;
   (next || /** @type {HTMLButtonElement} */ ($("save"))).focus();
+}
+
+/** "Projít repliky": every reply of this speaker with play and text, each can go to another speaker, a new one, or
+ * back to unassigned – for a group that mixes two voices. Loaded when opened (a speaker can have hundreds). */
+function walkReplies(/** @type {Speaker} */ sp) {
+  const box = document.createElement("details"); box.className = "walk";
+  box.innerHTML = `<summary>Projít repliky (${sp.count}) – přesunout ty, které řekl někdo jiný</summary>`;
+  box.addEventListener("toggle", async () => {
+    if (!box.open || box.dataset.loaded || !review) return;
+    box.dataset.loaded = "1";
+    const others = review.speakers.filter(o => o.label !== sp.label && !o.unassigned);
+    const who = (/** @type {Speaker} */ o) => (o.name && o.name !== o.label ? `${o.name} (${o.label})` : o.label);
+    /** @type {any} */ let r;
+    try { r = await api(recUrl(review.stem, "speakers", sp.label, "replies")); }
+    catch (e) { box.append(emptyBox(String(e))); return; }
+    const options = `<option value="">ponechat</option>` +
+      others.map(o => `<option value="${escapeHtml(o.label)}">→ ${escapeHtml(who(o))}</option>`).join("") +
+      `<option value="${escapeHtml(r.new_speaker)}">→ nový mluvčí</option><option value="UNKNOWN">→ nepřiřazeno</option>`;
+    const list = document.createElement("div"); list.className = "replies";
+    for (const rep of r.replies) {
+      const row = document.createElement("div"); row.className = "reply"; row.dataset.start = String(rep.start);
+      const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = `▶ ${rep.at}`;
+      b.disabled = !review.has_mix; b.onclick = () => play(b, rep);
+      const text = document.createElement("span"); text.className = "replyText"; text.textContent = rep.text;
+      const sel = document.createElement("select"); sel.innerHTML = options;
+      sel.onchange = () => row.classList.toggle("moved", !!sel.value);
+      row.append(b, text, sel);
+      list.appendChild(row);
+    }
+    const save = document.createElement("button"); save.type = "button"; save.className = "primary-btn";
+    save.textContent = "Uložit přesuny";
+    save.onclick = async () => {
+      const moves = [...list.querySelectorAll(".reply")].map(row => ({
+        start: Number(/** @type {HTMLElement} */ (row).dataset.start), from: sp.label,
+        speaker: /** @type {HTMLSelectElement} */ (row.querySelector("select")).value,
+      })).filter(m => m.speaker);
+      if (!moves.length) { setStatus("u replik, které řekl někdo jiný, vyberte komu patří", "err"); return; }
+      save.disabled = true;
+      try {
+        const res = await api(recUrl(review ? review.stem : "", "segments", "assign"), send("POST", { segments: moves }));
+        if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+        setStatus(`přesunuto ${res.assigned} replik, přepis a titulky přegenerovány`, "ok");
+      } catch (e) { setStatus(String(e), "err"); save.disabled = false; }
+    };
+    box.append(list, save);
+  });
+  return box;
 }
 
 /** @param {HTMLButtonElement} btn @param {Sample} s @param {string=} stem */

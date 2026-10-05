@@ -354,6 +354,12 @@ for example a different microphone halfway through). A card then may say "hlasem
 0.52" – listen to the samples of both, and **stejná osoba** fills in the same name; after Uložit the two groups merge.
 It is only a hint: two different people can score as much.
 
+When a card mixes voices (the samples are not all one person), open **Projít repliky (N)** on the card: every reply
+with ▶ and its text, and for each "ponechat", "→ <another speaker>", "→ nový mluvčí" (one new speaker for all replies
+sent there in one save) or "→ nepřiřazeno". **Uložit přesuny** moves them; the transcript and subtitles are rewritten.
+If the language line says "⚠ Přepis je bez zarovnání slov", the replies are long (around 30 s) and one reply can hold
+several voices – run Přepsat znovu od nuly first, then go through what is left.
+
 Keys: Enter = next speaker, Esc = stop playback. An empty name means keeping the label.
 
 A card's heading is the name the speaker got (it follows what you type), with the original label from the transcript

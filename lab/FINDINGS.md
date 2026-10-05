@@ -137,6 +137,15 @@ transform), so they cannot be compared with people. Not used.
 Group embeddings of one meeting (25 meetings): the same person split in two 0.25–0.71 (median 0.45), different people
 0.07–0.54 (median 0.25). So "hlasem podobná skupina" from 0.45 is a hint to listen to, never an automatic merge.
 
+## Replies of 25 s mixing voices: alignment skipped (2026-10-05)
+
+The three meetings transcribed again on 2026-10-05 had replies of 25 s median (others 3–5 s), and samples held two or
+three voices. The word alignment had been skipped: the stored Hugging Face token had become invalid, the hub answered
+401, and whisperx reported the Slovak model as "could not be found" – while the cached copy loads fine. Without
+alignment there are no word times, so no speaker turns inside a reply; the reply keeps the majority speaker. Now the
+alignment model falls back to the local cache, the transcript records `timings.align_skipped`, and the page warns about
+an unaligned transcript.
+
 ## Microphone activity threshold (2026-09-30)
 
 A Sony WH-1000XM6 connected directly over Bluetooth gates its microphone: almost digital silence between words (floor

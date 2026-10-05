@@ -53,8 +53,10 @@ def spec(version: str) -> dict:
             "/api/recordings/{stem}/recognize": {"post": _op("Match unnamed speakers against the voice prints",
                                                              params=[STEM])},
             "/api/recordings/{stem}/segments/assign": {"post": _op(
-                "Give replies without a speaker (UNKNOWN) a speaker of this recording, one by one; exports regenerated",
-                params=[STEM], body=_obj(segments={"type": "array", "items": _obj(start={"type": "number"}, speaker=s)}))},
+                "Move replies to a speaker one by one: unassigned ones, or with `from` replies of another speaker; "
+                "speaker '@new' = a new one, 'UNKNOWN' = unassigned; exports regenerated",
+                params=[STEM], body=_obj(segments={"type": "array", "items": _obj(start={"type": "number"}, speaker=s,
+                                                                                  **{"from": s})}))},
             "/api/recordings/{stem}/summaries": {"post": _op(
                 "Write a summary with this provider/model in the background (the configured one = the main "
                 "summary, any other = <stem>.summary.<model>.md); the end is an event with job_end",
@@ -118,6 +120,9 @@ def spec(version: str) -> dict:
             "/api/jobs/{job}/next": {"post": _op("Move a waiting job to the front: it runs right after the current one",
                                                  tags=("server",), params=[{"name": "job", "in": "path", "required": True,
                                                                              "schema": {"type": "integer"}}])},
+            "/api/recordings/{stem}/speakers/{label}/replies": {"get": _op(
+                "All replies of one speaker (to go through them and move some to another speaker)",
+                params=[STEM, {"name": "label", "in": "path", "required": True, "schema": {"type": "string"}}])},
             "/api/jobs/{job}/cancel": {"post": _op("Drop a waiting job, or stop the running one for good",
                                                    tags=("server",), params=[{"name": "job", "in": "path", "required": True,
                                                                                "schema": {"type": "integer"}}])},

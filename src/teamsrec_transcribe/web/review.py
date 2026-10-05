@@ -20,7 +20,9 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/recordings/{stem}/speakers/merge         fold the labels of one person into one speaker
   POST   /api/recordings/{stem}/speakers/unmerge       undo the merges that remember their origin
   DELETE /api/recordings/{stem}/speakers/{label}       drop that speaker's segments (noise turned into text)
-  POST   /api/recordings/{stem}/segments/assign        {"segments": [{"start", "speaker"}]} unassigned replies -> a speaker
+  POST   /api/recordings/{stem}/segments/assign        {"segments": [{"start", "speaker", "from"?}]} move replies to a
+                                                        speaker ("@new" = a new one, "UNKNOWN" = unassigned)
+  GET    /api/recordings/{stem}/speakers/{label}/replies   all replies of one speaker
   POST   /api/recordings/{stem}/meeting                {"action": confirm|detach|attach, "candidate"?}
   GET    /api/recordings/{stem}/meeting/candidates     nearby Outlook items to link instead
   GET    /api/people / PUT /api/people                 the registry (PUT replaces it; opted-out people lose prints)
@@ -70,7 +72,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .. import settings
 from ..config import Config, default_config_path
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import (assign_segments, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
+from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
                         summarize_as,
                         summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
@@ -357,7 +359,10 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "duration_s": rec.sidecar.get("duration_s"), "source": rec.source, "transcribed": True,
         "language": data.get("language"), "speaker_sources": data.get("speaker_sources", []),
         "transcribed_with": {"provider": data.get("provider"), "model": data.get("model"),
-                             "languages": data.get("languages") or []},
+                             "languages": data.get("languages") or [],
+                             # no word alignment: replies stay ~30 s long and can mix voices (2026-10-05)
+                             "unaligned": data.get("provider") == "whisperx"
+                                          and "align_s" not in (data.get("timings") or {})},
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "speakers": speakers, "known_names": known_names(cfg, people),
         "same_person": [{"person": pid, "labels": labels, "name": (people.get(pid) or Person(pid)).full}
@@ -995,6 +1000,7 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/merge", "merge"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/unmerge", "unmerge"),
     ("DELETE", rf"/api/recordings/{STEM_RE_PART}/speakers/(?P<label>[^/]+)", "remove_speaker"),
+    ("GET", rf"/api/recordings/{STEM_RE_PART}/speakers/(?P<label>[^/]+)/replies", "speaker_replies"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/segments/assign", "assign_segments"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/meeting", "meeting"),
     ("GET", rf"/api/recordings/{STEM_RE_PART}/meeting/candidates", "meeting_candidates"),
@@ -1154,13 +1160,18 @@ def _handler(state: ReviewState, server_ref: dict):
             job, position = state.run_process(self._recording(stem), force=bool(body.get("force")))
             self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
+        def r_speaker_replies(self, q, body, stem, label):
+            self._json({"label": label, "replies": speaker_replies(self._recording(stem), unquote(label)),
+                        "new_speaker": NEW_SPEAKER})
+
         def r_assign_segments(self, q, body, stem):
             rec = self._recording(stem)
             moves = body.get("segments")
             if not isinstance(moves, list) or not moves:
-                raise ValueError("segments: [{start, speaker}] needed")
+                raise ValueError("segments: [{start, speaker, from?}] needed")
             n = assign_segments(state.cfg, rec, moves)
-            state.event(f"{rec.stem}: přiřazeno {n} replik, přepis a titulky přegenerovány", "ok", rec.stem, reload=True)
+            verb = "přesunuto" if any(isinstance(m, dict) and m.get("from") for m in moves) else "přiřazeno"
+            state.event(f"{rec.stem}: {verb} {n} replik, přepis a titulky přegenerovány", "ok", rec.stem, reload=True)
             self._json({"ok": True, "assigned": n})
 
         def r_summarize_as(self, q, body, stem):

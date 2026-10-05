@@ -402,7 +402,7 @@
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
  * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
- * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean}} RecordingRow
+ * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean,unaligned?:boolean}} RecordingRow
  */
 
 const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
@@ -577,11 +577,13 @@ let stateFilter = "";
 /** the processing-state filters (second row); one at a time, a second click clears it */
 const STATE_FILTERS = [
   { key: "todo", label: "◐ nezpracované", title: "nahrávky bez přepisu, bez zápisu nebo s nepojmenovanými mluvčími",
-    test: (/** @type {RecordingRow} */ r) => rowState(r).key !== "done" },
+    test: (/** @type {RecordingRow} */ r) => rowState(r).key !== "done" || !!r.unaligned },
   { key: "no-transcript", label: "○ bez přepisu", title: "nahrávky, které ještě nemají přepis",
     test: (/** @type {RecordingRow} */ r) => !r.transcribed },
   { key: "unresolved", label: "? nepojmenované", title: "přepsané nahrávky, kde zůstal někdo nepojmenovaný",
     test: (/** @type {RecordingRow} */ r) => !!r.transcribed && !!r.unresolved },
+  { key: "unaligned", label: "⚠ bez zarovnání", title: "přepisy bez zarovnání slov – dlouhé repliky mohou míchat hlasy; vyplatí se je přepsat znovu",
+    test: (/** @type {RecordingRow} */ r) => !!r.unaligned },
   { key: "queued", label: "⏳ zpracovává se nebo ve frontě", title: "nahrávky, které se právě zpracovávají nebo čekají ve frontě",
     test: (/** @type {RecordingRow} */ r) => !!queuePlace(r.stem) },
 ];
@@ -691,7 +693,9 @@ function renderPick(jump) {
     const q = queuePlace(r.stem);
     if (q) o.className = q.running ? "optRunning" : "optQueued";  // coloured in the open list
     o.textContent = (q ? (q.running ? "⏳ zpracovává se · " : `⏳ ve frontě ${q.place}. · `) : "")
-      + `${fmtDate(r.start)} – ${r.title}` + (q ? "" : ` [${rowState(r).text}]`)
+      + (r.unaligned && !q ? "⚠ " : "")
+      + `${fmtDate(r.start)} – ${r.title}` + (q ? "" : ` [${rowState(r).text}${r.unaligned ? ", bez zarovnání – přepsat znovu" : ""}]`)
+    if (r.unaligned && !q) o.title = "přepis bez zarovnání slov: repliky jsou dlouhé a mohou míchat hlasy – Přepsat znovu od nuly";
       + (openOutside && r.stem === openOutside.stem ? " (otevřená, mimo filtr)" : "");
     pick.appendChild(o);
   }

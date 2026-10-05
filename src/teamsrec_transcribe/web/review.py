@@ -367,8 +367,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "transcribed_with": {"provider": data.get("provider"), "model": data.get("model"),
                              "languages": data.get("languages") or [],
                              # no word alignment: replies stay ~30 s long and can mix voices (2026-10-05)
-                             "unaligned": data.get("provider") == "whisperx"
-                                          and "align_s" not in (data.get("timings") or {})},
+                             "unaligned": is_unaligned(data)},
         "has_summary": has_minutes(rec), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "cloud": cloud_ready(cfg),
         "timings": timings.latest(rec),  # how long each part of the last jobs took
@@ -385,6 +384,12 @@ def build_review(cfg: Config, rec: Recording) -> dict:
 
 
 SUMMARY_STAMP = re.compile(r"<!--\s*teamsrec-transcribe summary \| (?P<provider>[^:|]+):\s*(?P<model>[^|]+?)\s*(?:\|[^>]*?created:\s*(?P<created>[^|>]+?))?\s*(?:\||-->)")
+
+
+def is_unaligned(data: dict) -> bool:
+    """A local transcript without word alignment: replies ~30 s long that can mix voices (2026-10-05) – worth
+    transcribing again. Cloud transcripts bring their own word times."""
+    return data.get("provider") == "whisperx" and "align_s" not in (data.get("timings") or {})
 
 
 def has_minutes(rec: Recording) -> bool:
@@ -466,16 +471,19 @@ def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
     recs = sorted(iter_recordings(cfg.out_dir), key=lambda r: r.stem, reverse=True)[:limit]
     for r in recs:
         unresolved = None
+        unaligned = False
         if r.transcript_path.exists():
             try:
                 names = r.read_json(r.speakers_path) if r.speakers_path.exists() else {}
-                labels = r.read_json(r.transcript_path).get("speakers", [])
+                data = r.read_json(r.transcript_path)
+                labels = data.get("speakers", [])
                 unresolved = sum(1 for l in labels if unnamed_speaker(l) and not names.get(l))
+                unaligned = is_unaligned(data)
             except Exception:
                 unresolved = None
         out.append({"stem": r.stem, "title": r.title, "start": r.sidecar.get("start"),
                     "transcribed": r.transcript_path.exists(), "unresolved": unresolved,
-                    "summary": has_minutes(r)})
+                    "summary": has_minutes(r), "unaligned": unaligned})
     return out
 
 

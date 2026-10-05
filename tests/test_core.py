@@ -1928,3 +1928,15 @@ def test_minutes_by_another_model_count_as_minutes_and_the_main_tab_says_so(tmp_
                                                               compare=("anthropic:claude-opus-5-5", "ollama:qwen3:8b")))
     pl.do_summarize_compare(cfg, rec, force=True)
     assert calls == [("ollama", "qwen3:8b")], "no second copy of the main minutes"
+
+
+def test_the_list_flags_transcripts_without_word_alignment(tmp_path):
+    from teamsrec_transcribe.web.review import is_unaligned, list_recordings
+    rec = _make_transcribed(tmp_path)
+    assert list_recordings(Config(out_dir=tmp_path))[0]["unaligned"] is False
+    data = rec.read_json(rec.transcript_path)
+    data.update(provider="whisperx", timings={"transcribe_s": 60.0, "diarize_s": 20.0})  # alignment skipped
+    rec.write_json(rec.transcript_path, data)
+    assert list_recordings(Config(out_dir=tmp_path))[0]["unaligned"] is True
+    assert not is_unaligned({"provider": "whisperx", "timings": {"align_s": 12.0}})
+    assert not is_unaligned({"provider": "elevenlabs", "timings": {}}), "the cloud brings its own word times"

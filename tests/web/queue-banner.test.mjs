@@ -24,3 +24,18 @@ test("queued: a slim pinned line, the page as it was; running: the page empties 
   await waitFor(() => p.doc.querySelector(".card"), "done: the new transcript", 8000);
   assert.ok(!p.$("save").disabled, "and saving is back");
 });
+
+test("switching to Lidé and back while a new transcript runs keeps the 'being processed' view", async t => {
+  const p = await openPage(t, WEEKLY);
+  await waitFor(() => p.doc.querySelector(".card"), "the weekly speakers");
+  const json = { method: "POST", headers: { "Content-Type": "application/json" } };
+  await server(`/api/recordings/${WEEKLY}/process`, { ...json, body: JSON.stringify({ force: true }) });  // runs 2 s
+  await waitFor(() => p.doc.querySelector("#main [data-running]"), "running view");
+  p.$("tabPeople").click();
+  await waitFor(() => !p.$("peopleMain").hidden, "people");
+  p.$("tabSpeakers").click();
+  await waitFor(() => p.doc.querySelector("#main [data-running]"), "still the running view, not the old cards");
+  assert.ok(p.$("subtabs").classList.contains("runningHere"));
+  await waitFor(() => p.doc.querySelector(".card") && !p.$("subtabs").classList.contains("runningHere"),
+                "done: cards and the tabs back", 8000);
+});

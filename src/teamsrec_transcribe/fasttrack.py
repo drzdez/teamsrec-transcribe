@@ -31,6 +31,7 @@ from dataclasses import replace
 from . import settings
 from .config import Config
 from .recording import Recording, RecordingError
+from .voiceprints import _unit
 
 log = logging.getLogger(__name__)
 
@@ -80,7 +81,9 @@ def group_voices(segments: list[dict], turns: list[tuple[float, float, str]], em
         ranked = sorted(row.items(), key=lambda kv: -kv[1])
         total = sum(row.values())
         if ranked and ranked[0][0] in embeddings:
-            chosen[group] = list(embeddings[ranked[0][0]])
+            u = _unit(list(embeddings[ranked[0][0]]))  # stored as unit vectors (cosine = dot product)
+            if u:
+                chosen[group] = [round(x, 6) for x in u]
         if len(ranked) > 1 and total and ranked[1][1] / total >= MIX_SHARE:
             mixed[group] = {"voices": [v for v, _ in ranked[:2]], "share": round(ranked[1][1] / total, 2)}
     return chosen, mixed

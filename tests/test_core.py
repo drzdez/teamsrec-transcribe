@@ -1873,3 +1873,13 @@ def test_a_cloud_request_that_hangs_is_tried_once_more_then_fails(tmp_path, monk
         cloud.post_with_retry("https://x", headers={}, data={}, upload=up, timeout=(30.0, 400.0), vendor="ElevenLabs")
     assert calls == [(30.0, 400.0), (30.0, 400.0)]
     assert cloud.request_timeout(tmp_path / "missing.wav") == (30.0, 1200.0)
+
+
+def test_fasttrack_voices_are_unit_vectors_and_the_group_hint_never_exceeds_one():
+    from teamsrec_transcribe.fasttrack import group_voices
+    from teamsrec_transcribe.web.review import _nearest_group
+    voices, _ = group_voices([{"start": 0, "end": 5, "speaker": "a"}, {"start": 5, "end": 9, "speaker": "b"}],
+                             [(0, 5, "X"), (5, 9, "Y")], {"X": [3.0, 4.0], "Y": [4.0, 3.0]})
+    assert voices == {"a": [0.6, 0.8], "b": [0.8, 0.6]}
+    hint = _nearest_group("a", {"a": [3.0, 4.0], "b": [4.0, 3.0]}, {"a": 5.0, "b": 4.0})  # not unit: still a cosine
+    assert hint == {"label": "b", "score": 0.96}

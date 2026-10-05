@@ -78,7 +78,7 @@ from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export
                         summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
                         same_person_groups, set_meeting_link, unmerge_speakers)
-from ..voiceprints import Voiceprints, cosine, speech_seconds
+from ..voiceprints import Voiceprints, _unit, cosine, speech_seconds
 from .. import timings
 from ..fasttrack import cloud_ready, needs_voices  # the emergency fast track, separate from the local path
 from ..providers.base import Segment
@@ -270,8 +270,11 @@ def _nearest_group(label: str, embeddings: dict, secs: dict) -> dict | None:
     vec = embeddings.get(label)
     if not vec:
         return None
-    best = max(((other, cosine(vec, v)) for other, v in embeddings.items() if other != label and v and
-                secs.get(other, 0.0) > 0), key=lambda kv: kv[1], default=None)
+    u = _unit(vec)
+    if not u:
+        return None
+    best = max(((other, cosine(u, w)) for other, v in embeddings.items() if other != label and v and
+                secs.get(other, 0.0) > 0 and (w := _unit(v))), key=lambda kv: kv[1], default=None)
     if best is None or best[1] < GROUP_HINT_MIN:
         return None
     return {"label": best[0], "score": round(best[1], 2)}

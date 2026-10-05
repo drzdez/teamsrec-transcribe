@@ -837,11 +837,11 @@ async function loadRecording(/** @type {string} */ stem) {
     return;
   }
   meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · ${r.language || "?"} · mluvčí z: ${(r.speaker_sources || []).join(", ") || "diarizace"}`;
-  renderQueueBanner();
   renderSpeakers();
   markClean();
   docPick.innerHTML = ""; docPick.dataset.stem = "";
   showSub(subTab, subTab !== "speakers");
+  renderQueueBanner();  // last: a running new transcript replaces what was just drawn
 }
 
 /** @param {Review} r */
@@ -850,10 +850,11 @@ function queuePlace(/** @type {string} */ stem) {
   const j = jobsState;
   if (!j) return null;
   if (j.current && j.current.stem === stem)
-    return { running: true, id: j.current.id, since: j.current.started || "", startedAt: j.current.started_at || "",
-             force: !!j.current.force, held: false };
+    return { running: true, id: j.current.id, name: j.current.name, since: j.current.started || "",
+             startedAt: j.current.started_at || "", force: !!j.current.force, held: false };
   const at = (j.queue || []).findIndex((/** @type {any} */ q) => q.stem === stem);
-  return at < 0 ? null : { running: false, id: j.queue[at].id, place: at + 1, held: !!j.held, force: !!j.queue[at].force,
+  return at < 0 ? null : { running: false, id: j.queue[at].id, name: j.queue[at].name, place: at + 1, held: !!j.held,
+                           force: !!j.queue[at].force,
                            before: j.current ? j.current.stem : "" };
 }
 
@@ -874,15 +875,19 @@ function renderQueueBanner() {
   const old = document.getElementById("queueBanner");
   if (old) old.remove();
   const q = review && review.transcribed ? queuePlace(review.stem) : null;
+  // only a new transcript replaces what the page shows; minutes and voices leave the transcript as it is
+  const rewriting = !!(q && q.running && q.name === "process");
+  const locked = !!(q && q.running && (q.name === "process" || q.name === "voices"));  // labels / names may change
   for (const id of ["save", "saveSum", "saveTitle"]) {
     const b = /** @type {HTMLButtonElement} */ ($(id));
-    if (q && q.running) { b.disabled = true; b.dataset.queueLock = "1"; }
+    if (locked) { b.disabled = true; b.dataset.queueLock = "1"; }
     else if (b.dataset.queueLock) { delete b.dataset.queueLock; b.disabled = false; if (id === "saveTitle") updateDirty(); }
   }
-  $("subtabs").classList.toggle("runningHere", !!(q && q.running));  // no old transcript or minutes to open
+  $("subtabs").classList.toggle("runningHere", rewriting);  // no old transcript or minutes to open
   if (!q || !review) return;
-  const what = q.force ? "nový přepis od nuly" : "zpracování";
-  if (q.running) {
+  const what = q.name === "summary" ? "nový zápis" : q.name === "summarize-as" ? "zápis jiným modelem"
+    : q.name === "voices" ? "doplnění hlasů" : q.force ? "nový přepis od nuly" : "zpracování";
+  if (rewriting) {
     if (!main.querySelector("[data-running]")) {
       showSub("speakers", false);
       main.innerHTML = "";
@@ -898,9 +903,12 @@ function renderQueueBanner() {
     return;
   }
   const bar = document.createElement("div"); bar.id = "queueBanner"; bar.className = "queueBanner";
-  bar.innerHTML = `<span class="state">⏳ ve frontě ${q.place}.</span>` +
-    `<span class="note">${what}${q.held ? " · čeká na konec nahrávání" : q.before ? ` · teď běží ${escapeHtml(q.before)}` : ""}` +
-    ` · do té doby se nic nemění</span>`;
+  bar.innerHTML = q.running
+    ? `<span class="state">⏳ právě běží: ${what}</span>` +
+      `<span class="note">od ${escapeHtml(q.since)}${locked ? " · Uložit je do konce vypnuté" : " · přepis zůstává, jak je"}</span>`
+    : `<span class="state">⏳ ve frontě ${q.place}.</span>` +
+      `<span class="note">${what}${q.held ? " · čeká na konec nahrávání" : q.before ? ` · teď běží ${escapeHtml(q.before)}` : ""}` +
+      ` · do té doby se nic nemění</span>`;
   bar.appendChild(queueButtons(q));
   $("subtabs").appendChild(bar);
 }

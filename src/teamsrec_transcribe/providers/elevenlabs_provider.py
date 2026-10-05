@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ..config import TranscribeSettings
 from .base import ProviderError, ProviderResult
-from .cloud import api_key, compress_for_upload, remove_upload, lang2, normalize_speakers, words_to_segments
+from .cloud import api_key, compress_for_upload, post_with_retry, remove_upload, request_timeout, lang2, normalize_speakers, words_to_segments
 
 log = logging.getLogger(__name__)
 
@@ -39,11 +39,8 @@ class ElevenLabsProvider:
         if language:
             data["language_code"] = language
         try:
-            with upload.open("rb") as f:
-                r = requests.post(URL, headers={"xi-api-key": key}, data=data,
-                                  files={"file": (upload.name, f, "audio/webm")}, timeout=3600)
-        except requests.RequestException as e:
-            raise ProviderError(f"ElevenLabs request failed: {e}") from e
+            r = post_with_retry(URL, headers={"xi-api-key": key}, data=data, upload=upload,
+                                timeout=request_timeout(audio), vendor="ElevenLabs")
         finally:
             remove_upload(upload)
         if r.status_code != 200:

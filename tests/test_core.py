@@ -1855,3 +1855,21 @@ def test_a_job_records_how_long_each_part_took(tmp_path, monkeypatch):
     with timings.step("outside a job"):  # a CLI command: measured and logged, nothing written
         pass
     assert len(timings.latest(rec, 10)) == 3
+
+
+def test_a_cloud_request_that_hangs_is_tried_once_more_then_fails(tmp_path, monkeypatch):
+    import requests
+    from teamsrec_transcribe.providers import cloud
+    from teamsrec_transcribe.providers.base import ProviderError
+    up = tmp_path / "a.webm"
+    up.write_bytes(b"x")
+    calls = []
+
+    def hang(url, **kw):
+        calls.append(kw["timeout"])
+        raise requests.Timeout("read timed out")
+    monkeypatch.setattr(requests, "post", hang)
+    with pytest.raises(ProviderError, match="did not answer"):
+        cloud.post_with_retry("https://x", headers={}, data={}, upload=up, timeout=(30.0, 400.0), vendor="ElevenLabs")
+    assert calls == [(30.0, 400.0), (30.0, 400.0)]
+    assert cloud.request_timeout(tmp_path / "missing.wav") == (30.0, 1200.0)

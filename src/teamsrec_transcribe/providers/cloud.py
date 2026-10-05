@@ -98,6 +98,35 @@ def words_to_segments(words: list[dict], language: str, max_gap_s: float = 1.2,
     return segments
 
 
+def request_timeout(audio: Path) -> tuple[float, float]:
+    """(connect, read) timeouts for one cloud transcription, by the length of the recording: the services answer in
+    about a tenth of real time (16 min in 37 s), so waiting much longer only means the request hangs (2026-10-05: a
+    25-minute meeting waited 17 minutes on an open connection). 2 min + a third of the duration, at most 20 min."""
+    try:
+        duration = max(probe(audio).duration_s, 1.0)
+    except Exception:  # cannot measure it: the longest wait
+        return 30.0, 1200.0
+    return 30.0, min(120.0 + duration / 3, 1200.0)
+
+
+def post_with_retry(url: str, *, headers: dict, data: dict, upload: Path, timeout: tuple[float, float],
+                    vendor: str, attempts: int = 2):
+    """POST the audio; a timeout or a dropped connection is tried once more, an answer (even an error) is not."""
+    import requests
+    last: Exception | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            with upload.open("rb") as f:
+                return requests.post(url, headers=headers, data=data,
+                                     files={"file": (upload.name, f, "audio/webm")}, timeout=timeout)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last = e
+            log.warning("%s: no answer (%s), attempt %d of %d", vendor, type(e).__name__, attempt, attempts)
+        except requests.RequestException as e:
+            raise ProviderError(f"{vendor} request failed: {e}") from e
+    raise ProviderError(f"{vendor} did not answer in {timeout[1]:.0f} s (tried {attempts}×): {last}")
+
+
 def remove_upload(path: Path) -> None:
     """Best effort: a temporary file that cannot be deleted must never cost a finished (and paid) transcript."""
     try:

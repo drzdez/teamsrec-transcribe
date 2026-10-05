@@ -16,7 +16,7 @@ from pathlib import Path
 
 from ..config import TranscribeSettings
 from .base import ProviderError, ProviderResult, Segment
-from .cloud import api_key, compress_for_upload, remove_upload, normalize_speakers
+from .cloud import api_key, compress_for_upload, post_with_retry, remove_upload, request_timeout, normalize_speakers
 
 log = logging.getLogger(__name__)
 
@@ -37,11 +37,8 @@ class OpenAIProvider:
         t_enc = time.monotonic()
         data = {"model": model, "response_format": "diarized_json", "chunking_strategy": "auto"}
         try:
-            with upload.open("rb") as f:
-                r = requests.post(URL, headers={"Authorization": f"Bearer {key}"}, data=data,
-                                  files={"file": (upload.name, f, "audio/webm")}, timeout=3600)
-        except requests.RequestException as e:
-            raise ProviderError(f"OpenAI request failed: {e}") from e
+            r = post_with_retry(URL, headers={"Authorization": f"Bearer {key}"}, data=data, upload=upload,
+                                timeout=request_timeout(audio), vendor="OpenAI")
         finally:
             remove_upload(upload)
         if r.status_code != 200:

@@ -255,6 +255,8 @@
                  background: var(--card); font-size: 13px; }
   .queueBanner .state { color: var(--accent); font-weight: 600; }
   .queueBanner .note { color: var(--muted); }
+  .queueBanner.running { border-left-color: var(--warn); }  /* running now: yellow, like its row in the list */
+  .queueBanner.running .state { color: var(--warn); }
   .queueBanner .queueActs { margin: 0 0 0 auto; gap: 6px; }
   .queueBanner .queueActs button { padding: 3px 10px; font-size: 12px; }
   /* stands out while any filter is on: the list is not complete */
@@ -920,7 +922,7 @@ function renderQueueBanner() {
     }
     return;
   }
-  const bar = document.createElement("div"); bar.id = "queueBanner"; bar.className = "queueBanner";
+  const bar = document.createElement("div"); bar.id = "queueBanner"; bar.className = "queueBanner" + (q.running ? " running" : "");
   bar.innerHTML = q.running
     ? `<span class="state">⏳ právě běží: ${what}</span>` +
       `<span class="note">od ${escapeHtml(q.since)}${locked ? " · Uložit je do konce vypnuté" : " · přepis zůstává, jak je"}</span>`

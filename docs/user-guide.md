@@ -343,6 +343,15 @@ one request by ElevenLabs Scribe (or OpenAI, `[transcribe] cloud_provider`), min
 Teams window videos – fast, and the graphics card stays quiet. It asks first: the meeting's audio and transcript
 leave the PC. Speakers are not recognised by voice prints then (the cloud returns no voice data); the microphone still
 names you. Without the keys (Nastavení → Klíče API) the button is greyed out and says which one is missing.
+Afterwards, when you want the voices, **Doplnit hlasy lokálně** above the speakers of such a transcript runs only the
+local diarization (no new transcript, about a minute on the GPU): every group from the cloud gets the voice of the
+local voice it overlaps most, the speakers are recognised by voice prints, and confirmed names store prints as usual.
+The groups stay the cloud's; a group the local voices see as two people gets a hint to go through its replies.
+
+**⏱ Časy zpracování** above the speakers shows how long each part of the last jobs took – the Teams window
+analysis, the transcription with its own phases (model, speech, word alignment, diarization, language per speaker; or
+the cloud service), naming the speakers, the exports and each minutes – kept in `<stem>.timings.json` (the last 10
+jobs; derived, deletable). Information only.
 
 Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
 `⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as

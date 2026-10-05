@@ -14,6 +14,7 @@ from .importer import import_file
 from .media import mix_tracks, probe, utc_now_iso
 from .mic_speakers import apply_mic_track
 from .people import People
+from .timings import step
 from .prompt import build_prompt
 from .providers import get_provider
 from .providers.base import Segment, Word
@@ -548,7 +549,8 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     timeline = None
     if not rec.speakers_video_path.exists() and rec.sidecar.get("screens") and cfg.video.enabled:
         try:
-            do_video_screens(cfg, rec)  # live recording with captured Teams windows
+            with step("analýza oken Teams"):
+                do_video_screens(cfg, rec)  # live recording with captured Teams windows
         except Exception as e:  # never block the transcript on the video step
             log.error("%s: screen analysis failed: %s", rec.stem, e)
     if rec.speakers_video_path.exists():
@@ -558,7 +560,10 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     provider = get_provider(ts.provider)
     log.info("%s: transcribing with %s (%s, %s, language=%s, diarize=%s)", rec.stem, provider.name, ts.model,
              ts.compute_type, language or "auto", want_diarize)
-    res = provider.transcribe(audio, language=language, prompt=prompt, settings=ts, diarize=want_diarize)
+    parts: dict = {}
+    with step(f"přepis ({provider.name})", parts):
+        res = provider.transcribe(audio, language=language, prompt=prompt, settings=ts, diarize=want_diarize)
+        parts.update(res.timings or {})  # the provider's own phases: model, ASR, alignment, diarization, ...
     log.info("%s: %d segments, language %s, timings %s", rec.stem, len(res.segments), res.language, res.timings)
 
     labels_before = [s.speaker for s in res.segments]
@@ -572,7 +577,8 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     # around the local user's own tile, so the video keeps the previous speaker highlighted while the user
     # talks (2026-09-24: 48 minutes of the user landed on the participant highlighted before him).
     if cfg.user_name and mic and mic.exists():
-        mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)
+        with step("mluvčí z mikrofonu"):
+            mic_mapping = apply_mic_track(res.segments, mic, cfg.user_name)
         if mic_mapping:
             speaker_sources.append("mic")
     elif mic and mic.exists():
@@ -583,7 +589,8 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     # Better more groups that are each one voice (merged later on the page) than one group of several voices.
     embeddings = remap_embeddings(res.speaker_embeddings or {}, labels_before, [s.speaker for s in res.segments])
     durations = speech_seconds([{"start": s.start, "end": s.end, "speaker": s.speaker} for s in res.segments])
-    voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
+    with step("poznání po hlase"):
+        voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
     if voice_matches:
         speaker_sources.append("voiceprint")
     if timeline:
@@ -815,7 +822,8 @@ def do_summarize_compare(cfg: Config, rec: Recording, *, force: bool = False) ->
         if summary_path_for(cfg, rec, provider, model).exists() and not force:
             continue
         try:
-            out.append(summarize_as(cfg, rec, provider, model))
+            with step(f"srovnávací zápis ({provider} {model})"):
+                out.append(summarize_as(cfg, rec, provider, model))
         except RecordingError as e:
             log.info("%s: no %s summary: %s", rec.stem, spec, e)
         except Exception as e:
@@ -913,10 +921,12 @@ def auto_purge(cfg: Config) -> list[dict]:
 
 def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:
     do_transcribe(cfg, rec, force=force)
-    do_export(cfg, rec)
+    with step("export (txt, srt)"):
+        do_export(cfg, rec)
     if cfg.summarize.enabled:
         try:
-            do_summarize(cfg, rec, force=force)
+            with step(f"zápis ({cfg.summarize.provider} {cfg.summarize.model})"):
+                do_summarize(cfg, rec, force=force)
         except Exception as e:  # summary is optional: no model, no API key, network, refusal
             log.error("%s: summary failed: %s", rec.stem, e)
         do_summarize_compare(cfg, rec, force=force)

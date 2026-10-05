@@ -123,6 +123,9 @@ def spec(version: str) -> dict:
             "/api/recordings/{stem}/speakers/{label}/replies": {"get": _op(
                 "All replies of one speaker (to go through them and move some to another speaker)",
                 params=[STEM, {"name": "label", "in": "path", "required": True, "schema": {"type": "string"}}])},
+            "/api/recordings/{stem}/voices": {"post": _op(
+                "Fast-track post-processing: local diarization lends voice embeddings to the groups of a cloud "
+                "transcript, then voice recognition runs (background job)", params=[STEM])},
             "/api/jobs/{job}/cancel": {"post": _op("Drop a waiting job, or stop the running one for good",
                                                    tags=("server",), params=[{"name": "job", "in": "path", "required": True,
                                                                                "schema": {"type": "integer"}}])},

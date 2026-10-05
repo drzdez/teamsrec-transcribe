@@ -1793,3 +1793,65 @@ def test_run_job_cloud_flag_switches_the_services(tmp_path, monkeypatch):
     res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--cloud"])
     assert res.exit_code == 0, res.output
     assert seen == [("elevenlabs", "anthropic", False)]
+
+
+def test_fasttrack_voices_come_from_the_local_voice_that_overlaps_each_cloud_group(tmp_path, monkeypatch):
+    """Fast-track post-processing: the cloud keeps the groups, the local diarization lends their voices."""
+    from teamsrec_transcribe import fasttrack, pipeline as pl
+    from teamsrec_transcribe.providers import whisperx_provider as wp
+    segs = [{"start": 0, "end": 10, "text": "a", "speaker": "speaker_0"},
+            {"start": 10, "end": 20, "text": "b", "speaker": "speaker_1"},
+            {"start": 20, "end": 30, "text": "c", "speaker": "speaker_1"}]
+    turns = [(0, 10, "SPEAKER_00"), (10, 22, "SPEAKER_01"), (22, 30, "SPEAKER_02")]  # speaker_1 is two local voices
+    emb = {"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0], "SPEAKER_02": [0.6, 0.8]}
+    voices, mixed = fasttrack.group_voices(segs, turns, emb)
+    assert voices == {"speaker_0": [1.0, 0.0], "speaker_1": [0.0, 1.0]}
+    assert mixed == {"speaker_1": {"voices": ["SPEAKER_01", "SPEAKER_02"], "share": 0.4}}
+
+    rec = _make_transcribed(tmp_path)
+    data = rec.read_json(rec.transcript_path)
+    assert not fasttrack.needs_voices(data), "a local transcript has its own voices"
+    data.update(provider="elevenlabs", segments=segs, speakers=["speaker_0", "speaker_1"])
+    rec.write_json(rec.transcript_path, data)
+    assert fasttrack.needs_voices(data)
+    pytest.importorskip("whisperx")  # add_voices loads the audio with whisperx (the [whisperx] extra)
+    import pandas as pd
+    monkeypatch.setattr(wp, "diarize_audio", lambda wav, model, device: (
+        pd.DataFrame([{"start": a, "end": b, "speaker": v} for a, b, v in turns]), emb))
+    seen = []
+    monkeypatch.setattr(pl, "recognize_voices", lambda cfg, r: seen.append(r.stem) or {})
+    from teamsrec_transcribe.config import VoiceprintSettings
+    out = fasttrack.add_voices(Config(out_dir=tmp_path, voiceprints=VoiceprintSettings(enabled=True)), rec)
+    assert out == {"groups": 2, "matches": 0, "mixed": ["speaker_1"]}
+    stored = rec.read_json(rec.transcript_path)
+    assert stored["speaker_embeddings"]["speaker_0"] == [1.0, 0.0] and not fasttrack.needs_voices(stored)
+    assert seen == [rec.stem], "the standard voice recognition ran"
+
+
+def test_a_job_records_how_long_each_part_took(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from teamsrec_transcribe import cli, pipeline as pl, timings
+    from teamsrec_transcribe.web.review import build_review
+    rec = _make_transcribed(tmp_path)
+
+    def fake_process(cfg, r, force=False):
+        with timings.step("přepis (fake)", {"transcribe_s": 1.5, "align_s": 0.5, "note": "x"}):
+            pass
+        with timings.step("zápis (ollama m)"):
+            pass
+    monkeypatch.setattr(pl, "do_process", fake_process)
+    for _ in range(2):
+        res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--force"])
+        assert res.exit_code == 0, res.output
+    runs = timings.latest(rec, 5)
+    assert len(runs) == 2 and runs[0]["job"] == "process --force" and runs[0]["ok"] is True
+    assert [s["step"] for s in runs[0]["steps"]] == ["přepis (fake)", "zápis (ollama m)"]
+    assert runs[0]["steps"][0]["parts"] == {"transcribe_s": 1.5, "align_s": 0.5}, "numbers only"
+    assert build_review(Config(out_dir=tmp_path), rec)["timings"][0]["job"] == "process --force"
+
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False: (_ for _ in ()).throw(RuntimeError("boom")))
+    CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem])
+    assert timings.latest(rec, 5)[0]["ok"] is False, "a failed job is recorded too"
+    with timings.step("outside a job"):  # a CLI command: measured and logged, nothing written
+        pass
+    assert len(timings.latest(rec, 10)) == 3

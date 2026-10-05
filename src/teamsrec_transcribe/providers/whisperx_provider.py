@@ -162,6 +162,18 @@ def _retranscribe(model, wav, segments: list[dict], language: str, batch_size: i
     return out
 
 
+def diarize_audio(wav, model_name: str, device: str):
+    """Local diarization (pyannote through whisperx) of a 16 kHz waveform: the turns (DataFrame start, end, speaker)
+    and one voice embedding per speaker – the space the voice prints are stored in. The normal path uses it inside
+    the transcription; the fast track's voice post-processing uses it on a transcript made in the cloud."""
+    from whisperx.diarize import DiarizationPipeline
+    pipeline = DiarizationPipeline(model_name=model_name, device=device)
+    dia, embeddings = pipeline(wav, return_embeddings=True)
+    del pipeline
+    gc.collect()
+    return dia, embeddings
+
+
 def _pkg_version(name: str) -> str:
     try:
         return version(name)
@@ -250,13 +262,9 @@ class WhisperXProvider:
         embeddings = None
         if diarize:
             t = time.time()
-            from whisperx.diarize import DiarizationPipeline
-            pipeline = DiarizationPipeline(model_name=settings.diarize_model, device=device)
-            dia, embeddings = pipeline(wav, return_embeddings=True)  # one embedding per diarization label
+            dia, embeddings = diarize_audio(wav, settings.diarize_model, device)  # one embedding per label
             result = whisperx.assign_word_speakers(dia, result)
             timings["diarize_s"] = round(time.time() - t, 1)
-            del pipeline
-            gc.collect()
 
         speaker_languages: dict[str, str] = {}
         if diarize and auto_language and settings.per_speaker_language and len(settings.languages) > 1:

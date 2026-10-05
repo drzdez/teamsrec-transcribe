@@ -12,7 +12,8 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   GET    /api/recordings/{stem}/docs/{file}            a transcript .txt or a .summary*.md of the recording
   PUT    /api/recordings/{stem}/names                  {"names": {label: name|fields}, "title"?, "summary"?}
   PUT    /api/recordings/{stem}/title                  {"title"} rename the meeting only (folder and files follow)
-  POST   /api/recordings/{stem}/process                {"force"?} transcribe + export + summarize in the background
+  POST   /api/recordings/{stem}/process                {"force"?, "cloud"?} transcribe + export + summarize in the background
+  POST   /api/recordings/{stem}/voices                 fast-track post-processing: local voices for a cloud transcript
   POST   /api/recordings/{stem}/recognize              match unnamed labels against the voice prints
   POST   /api/recordings/{stem}/summaries              {"provider", "model"} a summary with that model, in the background
   DELETE /api/recordings/{stem}/summaries/{file}       delete that summary (closing its tab)
@@ -78,7 +79,8 @@ from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
                         same_person_groups, set_meeting_link, unmerge_speakers)
 from ..voiceprints import Voiceprints, cosine, speech_seconds
-from ..fasttrack import cloud_ready  # the emergency fast track, separate from the local path
+from .. import timings
+from ..fasttrack import cloud_ready, needs_voices  # the emergency fast track, separate from the local path
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
 from ..speakers import speaker_list
@@ -366,6 +368,9 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                                           and "align_s" not in (data.get("timings") or {})},
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "cloud": cloud_ready(cfg),
+        "timings": timings.latest(rec),  # how long each part of the last jobs took
+        "voices_missing": needs_voices(data),  # a fast-track transcript: voices can be added locally
+        "voices_mixed": sorted(((data.get("voices_from") or {}).get("mixed") or {}).keys()),
         "speakers": speakers, "known_names": known_names(cfg, people),
         "same_person": [{"person": pid, "labels": labels, "name": (people.get(pid) or Person(pid)).full}
                         for pid, labels in same_person_groups(rec, people).items()],
@@ -968,6 +973,11 @@ class ReviewState:
                             start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
+    def run_voices(self, rec: Recording) -> tuple[int, int]:
+        """Fast-track post-processing: local voices for a cloud transcript (fasttrack.add_voices), on the GPU."""
+        return self.run_job("voices", ["run-job", "voices", rec.stem], "hlasy doplněny", rec.stem,
+                            start=f"{rec.stem}: doplňují se hlasy (lokální diarizace)")
+
     def run_process(self, rec: Recording, force: bool = False, cloud: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
@@ -998,6 +1008,7 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("PUT", rf"/api/recordings/{STEM_RE_PART}/names", "save_names"),
     ("PUT", rf"/api/recordings/{STEM_RE_PART}/title", "save_title"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/process", "process"),
+    ("POST", rf"/api/recordings/{STEM_RE_PART}/voices", "voices"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/recognize", "recognize"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/summaries", "summarize_as"),
     ("DELETE", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)", "delete_summary"),
@@ -1160,6 +1171,13 @@ def _handler(state: ReviewState, server_ref: dict):
             rec = save_title(state.cfg, self._recording(stem), title)
             state.event(f"{rec.stem}: název uložen („{rec.title}“)", "ok", rec.stem)
             self._json({"ok": True, "stem": rec.stem, "title": rec.title})
+
+        def r_voices(self, q, body, stem):
+            rec = self._recording(stem)
+            if not rec.transcript_path.exists() or not needs_voices(rec.read_json(rec.transcript_path)):
+                raise ValueError("hlasy se doplňují jen k přepisu z rychlé cesty přes cloud, který je ještě nemá")
+            job, position = state.run_voices(rec)
+            self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_process(self, q, body, stem):
             job, position = state.run_process(self._recording(stem), force=bool(body.get("force")),

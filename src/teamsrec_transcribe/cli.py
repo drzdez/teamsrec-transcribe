@@ -426,18 +426,31 @@ def _require_ffmpeg() -> None:
 
 @app.command("run-job", hidden=True)
 @_errors
-def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as"),
+def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices"),
             target: str = typer.Argument(...), force: bool = typer.Option(False),
             cloud: bool = typer.Option(False, help="emergency fast track: cloud services only (fasttrack.py)"),
             provider: str = typer.Option(""), model: str = typer.Option("")):
     """One background job of the review page, in a process of its own, so the page can stop it (a recording
     started: the GPU must not break the recorded sound)."""
-    from .pipeline import do_process, do_summarize, do_summarize_compare, resolve_target, summarize_as
+    from .pipeline import resolve_target
     cfg = _cfg(ctx)
     if cloud:  # the emergency fast track (fasttrack.py): cloud services only, for this job
         from .fasttrack import cloud_only
         cfg = cloud_only(cfg)
     rec = resolve_target(cfg, target, allow_import=False)
+    from . import timings
+    timings.start_run(kind + (" --force" if force else "") + (" --cloud" if cloud else ""))
+    ok = False
+    try:
+        _run_job(cfg, rec, kind, force, provider, model)
+        ok = True
+    finally:
+        timings.finish_run(rec, ok)  # how long each part took, for the page (<stem>.timings.json)
+
+
+def _run_job(cfg, rec, kind: str, force: bool, provider: str, model: str) -> None:
+    from .pipeline import do_process, do_summarize, do_summarize_compare, summarize_as
+    from .timings import step
     if kind == "process":
         if force:  # from scratch: the labels change, so the manual names and the OCR names of last time go now
             from .pipeline import reset_names
@@ -446,10 +459,15 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
                 rec.speakers_video_path.unlink()
         do_process(cfg, rec, force=force)
     elif kind == "summary":
-        do_summarize(cfg, rec, force=True)
+        with step(f"zápis ({cfg.summarize.provider} {cfg.summarize.model})"):
+            do_summarize(cfg, rec, force=True)
         do_summarize_compare(cfg, rec, force=True)  # the comparison summaries follow the new names too
+    elif kind == "voices":  # fast-track post-processing: local voices for a cloud transcript
+        from .fasttrack import add_voices
+        add_voices(cfg, rec)
     elif kind == "summarize-as":
-        summarize_as(cfg, rec, provider, model)
+        with step(f"zápis ({provider} {model})"):
+            summarize_as(cfg, rec, provider, model)
     else:
         raise typer.BadParameter(f"unknown job {kind!r}")
 

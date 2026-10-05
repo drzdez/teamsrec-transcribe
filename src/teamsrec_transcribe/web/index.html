@@ -109,6 +109,12 @@
     .keyRow .cancel { grid-column: 1; }
   }
   .langLine { margin: 4px 0 10px; font-size: 14px; }
+  .timings { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+  .timings > summary { cursor: pointer; }
+  .timings table { border-collapse: collapse; margin: 8px 0 4px 14px; }
+  .timings caption { text-align: left; color: var(--fg); padding: 2px 0; }
+  .timings td { padding: 1px 14px 1px 0; } .timings td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .timings tr.part td { font-size: 12px; opacity: .8; }
   .langLine .unaligned { color: var(--warn); }
   .card.unassigned .replies { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
   /* going through the replies of one speaker: a group that mixes voices is split by moving replies */
@@ -388,7 +394,7 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean}} RecordingRow
  */
 
@@ -1031,12 +1037,79 @@ function languageLine(/** @type {Review} */ r) {
   return p;
 }
 
+/** Fast-track post-processing: a transcript from the cloud has no voices; the local diarization can lend them (one GPU
+ * pass, no new transcript), so the speakers can be recognised by voice prints and confirmed names store prints. */
+function voicesBar(/** @type {Review} */ r) {
+  const bar = document.createElement("div"); bar.className = "toolbar";
+  const note = document.createElement("span"); note.className = "meta";
+  note.textContent = "Přepis je z rychlé cesty přes cloud – mluvčí zatím nemají hlasy, takže se nepoznávají po hlase. ";
+  const b = document.createElement("button"); b.type = "button"; b.className = "play";
+  b.textContent = "Doplnit hlasy lokálně";
+  b.title = "Na grafické kartě proběhne jen rozlišení mluvčích (bez nového přepisu, zhruba minuta): skupiny z cloudu "
+    + "dostanou hlas, poznají se po hlasových otiscích a potvrzená jména pak otisky ukládají. Skupiny zůstávají z cloudu.";
+  armedButton(b, "Potvrdit: doplnit hlasy (~1 min, grafická karta)", async () => {
+    const stem = r.stem;
+    /** @type {any} */ let res;
+    try {
+      res = await api(recUrl(stem, "voices"), send("POST"));
+      if (!res.ok) throw new Error(res.error || "nelze spustit");
+    } catch (e) { setStatus(String(e), "err"); return; }
+    setBusy(true);
+    setStatus("doplňují se hlasy (lokální rozlišení mluvčích)…", "busy");
+    queuedNote(res, "doplnění hlasů");
+    let error = "";
+    try { error = await waitForJob(res.job); } catch (e) { error = String(e); } finally { setBusy(false); }
+    await loadList(); pick.value = stem; await loadRecording(stem);
+    setStatus(error ? `doplnění hlasů selhalo: ${error}` : "hlasy doplněny, mluvčí poznaní po hlase jsou vyplnění", error ? "err" : "ok");
+  });
+  bar.append(note, b);
+  return bar;
+}
+
+/** "⏱ Časy zpracování": how long each part of the last jobs took (<stem>.timings.json) – information only. */
+const PART_NAME = /** @type {Record<string,string>} */ ({
+  load_audio_s: "načtení zvuku", load_model_s: "načtení modelu", transcribe_s: "přepis řeči", align_s: "zarovnání slov",
+  diarize_s: "rozlišení mluvčích", speaker_language_s: "jazyk po mluvčích", upload_s: "odeslání", request_s: "služba v cloudu (přepis i mluvčí)",
+  convert_s: "převod zvuku", encode_s: "komprese zvuku", total_s: "celkem",
+});
+const JOB_NAME = /** @type {Record<string,string>} */ ({
+  "process": "zpracování", "process --force": "přepis od nuly", "process --cloud": "zpracování přes cloud",
+  "process --force --cloud": "přepis od nuly přes cloud", "summary": "přegenerování zápisu", "summarize-as": "zápis jiným modelem",
+  "voices": "doplnění hlasů",
+});
+function fmtSecs(/** @type {number} */ s) {
+  if (s < 60) return `${s.toFixed(s < 10 ? 1 : 0)} s`;
+  const m = Math.floor(s / 60), r = Math.round(s % 60);
+  return `${m} min ${String(r).padStart(2, "0")} s`;
+}
+function timingsBox(/** @type {any[]} */ runs) {
+  const box = document.createElement("details"); box.className = "timings";
+  const last = runs[0];
+  box.innerHTML = `<summary>⏱ Časy zpracování – naposledy ${escapeHtml(JOB_NAME[last.job] || last.job)} ` +
+    `${escapeHtml(String(last.started || "").replace("T", " ").slice(0, 16))}, celkem ${fmtSecs(last.total_s || 0)}` +
+    `${last.ok === false ? " (nedoběhlo)" : ""}</summary>`;
+  for (const run of runs) {
+    const t = document.createElement("table");
+    t.innerHTML = `<caption>${escapeHtml(JOB_NAME[run.job] || run.job)} · ${escapeHtml(String(run.started || "").replace("T", " ").slice(0, 16))}` +
+      ` · celkem ${fmtSecs(run.total_s || 0)}${run.ok === false ? " · nedoběhlo" : ""}</caption>` +
+      (run.steps || []).map((/** @type {any} */ s) =>
+        `<tr><td>${escapeHtml(s.step)}</td><td class="num">${fmtSecs(s.s)}</td></tr>` +
+        Object.entries(s.parts || {}).filter(([k]) => k !== "total_s" && k !== "dropped_replies")
+          .map(([k, v]) => `<tr class="part"><td>– ${escapeHtml(PART_NAME[k] || k)}</td><td class="num">${fmtSecs(Number(v))}</td></tr>`).join("")
+      ).join("");
+    box.appendChild(t);
+  }
+  return box;
+}
+
 function renderSpeakers() {
   if (!review) return;
   main.innerHTML = "";
   if (!review.speakers.length) { main.appendChild(emptyBox("V přepisu nejsou žádní mluvčí.")); return; }
   if (review.meeting) main.appendChild(meetingPanel(review.meeting));
   main.appendChild(languageLine(review));
+  if (review.voices_missing) main.appendChild(voicesBar(review));
+  if ((review.timings || []).length) main.appendChild(timingsBox(review.timings || []));
   if (review.speakers.some(sp => sp.unresolved && !sp.person)) {
     const bar = document.createElement("div"); bar.className = "toolbar";
     const b = document.createElement("button"); b.type = "button"; b.className = "play";
@@ -1220,7 +1293,9 @@ function card(sp, i) {
     `<span class="chip">${fmtMin(sp.seconds)} · ${sp.count} replik</span>` +
     `<span class="chip lang${sp.own ? " own" : ""}" title="${sp.own ? "přepsáno znovu v jazyce tohoto mluvčího (jazyk po mluvčích)" : "jazyk, ve kterém byl mluvčí přepsán"}${sp.mixed ? "; část replik v jiném jazyce" : ""}">${escapeHtml(langName(sp.language))}${sp.own ? " · vlastní" : ""}${sp.mixed ? " +" : ""}</span>` +
     (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
-    (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "");
+    (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "") +
+    (review && (review.voices_mixed || []).includes(sp.label)
+      ? '<p class="hint">podle lokálních hlasů tu možná mluví dva lidé – poslechněte si „Projít repliky“</p>' : "");
   if (sp.voice_hint) {
     const vh = sp.voice_hint;
     const p = document.createElement("p"); p.className = "hint";

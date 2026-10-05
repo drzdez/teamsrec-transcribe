@@ -222,6 +222,54 @@ def read_values(path: Path | None = None) -> dict[str, Any]:
     return out
 
 
+CLOUD_NAMES = {"openai": "OpenAI", "elevenlabs": "ElevenLabs", "anthropic": "Claude"}
+
+
+def processing_places(values: dict) -> list[dict]:
+    """Where each part of the normal processing runs with these settings: "local" (this PC), "cloud" (data leaves the
+    PC) or "off" – and whether a setting chooses it (`choice`: the setting's key). The emergency fast track is its own
+    row: always cloud, opt-in per job on the review page."""
+    v = values.get
+    tp = str(v("transcribe.provider") or "whisperx")
+    local_asr = tp == "whisperx"
+    cloud = CLOUD_NAMES.get(tp, tp)
+    sp = str(v("summarize.provider") or "ollama")
+    rows = [
+        {"step": "Přepis řeči", "where": "local" if local_asr else "cloud",
+         "how": "WhisperX na grafické kartě" if local_asr else f"{cloud} (posílá se zvuk)", "choice": "transcribe.provider"},
+        {"step": "Zarovnání slov (časy slov, hranice replik)",
+         "where": ("local" if v("transcribe.align") else "off") if local_asr else "cloud",
+         "how": ("wav2vec2 na grafické kartě" if v("transcribe.align") else "vypnuto – repliky budou dlouhé")
+                if local_asr else f"součást přepisu {cloud}", "choice": "transcribe.align" if local_asr else ""},
+        {"step": "Rozlišení mluvčích (diarizace)",
+         "where": ("local" if v("transcribe.diarize") else "off") if local_asr else "cloud",
+         "how": ("pyannote na grafické kartě" if v("transcribe.diarize") else "vypnuto")
+                if local_asr else f"součást přepisu {cloud}", "choice": "transcribe.diarize" if local_asr else ""},
+        {"step": "Jazyk po mluvčích", "where": ("local" if v("transcribe.per_speaker_language") else "off")
+         if local_asr else "off", "how": "WhisperX znovu pro mluvčí v jiném jazyce" if local_asr
+         else "jen s WhisperX", "choice": "transcribe.per_speaker_language" if local_asr else ""},
+        {"step": "Jmenovky z oken Teams", "where": "local" if v("video.enabled") else "off",
+         "how": "OCR v tomto počítači", "choice": ""},
+        {"step": "Vy z mikrofonní stopy", "where": "local" if v("user.name") else "off",
+         "how": "hlasitost vlastní stopy", "choice": ""},
+        {"step": "Poznání po hlase", "where": ("local" if v("voiceprints.enabled") and local_asr else "off"),
+         "how": "otisky v tomto počítači" if local_asr else "cloud nevrací hlasy (doplní je „Doplnit hlasy lokálně“)",
+         "choice": ""},
+        {"step": "Zápis", "where": ("local" if sp == "ollama" else "cloud") if v("summarize.enabled") else "off",
+         "how": f"Ollama {v('summarize.model')}" if sp == "ollama" else f"Claude {v('summarize.model')} (posílá se text přepisu)",
+         "choice": "summarize.provider"},
+    ]
+    for spec in v("summarize.compare") or []:
+        prov, _, model = str(spec).partition(":")
+        rows.append({"step": "Srovnávací zápis", "where": "local" if prov == "ollama" else "cloud",
+                     "how": f"{'Ollama' if prov == 'ollama' else CLOUD_NAMES.get(prov, prov)} {model}"
+                            + ("" if prov == "ollama" else " (posílá se text přepisu)"), "choice": "summarize.compare"})
+    rows.append({"step": "⚡ Rychle přes cloud (nouzové, jen tlačítkem u nahrávky)", "where": "cloud",
+                 "how": f"přepis i mluvčí {CLOUD_NAMES.get(str(v('transcribe.cloud_provider')), v('transcribe.cloud_provider'))}, "
+                        f"zápis Claude {v('summarize.cloud_model')}", "choice": "", "fasttrack": True})
+    return rows
+
+
 def describe(path: Path | None = None) -> dict:
     """What the settings page shows: sections with fields and values, key states, input devices."""
     path = path or default_config_path()
@@ -238,6 +286,7 @@ def describe(path: Path | None = None) -> dict:
         "vault": vault_available(),
         "inputs": input_devices(),
         "suggestions": suggestions(values),
+        "places": processing_places(values),
     }
 
 

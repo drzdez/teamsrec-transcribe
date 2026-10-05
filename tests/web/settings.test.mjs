@@ -20,8 +20,11 @@ test("settings: sections, values from the file, only changes are saved, comments
   await openSettings(p);
   assert.ok(!p.$("settings").hidden);
   const titles = [...p.doc.querySelectorAll("#settingsMain .setSec h2")].map(h => h.textContent);
-  assert.deepEqual(titles, ["Klíče API", "Obecné", "Nahrávání", "Přepis", "Video oken Teams", "Zápis",
-                            "Hlasové otisky", "Uchování"]);
+  assert.deepEqual(titles, ["Kde se co zpracovává", "Klíče API", "Obecné", "Nahrávání", "Přepis", "Video oken Teams",
+                            "Zápis", "Hlasové otisky", "Uchování"]);
+  const places = [...p.doc.querySelectorAll(".places tr")].map(tr => tr.textContent);
+  assert.ok(places.some(t => /Přepis řeči.*lokálně/.test(t)), "where the transcription runs");
+  assert.ok(places.some(t => /Rychle přes cloud.*cloud/.test(t)), "the fast track is always listed, as cloud");
   assert.equal(field(p, "user.name").value, "Jan Novák");
   assert.equal(field(p, "transcribe.glossary").value, "WFMS\nNOTAM");
   assert.equal(field(p, "transcribe.diarize").checked, true, "a default when the file does not say");

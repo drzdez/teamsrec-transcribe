@@ -68,6 +68,13 @@
   .card.setSec { display: block; padding: 16px 20px; }  /* not the two-column grid of a speaker card */
   .setSec h2 { font-size: 16px; margin: 0 0 4px; }
   .setSec .note { color: var(--muted); font-size: 13px; margin: 0 0 8px; max-width: 80ch; }
+  .places table { border-collapse: collapse; font-size: 14px; }
+  .places td { padding: 3px 14px 3px 0; vertical-align: top; }
+  .places td.how { color: var(--muted); font-size: 13px; }
+  .places .setKey { font-family: ui-monospace, Consolas, monospace; font-size: 12px; opacity: .8; }
+  .places .place { white-space: nowrap; font-weight: 600; }
+  .places .place.local { color: var(--ok); } .places .place.cloud { color: var(--warn); } .places .place.off { color: var(--muted); }
+  .places tr.fast td { padding-top: 10px; border-top: 1px solid var(--line); }
   .setRow { display: grid; grid-template-columns: 260px minmax(0, 1fr); gap: 4px 20px; align-items: start;
             padding: 10px 0; border-top: 1px solid var(--line); }
   .setSec h2 + .setRow, .setSec .note + .setRow { border-top: 0; }
@@ -2251,11 +2258,30 @@ function closeSettings() {
 }
 
 /** @param {SettingsData} d */
+/** "Kde se co zpracovává": every part of the processing with where it runs under these settings (this PC or the
+ * cloud), and which setting chooses it – recomputed after every save. */
+function placesCard(/** @type {any[]} */ rows) {
+  const card = document.createElement("section"); card.className = "card setSec places";
+  const all = rows.filter(r => !r.fasttrack && r.where !== "off");
+  const anyCloud = all.some(r => r.where === "cloud");
+  card.innerHTML = `<h2>Kde se co zpracovává</h2>` +
+    `<p class="note">${anyCloud ? "Běžné zpracování kombinuje tento počítač a cloud – u cloudových částí odchází zvuk nebo text schůzky ven."
+                               : "Běžné zpracování běží celé v tomto počítači; cloud jen na vyžádání tlačítkem ⚡ u nahrávky."}</p>`;
+  const t = document.createElement("table");
+  const badge = (/** @type {string} */ w) => w === "local" ? '<span class="place local">🖥 lokálně</span>'
+    : w === "cloud" ? '<span class="place cloud">☁ cloud</span>' : '<span class="place off">— vypnuto</span>';
+  t.innerHTML = rows.map(r => `<tr${r.fasttrack ? ' class="fast"' : ""}><td>${escapeHtml(r.step)}</td><td>${badge(r.where)}</td>` +
+    `<td class="how">${escapeHtml(String(r.how || ""))}${r.choice ? ` <span class="setKey">· nastavení ${escapeHtml(r.choice)}</span>` : ""}</td></tr>`).join("");
+  card.appendChild(t);
+  return card;
+}
+
 function renderSettings(d) {
   settingsData = d;
   settingsLoaded = {};
   $("settingsPath").textContent = d.path;
   settingsMain.innerHTML = "";
+  if (d.places) settingsMain.appendChild(placesCard(d.places));
   settingsMain.appendChild(keysCard(d));
 
   for (const s of d.sections) {

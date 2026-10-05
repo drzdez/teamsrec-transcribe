@@ -336,6 +336,12 @@ stopped after 10 s without an answer, or at once when no page is open), stop at 
 goes back to the front of the queue and finishes by itself after the recording; a job asked for during a recording waits for its end too (unless the setting is to let it run). The same tape says when the page has
 lost its server (open the review page again from the tray icon).
 
+**Nastavení → Kde se co zpracovává** lists every part of the processing with where it runs under the current settings
+(🖥 lokálně / ☁ cloud / — vypnuto) and which setting chooses it; parts without a setting (the Teams window names, the
+microphone, voice prints) are always local. With the defaults everything runs on this PC; a Claude entry in the
+comparison minutes makes the normal run a combination (the transcript text goes to Claude). The fast track is listed
+separately: always cloud, only by its button.
+
 **⚡ … rychle přes cloud** is an emergency fast track next to "Ano, přepsat a zpracovat" and "Přepsat znovu od nuly";
 the normal processing stays local. It runs the same job on cloud services only: transcription *and* diarization in
 one request by ElevenLabs Scribe (or OpenAI, `[transcribe] cloud_provider`), minutes by Claude

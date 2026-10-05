@@ -1883,3 +1883,20 @@ def test_fasttrack_voices_are_unit_vectors_and_the_group_hint_never_exceeds_one(
     assert voices == {"a": [0.6, 0.8], "b": [0.8, 0.6]}
     hint = _nearest_group("a", {"a": [3.0, 4.0], "b": [4.0, 3.0]}, {"a": 5.0, "b": 4.0})  # not unit: still a cosine
     assert hint == {"label": "b", "score": 0.96}
+
+
+def test_processing_places_say_what_runs_where():
+    from teamsrec_transcribe.settings import processing_places
+    base = {"transcribe.provider": "whisperx", "transcribe.align": True, "transcribe.diarize": True,
+            "transcribe.per_speaker_language": True, "video.enabled": True, "user.name": "Jan", "voiceprints.enabled": True,
+            "summarize.enabled": True, "summarize.provider": "ollama", "summarize.model": "gemma4:31b",
+            "summarize.compare": ["anthropic:claude-opus-5-5"], "transcribe.cloud_provider": "elevenlabs",
+            "summarize.cloud_model": "claude-opus-5-5"}
+    where = {r["step"]: r["where"] for r in processing_places(base) if not r.get("fasttrack")}
+    assert where["Přepis řeči"] == where["Zarovnání slov (časy slov, hranice replik)"] == "local"
+    assert where["Srovnávací zápis"] == "cloud", "a Claude comparison makes the normal run a combination"
+    cloud = {r["step"]: (r["where"], r["choice"]) for r in processing_places({**base, "transcribe.provider": "elevenlabs"})}
+    assert cloud["Přepis řeči"] == ("cloud", "transcribe.provider")
+    assert cloud["Rozlišení mluvčích (diarizace)"] == ("cloud", ""), "part of the cloud transcription, no own setting"
+    assert cloud["Poznání po hlase"][0] == "off"
+    assert processing_places(base)[-1]["fasttrack"] is True

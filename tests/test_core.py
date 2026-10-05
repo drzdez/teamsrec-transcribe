@@ -206,6 +206,12 @@ def test_mic_track_names_the_user(tmp_path):
     # SPEAKER_02's single 2 s segment sits fully inside mic activity -> the user too; Jana untouched
     assert [s.speaker for s in segs] == ["Jan Novák", "SPEAKER_01", "Jan Novák", "SPEAKER_01", "Jan Novák", "Jana", "Jan Novák"]
 
+    # someone else's reply inside the user's label (the mic silent): it keeps the label, a group of its own
+    segs = [Segment(0, 5, "a", "SPEAKER_00"), Segment(10, 15, "c", "SPEAKER_00"), Segment(30, 40, "g", "SPEAKER_00"),
+            Segment(23, 29, "x", "SPEAKER_00"), Segment(22.4, 22.9, "mhm", "SPEAKER_00")]
+    assert apply_mic_track(segs, wav, "Jan Novák") == {"SPEAKER_00": "Jan Novák"}
+    assert [s.speaker for s in segs] == ["Jan Novák", "Jan Novák", "Jan Novák", "SPEAKER_00", "Jan Novák"],         "the 6 s reply without mic activity stays SPEAKER_00; a short one follows the label"
+
 
 def test_mic_residue_of_a_gated_headset_is_not_the_user(tmp_path):
     """A headset with a noise gate sends digital silence between words and a faint residue (-85 dBFS) while

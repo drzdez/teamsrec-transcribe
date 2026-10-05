@@ -35,6 +35,7 @@ LABEL_MIN_ACTIVE = 0.6      # a diarization label is the user when >= 60 % of it
 LABEL_MIN_SECONDS = 10      # ... and it spoke at least this long
 SEGMENT_MIN_ACTIVE = 0.8    # a single segment of an unmapped label is the user when >= 80 % mic-active
 SEGMENT_MIN_SECONDS = 1.5   # ... and it is long enough to mean more than "mhm"
+SEGMENT_MAX_SILENT = 0.35   # a reply of the user's label with the mic this quiet was said (mostly) by someone else
 
 
 def _rms_db(path: Path, frame_s: float = FRAME_S) -> tuple[np.ndarray, float]:
@@ -102,9 +103,16 @@ def apply_mic_track(segments: list[Segment], mic_wav: Path, me: str) -> dict[str
         log.info("mic track: %s %5.1f min, mic active %3.0f%%%s", lab, time[lab] / 60,
                  100 * hot[lab] / max(time[lab], 1e-9), "  -> " + me if lab in mapping else "")
 
-    n_label = n_seg = 0
+    n_label = n_seg = n_kept = 0
     for seg in segments:
         if seg.speaker in mapping:
+            # the label is the user, but a longer reply in it with the mic silent is somebody else's: it keeps the
+            # label, so it shows as its own group (2026-10-05: the cloud diarization put another person's replies
+            # into the user's label, and the whole label became the user)
+            if (seg.end - seg.start >= SEGMENT_MIN_SECONDS
+                    and _active_fraction(active, frame_s, seg.start, seg.end) < SEGMENT_MAX_SILENT):
+                n_kept += 1
+                continue
             seg.speaker = me
             n_label += 1
         elif ((not seg.speaker or seg.speaker == "UNKNOWN" or seg.speaker.startswith("SPEAKER_"))
@@ -113,5 +121,6 @@ def apply_mic_track(segments: list[Segment], mic_wav: Path, me: str) -> dict[str
             # also a reply the diarization gave nobody: the mic says it was the user
             seg.speaker = me
             n_seg += 1
-    log.info("speakers from mic track: %d segments via label mapping, %d via segment activity", n_label, n_seg)
+    log.info("speakers from mic track: %d segments via label mapping, %d via segment activity, %d left to their "
+             "label (mic silent)", n_label, n_seg, n_kept)
     return mapping

@@ -146,6 +146,14 @@ alignment there are no word times, so no speaker turns inside a reply; the reply
 alignment model falls back to the local cache, the transcript records `timings.align_skipped`, and the page warns about
 an unaligned transcript.
 
+## The user's label holding other people's replies (2026-10-05)
+
+In "Postgre rollout" transcribed by the fast track (ElevenLabs), the user's group had 93 replies, and several were
+somebody else's (e.g. 04:32 and 05:01: mic active 7 % and 0 %, the loopback at −27 dB). The cloud diarization had put
+another voice into the user's label, and the microphone rule renamed the whole label (≥ 60 % of its time mic-active).
+Now a reply of ≥ 1.5 s in the user's label with the mic active under 35 % keeps its label – a group of its own, to
+name or merge. Effect on the last ten recordings: 0–4 replies each (local transcripts 0–4, cloud 4–5).
+
 ## Microphone activity threshold (2026-09-30)
 
 A Sony WH-1000XM6 connected directly over Bluetooth gates its microphone: almost digital silence between words (floor

@@ -12,7 +12,8 @@ test("the button next to the title saves only the title", async t => {
   p.input(p.$("title"), "Týdenní sync týmu");
   assert.ok(!btn.disabled);
   btn.click();
-  await waitFor(() => /název uložen/.test(p.$("status").textContent), "the title saved");
+  // the server's own event says "název uložen" too, possibly before the page has reloaded the list: wait for the list
+  await waitFor(() => /Týdenní sync týmu/.test(p.$("pick").selectedOptions[0]?.textContent || ""), "the title saved");
   assert.ok(p.requests.some(r => /^PUT \/api\/recordings\/[^/]+\/title$/.test(r)), "its own request");
   assert.ok(!p.requests.some(r => r.includes("/names")), "the names were not saved");
   assert.ok(btn.disabled, "saved: nothing more to save");

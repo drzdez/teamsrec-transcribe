@@ -75,7 +75,7 @@ from ..pipeline import (assign_segments, do_export, do_process, do_summarize, do
                         summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording, reset_names,
                         same_person_groups, set_meeting_link, unmerge_speakers)
-from ..voiceprints import Voiceprints
+from ..voiceprints import Voiceprints, cosine, speech_seconds
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
 from ..speakers import speaker_list
@@ -253,6 +253,24 @@ def _voice_hint(vp: Voiceprints, people: People, vec, unresolved: bool, secs: fl
             "nick": p.nick, "display": p.display}, "why": why, "threshold": threshold}
 
 
+# Two voice groups of one meeting are worth a look from this similarity on. Calibrated 2026-10-05 on 25 meetings
+# (group embeddings of the diarization): the same person split in two 0.25-0.71 (median 0.45), different people
+# 0.07-0.54 (median 0.25) – so this is a hint to listen, never an automatic merge.
+GROUP_HINT_MIN = 0.45
+
+
+def _nearest_group(label: str, embeddings: dict, secs: dict) -> dict | None:
+    """The voice group of this meeting that sounds most like `label`, when it is close enough to suggest."""
+    vec = embeddings.get(label)
+    if not vec:
+        return None
+    best = max(((other, cosine(vec, v)) for other, v in embeddings.items() if other != label and v and
+                secs.get(other, 0.0) > 0), key=lambda kv: kv[1], default=None)
+    if best is None or best[1] < GROUP_HINT_MIN:
+        return None
+    return {"label": best[0], "score": round(best[1], 2)}
+
+
 def _fmt_hms(t: float) -> str:
     t = int(t)
     return f"{t // 3600:02d}:{t % 3600 // 60:02d}:{t % 60:02d}"
@@ -288,6 +306,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     voice = data.get("voice_matches") or {}
     vp = Voiceprints.load(cfg.out_dir)
     embeddings = data.get("speaker_embeddings") or {}
+    group_secs = speech_seconds(data.get("segments") or [])  # the groups that still have replies
     by: dict[str, list[Segment]] = {}
     for s in segs:
         by.setdefault(s.speaker or "UNKNOWN", []).append(s)
@@ -316,6 +335,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                       if label in voice else None),
             "voice_hint": _voice_hint(vp, people, embeddings.get(label), is_label(label) and not value, secs,
                                       cfg.voiceprints.threshold),
+            "nearest": _nearest_group(label, embeddings, group_secs),
             "confirmed": bool(value) and bool(manual.get(label)) and label not in voice,
             "seconds": round(secs, 1),
             "count": len(ss),

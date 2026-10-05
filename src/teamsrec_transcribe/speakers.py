@@ -1,4 +1,5 @@
-"""Speaker attribution: microphone track (the user) -> video timeline -> diarization labels -> speakers.json."""
+"""Speaker attribution helpers: microphone track (the user), video timeline, manual names. The pipeline (2026-10-05) uses
+the video for whole voice groups only (video_label_mapping); apply_video_timeline stays for the tools and the tests."""
 
 from __future__ import annotations
 

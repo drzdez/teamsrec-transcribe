@@ -343,6 +343,12 @@ instead of the offer to transcribe it, with **Zpracovat jako další** (it moves
 beginning – what it had done is lost). **Zrušit zpracování** takes a waiting recording out of the queue at once; on the one being
 processed it asks first and stops it for good (its work so far is lost; the recording can be processed again).
 
+Speakers are the voice groups of the diarization: every card is one voice. The microphone, the voice prints and the
+Teams video only give names to whole groups, so it can happen that one person has two cards (diarization split them,
+for example a different microphone halfway through). A card then may say "hlasem podobná skupina: SPEAKER_04, shoda
+0.52" – listen to the samples of both, and **stejná osoba** fills in the same name; after Uložit the two groups merge.
+It is only a hint: two different people can score as much.
+
 Keys: Enter = next speaker, Esc = stop playback. An empty name means keeping the label.
 
 A card's heading is the name the speaker got (it follows what you type), with the original label from the transcript

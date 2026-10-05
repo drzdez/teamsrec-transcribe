@@ -121,6 +121,22 @@ transcripts over ~23k characters are summarised in parts (each part its own minu
 merged). A 44-minute meeting: 2 parts + merge, 18k tokens in / 4.3k out. During a concurrent Teams meeting the GPU is
 shared and the parts take several times longer.
 
+## Mixed speaker groups and voices per reply (2026-10-05)
+
+"Peter Hirko" in the 86-minute "Diskusia 2 blocker" had 23 replies of several voices. The cause was the window video:
+it named single replies by the highlighted tile, and a live window keeps the previous speaker highlighted. In 9 of 12
+recent meetings the video made such named groups next to the voice groups (e.g. "Pavol Orosz" next to SPEAKER_01,
+which the voice print recognised as Pavol at 0.93). Since then the video names whole voice groups only, after the
+voice prints, and never a person the voice found elsewhere.
+
+Voices per reply (`lab/reply_voices.py`: the diarization's embedding model on each reply of 1.5–10 s, 636 replies in
+18 s on the GPU) do not separate people reliably: replies of one group are 0.45–0.57 alike, different groups 0.20–0.35.
+They also live in another space than the stored prints (the diarization returns group embeddings after its own
+transform), so they cannot be compared with people. Not used.
+
+Group embeddings of one meeting (25 meetings): the same person split in two 0.25–0.71 (median 0.45), different people
+0.07–0.54 (median 0.25). So "hlasem podobná skupina" from 0.45 is a hint to listen to, never an automatic merge.
+
 ## Microphone activity threshold (2026-09-30)
 
 A Sony WH-1000XM6 connected directly over Bluetooth gates its microphone: almost digital silence between words (floor

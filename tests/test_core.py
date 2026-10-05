@@ -526,6 +526,46 @@ def test_onsite_recording_skips_mic_naming(tmp_path, monkeypatch):
     assert calls == [] and rec.read_json(rec.transcript_path)["speakers"] == ["SPEAKER_00"]
 
 
+def test_video_names_whole_voice_groups_only_after_the_voices(tmp_path, monkeypatch):
+    """2026-10-05: the highlighted tile no longer names single replies (a live window keeps the previous speaker
+    highlighted, which made mixed groups); it names whole voice groups, and only those no voice print found."""
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.providers.base import ProviderResult
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    segs = [Segment(0, 6, "a", "SPEAKER_00"), Segment(6, 8, "b", "SPEAKER_01"),   # Jana's tile still lit at 6-8
+            Segment(8, 20, "c", "SPEAKER_00"), Segment(20, 30, "d", "SPEAKER_01")]
+    rec.write_json(rec.speakers_video_path, {"format": 1, "source": "teams-screen", "fps": 2,
+                                             "speakers": {"Jana Nováková": [[0.0, 20.0]], "Petr Svoboda": [[20.0, 30.0]]}})
+
+    class P:
+        name = "fake"
+
+        def transcribe(self, audio, **k):
+            return ProviderResult(segments=[Segment(x.start, x.end, x.text, x.speaker) for x in segs], language="cs",
+                                  provider="fake", provider_version="0", model="m",
+                                  speaker_embeddings={"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]})
+    monkeypatch.setattr(pl, "get_provider", lambda name: P())
+    # the voice knows SPEAKER_01 is Jana; the video would call SPEAKER_00 Jana too and SPEAKER_01 Petr
+    monkeypatch.setattr(pl, "_voiceprints_step", lambda cfg, rec, emb, dur, mic, model: (
+        rec.write_json(rec.speakers_path, {"SPEAKER_01": "jana-novakova"}) or {"SPEAKER_01": {"person": "jana-novakova", "score": 0.9}}))
+    people = pl.People.load(tmp_path, "nick")
+    people.ensure("Jana Nováková")
+    people.save()
+    pl.do_transcribe(cfg, rec, force=True)
+    out = rec.read_json(rec.transcript_path)
+    speakers = [x["speaker"] for x in out["segments"]]
+    assert speakers[1] == speakers[3] == "SPEAKER_01", "no single reply renamed by the highlighted tile"
+    assert speakers[0] == speakers[2] == "SPEAKER_00", "Jana is SPEAKER_01 by voice: the video does not make a second Jana"
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_01": "jana-novakova"}
+
+    rec.speakers_path.unlink()  # no voice print knows anybody: the video names both groups, whole
+    monkeypatch.setattr(pl, "_voiceprints_step", lambda *a: {})
+    pl.do_transcribe(cfg, rec, force=True)
+    speakers = [x["speaker"] for x in rec.read_json(rec.transcript_path)["segments"]]
+    assert speakers == ["Jana Nováková", "Petr Svoboda", "Jana Nováková", "Petr Svoboda"]
+
+
 def test_summary_refuses_empty_transcript(tmp_path):
     from teamsrec_transcribe.pipeline import do_summarize
     cfg = Config(out_dir=tmp_path)
@@ -1654,3 +1694,13 @@ def test_with_a_page_open_the_recording_asks_first(tmp_path, monkeypatch):
     assert state.jobs_state()["asking"] is False and state.held is False
     gate.set()
     state.unsubscribe(q)
+
+
+def test_nearest_voice_group_is_a_hint_from_0_45():
+    from teamsrec_transcribe.web.review import GROUP_HINT_MIN, _nearest_group
+    emb = {"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.8, 0.6], "SPEAKER_02": [0.0, 1.0], "SPEAKER_03": [0.7, 0.71]}
+    secs = {"SPEAKER_00": 60.0, "SPEAKER_01": 40.0, "SPEAKER_02": 30.0}  # SPEAKER_03 has no replies left (merged)
+    assert _nearest_group("SPEAKER_00", emb, secs) == {"label": "SPEAKER_01", "score": 0.8}
+    assert _nearest_group("SPEAKER_02", emb, secs) == {"label": "SPEAKER_01", "score": 0.6}
+    assert _nearest_group("SPEAKER_02", {"SPEAKER_02": [0.0, 1.0], "SPEAKER_00": [1.0, 0.05]}, secs) is None
+    assert GROUP_HINT_MIN == 0.45

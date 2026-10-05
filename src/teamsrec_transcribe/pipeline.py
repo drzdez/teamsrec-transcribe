@@ -19,7 +19,7 @@ from .providers import get_provider
 from .providers.base import Segment, Word
 from .recording import (Recording, RecordingError, is_media_file, is_sidecar, iter_recordings, make_stem,
                         resolve_recording, slugify)
-from .speakers import apply_manual_names, apply_video_fallback, apply_video_timeline, speaker_list
+from .speakers import apply_manual_names, speaker_list, video_label_mapping
 from .video_speakers import VideoTimeline, analyze_screen, analyze_video, merge_timelines
 from .voiceprints import Voiceprints, enroll_from_recording, remap_embeddings, speech_seconds
 
@@ -541,15 +541,18 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
             speaker_sources.append("mic")
     elif mic and mic.exists():
         log.info("%s: mic track present but [user] name is not set, your voice stays SPEAKER_xx", rec.stem)
-    if timeline:
-        speaker_sources.append("video")
-        apply_video_timeline(res.segments, timeline, fallback=False, keep_named=True)  # what the highlight covers
-        apply_video_fallback(res.segments, timeline, labels_before)  # whole labels the video attributes clearly
+    # Voices before the video, and the video names whole voice groups only (2026-10-05): naming single replies
+    # by the highlighted tile made mixed groups – a live window keeps the previous speaker highlighted, so a
+    # "Peter" group collected replies of whoever was highlighted, next to the clean voice group that was Peter.
+    # Better more groups that are each one voice (merged later on the page) than one group of several voices.
     embeddings = remap_embeddings(res.speaker_embeddings or {}, labels_before, [s.speaker for s in res.segments])
     durations = speech_seconds([{"start": s.start, "end": s.end, "speaker": s.speaker} for s in res.segments])
     voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
     if voice_matches:
         speaker_sources.append("voiceprint")
+    if timeline:
+        if _video_names_whole_groups(cfg, rec, res.segments, timeline, voice_matches):
+            speaker_sources.append("video")
     speaker_sources.append("diarization")
 
     transcript = {
@@ -577,6 +580,35 @@ def _looks_like_a_name(text: str) -> bool:
     """OCR of a live window is noisier than a Teams recording: only register 'First Last'-shaped strings."""
     import re
     return bool(re.fullmatch(r"[^\W\d_](?:[^\W\d_]|['.-])+(?: [^\W\d_](?:[^\W\d_]|['.-])+){1,3}", text))
+
+
+def _video_names_whole_groups(cfg: Config, rec: Recording, segments: list, timeline, voice_matches: dict) -> dict:
+    """The video names whole voice groups it clearly attributes (video_label_mapping), never single replies, and
+    only groups that neither the microphone nor a voice print named. A person the voice already found in another
+    group is not given a second group: the voice is the stronger evidence (the page offers merging the groups).
+    Returns the mapping applied."""
+    mapping = video_label_mapping(segments, timeline)
+    people = People.load(cfg.out_dir, cfg.people_display)
+    voiced = {m["person"] for m in voice_matches.values()}
+    applied: dict[str, str] = {}
+    for label, name in mapping.items():
+        if label in voice_matches:
+            continue
+        person = people.find(name)
+        if person is not None and person.id in voiced:
+            log.info("%s: video says %s is %s, but the voice found %s in another group – left as %s", rec.stem,
+                     label, name, name, label)
+            continue
+        applied[label] = name
+    n = 0
+    for seg in segments:
+        if seg.speaker in applied:
+            seg.speaker = applied[seg.speaker]
+            n += 1
+    if applied:
+        log.info("%s: speakers from video (whole groups): %s, %d replies", rec.stem,
+                 ", ".join(f"{k}->{v}" for k, v in applied.items()), n)
+    return applied
 
 
 def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[float]], durations: dict[str, float],

@@ -354,7 +354,7 @@
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
  * @typedef {{start:number,end:number,at:string,text:string}} Reply
- * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,nearest?:{label:string,score:number}|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number,voiceprint?:boolean}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
@@ -1123,6 +1123,24 @@ function card(sp, i) {
     use.onclick = () => { setFields(vh.fields); /** @type {HTMLInputElement|null} */ (side.querySelector('[data-key="first"]'))?.focus(); };
     p.appendChild(use);
     left.appendChild(p);
+  }
+  if (sp.nearest && review) {  // another voice group of this meeting sounds alike: listen, then join with one click
+    const other = review.speakers.find(o => o.label === sp.nearest.label);
+    if (other) {
+      const p = document.createElement("p"); p.className = "hint";
+      const who = other.name && other.name !== other.label ? `${other.name} (${other.label})` : other.label;
+      p.textContent = `hlasem podobná skupina: ${who}, shoda ${sp.nearest.score.toFixed(2)} – poslechněte si ukázky obou `;
+      const join = document.createElement("button"); join.type = "button"; join.className = "play";
+      join.textContent = "stejná osoba";
+      join.title = "vyplní stejné jméno jako u té skupiny; po Uložit se obě skupiny sloučí do jednoho mluvčího";
+      join.onclick = () => {
+        const src = /** @type {HTMLElement|null} */ (main.querySelector(`.side[data-label="${CSS.escape(other.label)}"]`));
+        if (src) { const f = collectFields(src); if (!(f.first || f.last || f.nick)) f.first = other.label; setFields(f); }
+        updateDirty();
+      };
+      p.appendChild(join);
+      left.appendChild(p);
+    }
   }
   const samples = document.createElement("div"); samples.className = "samples";
   if (!review || !review.has_mix) samples.innerHTML = '<span class="excerpt">zvuk nahrávky chybí</span>';

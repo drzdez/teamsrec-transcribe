@@ -85,18 +85,15 @@ def save_copy(rec: Recording, summary_file: str, folder: str, out_dir: Path) -> 
 
 
 def pick_folder(initial: str = "") -> str:
-    """The Windows folder dialog, opened by the local server (works for the browser and the desktop window alike);
-    "" when cancelled."""
+    """The modern Windows folder dialog (address bar, a "Folder" box to type or paste a path), opened by the local
+    server so it works for the browser and the desktop window alike; "" when cancelled. pick_folder.ps1 does it."""
     import os
     if os.name != "nt":
         raise RecordingError("the folder dialog is available on Windows only; type the folder instead")
-    start = initial.replace("'", "''")
-    script = ("Add-Type -AssemblyName System.Windows.Forms; "
-              "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-              "$d.Description = 'Kam uložit kopii zápisu'; $d.ShowNewFolderButton = $true; "
-              f"if ('{start}') {{ $d.SelectedPath = '{start}' }}; "
-              "$owner = New-Object System.Windows.Forms.Form -Property @{TopMost = $true}; "
-              "if ($d.ShowDialog($owner) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }")
-    r = subprocess.run(["powershell", "-NoProfile", "-STA", "-Command", script], capture_output=True, text=True,
-                       encoding="utf-8", timeout=900)
+    script = Path(__file__).with_name("pick_folder.ps1")
+    r = subprocess.run(["powershell", "-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                        "-Initial", initial], capture_output=True, text=True, encoding="utf-8", timeout=900)
+    if r.returncode != 0:
+        log.warning("folder dialog failed: %s", r.stderr.strip()[-300:])
+        raise RecordingError("the folder dialog did not open; type the folder instead")
     return r.stdout.strip()

@@ -113,26 +113,29 @@ class Voiceprints:
         return len(self.people.get(pid, []))
 
     # ---- matching
-    def scores(self, vector: list[float]) -> list[tuple[str, float]]:
-        """Best similarity per person, highest first."""
+    def scores(self, vector: list[float], exclude_stem: str | None = None) -> list[tuple[str, float]]:
+        """Best similarity per person, highest first. Prints taken from `exclude_stem` do not count: a recording
+        must not be recognised by its own voices (that scored 1.00 and proved nothing)."""
         u = _unit(vector)
         if not u:
             return []
         out = []
         for pid, prints in self.people.items():
-            if prints:
-                out.append((pid, max(cosine(u, p["v"]) for p in prints)))
+            usable = [p for p in prints if not exclude_stem or p.get("stem") != exclude_stem]
+            if usable:
+                out.append((pid, max(cosine(u, p["v"]) for p in usable)))
         return sorted(out, key=lambda kv: -kv[1])
 
     def recognize(self, embeddings: dict[str, list[float]], threshold: float, margin: float,
-                  durations: dict[str, float] | None = None, min_seconds: float = MIN_SECONDS) -> dict[str, tuple[str, float]]:
+                  durations: dict[str, float] | None = None, min_seconds: float = MIN_SECONDS,
+                  exclude_stem: str | None = None) -> dict[str, tuple[str, float]]:
         """{label: (person id, score)} for labels whose best person is >= threshold and >= margin ahead.
         Labels with less than min_seconds of speech are skipped (their embedding is unreliable)."""
         out: dict[str, tuple[str, float]] = {}
         for label, vec in embeddings.items():
             if durations is not None and durations.get(label, 0.0) < min_seconds:
                 continue
-            ranked = self.scores(vec)
+            ranked = self.scores(vec, exclude_stem)
             if not ranked:
                 continue
             best_pid, best = ranked[0]

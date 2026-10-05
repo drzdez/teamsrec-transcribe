@@ -14,8 +14,9 @@ test("a recording waiting in the queue shows its place instead of the offer to t
   assert.ok(!main.querySelector("button.primary-btn"), "no second offer to transcribe it");
   assert.match(main.textContent, new RegExp(`Teď běží ${WEEKLY}`));
   const option = stem => [...p.$("pick").options].find(o => o.value === stem).textContent;
-  await waitFor(() => /⏳ ve frontě, 1\.\]/.test(option(BOARD_NEW)), "the list says it waits");
-  assert.match(option(WEEKLY), /⏳ zpracovává se\]/, "and which one runs");
+  await waitFor(() => /^⏳ ve frontě 1\. · /.test(option(BOARD_NEW)), "the list says it waits, first thing in the row");
+  assert.match(option(WEEKLY), /^⏳ zpracovává se · /, "and which one runs");
+  assert.equal([...p.$("pick").options].find(o => o.value === BOARD_NEW).className, "optQueued", "coloured row");
   const queued = [...p.doc.querySelectorAll("#states button")].find(b => b.textContent.startsWith("⏳ zpracovává se nebo ve frontě"));
   assert.ok(queued, "a state filter for them");
   assert.match(queued.textContent, /\(2\)$/);

@@ -73,7 +73,7 @@ from ..people import DISPLAY_MODES, People, Person
 from ..pipeline import (assign_segments, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
                         summarize_as,
                         summary_path_for, load_segments, meeting_info,
-                        merge_same_person, recognize_voices, remove_speaker, rename_recording, reset_names,
+                        merge_same_person, recognize_voices, remove_speaker, rename_recording,
                         same_person_groups, set_meeting_link, unmerge_speakers)
 from ..voiceprints import Voiceprints, cosine, speech_seconds
 from ..providers.base import Segment
@@ -235,12 +235,13 @@ def _person_info(people: People, value: str) -> dict | None:
 VOICE_HINT_MIN = 0.40  # below this a "closest print" is noise, not a hint
 
 
-def _voice_hint(vp: Voiceprints, people: People, vec, unresolved: bool, secs: float, threshold: float) -> dict | None:
+def _voice_hint(vp: Voiceprints, people: People, vec, unresolved: bool, secs: float, threshold: float,
+                exclude_stem: str | None = None) -> dict | None:
     """The closest voice print for a still-unknown label that did not pass the automatic threshold, so the
     user can confirm it with one click instead of guessing."""
     if not (unresolved and vec and vp.people):
         return None
-    ranked = vp.scores(vec)
+    ranked = vp.scores(vec, exclude_stem)
     if not ranked or ranked[0][1] < VOICE_HINT_MIN:
         return None
     pid, score = ranked[0]
@@ -334,7 +335,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                        "name": (people.get(voice[label]["person"]) or Person(voice[label]["person"])).full}
                       if label in voice else None),
             "voice_hint": _voice_hint(vp, people, embeddings.get(label), is_label(label) and not value, secs,
-                                      cfg.voiceprints.threshold),
+                                      cfg.voiceprints.threshold, rec.stem),
             "nearest": _nearest_group(label, embeddings, group_secs),
             "confirmed": bool(value) and bool(manual.get(label)) and label not in voice,
             "seconds": round(secs, 1),
@@ -833,7 +834,8 @@ class ReviewState:
         """What runs and what waits, for every page (SSE `jobs`, hello, /api/status)."""
         with self.lock:
             return {"current": dict(self.current) if self.current else None,
-                    "queue": [{k: j[k] for k in ("id", "name", "stem", "text")} for j in self.jobs],
+                    "queue": [{**{k: j[k] for k in ("id", "name", "stem", "text")}, "force": j.get("force", False)}
+                              for j in self.jobs],
                     "held": self.held, "asking": self.asking, "ask_s": RECORDING_ASK_S}
 
     def _push_jobs(self) -> None:
@@ -850,7 +852,8 @@ class ReviewState:
         waits goes to the pages as SSE `jobs`."""
         with self.lock:
             self.next_job += 1
-            job = {"id": self.next_job, "name": name, "stem": stem, "text": start or name, "fn": fn, "done": done}
+            job = {"id": self.next_job, "name": name, "stem": stem, "text": start or name, "fn": fn, "done": done,
+                   "force": isinstance(fn, list) and "--force" in fn}
             if isinstance(fn, list):  # a command: run in a child process that can be stopped
                 job["argv"], job["fn"] = fn, None
             self.jobs.append(job)
@@ -880,7 +883,8 @@ class ReviewState:
                 job = self.jobs.pop(0)
                 self.running = job
                 self.current = {"id": job["id"], "name": job["name"], "stem": job["stem"], "text": job["text"],
-                                "started": datetime.now().strftime("%H:%M")}
+                                "force": job.get("force", False), "started": datetime.now().strftime("%H:%M"),
+                                "started_at": datetime.now().isoformat(timespec="seconds")}
                 self.message, self.error, self.job = job["name"], "", job["name"]
             # logged before the work, so the order in the log is the real one
             self.event(job["text"], "busy", job["stem"], job=job["id"])
@@ -960,14 +964,8 @@ class ReviewState:
     def run_process(self, rec: Recording, force: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
-        if force:
-            old = reset_names(rec)
-            if old:
-                self.event(f"{rec.stem}: ruční přiřazení jmen zahozeno ({len(old)})", "info", rec.stem)
-            if rec.speakers_video_path.exists():
-                # the cached timeline holds the names OCR read last time; from scratch means those too
-                rec.speakers_video_path.unlink()
-                self.event(f"{rec.stem}: okna Teams se projdou znovu (jmenovky z minule zahozeny)", "info", rec.stem)
+        # from scratch drops the manual names and the cached window analysis when the job starts (run-job), so a
+        # recording waiting in the queue keeps everything and can be cancelled without loss
         return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else []),
                             "zpracováno", rec.stem,
                             start=f"{rec.stem}: {'nový přepis od nuly' if force else 'zpracování'} spuštěno")

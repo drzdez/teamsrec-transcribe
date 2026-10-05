@@ -337,8 +337,13 @@ stopped after 10 s without an answer, or at once when no page is open), stop at 
 goes back to the front of the queue and finishes by itself after the recording; a job asked for during a recording waits for its end too (unless the setting is to let it run). The same tape says when the page has
 lost its server (open the review page again from the tray icon).
 
-Jobs run one at a time, in order. The recordings list marks them `[⏳ zpracovává se]` or `[⏳ ve frontě, 2.]`. A recording that waits in the queue shows its place ("Je ve frontě – 2. v pořadí")
-instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and
+Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
+`⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as
+it is until its turn – a slim line pinned above the tabs says where it is in the queue, the page can be read and
+edited, and cancelling loses nothing; the manual names and the window analysis are dropped only when the job starts.
+Once it runs, the page empties to the same "being processed" view as a new recording (Uložit is off), and the new
+transcript appears by itself when it is done. A recording without a transcript that waits in the queue shows its
+place ("Je ve frontě – 2. v pořadí") instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and
 **Zpracovat hned** (asks first: the running job stops, goes right behind this one and starts again from the
 beginning – what it had done is lost). **Zrušit zpracování** takes a waiting recording out of the queue at once; on the one being
 processed it asks first and stops it for good (its work so far is lost; the recording can be processed again).

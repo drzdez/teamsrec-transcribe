@@ -478,14 +478,30 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
     assert [e["text"] for e in ev][-1].startswith("zpracováno") and ev[-1]["reload"] is True
     assert any("zpracování spuštěno" in e["text"] for e in ev), "the page must see that a job started"
 
-    # "přepsat znovu od nuly": the manual names must not survive a new diarization
+    # "přepsat znovu od nuly": queued, nothing changes yet (the names go when the job starts, in run-job)
     rec.write_json(rec.speakers_path, {"SPEAKER_00": "petr-svoboda"})
     assert st.run_process(rec, force=True)
     for _ in range(50):
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls[-1][-4:] == ["run-job", "process", rec.stem, "--force"] and not rec.speakers_path.exists()
+    assert calls[-1][-4:] == ["run-job", "process", rec.stem, "--force"] and rec.speakers_path.exists()
+
+
+def test_run_job_from_scratch_drops_the_names_when_it_starts(tmp_path, monkeypatch):
+    """The manual names and the cached window analysis must not survive a new diarization – dropped by the job
+    itself, so a recording waiting in the queue keeps them and can be cancelled without loss."""
+    from typer.testing import CliRunner
+    from teamsrec_transcribe import cli, pipeline as pl
+    rec = _make_transcribed(tmp_path)
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": "petr-svoboda"})
+    rec.write_json(rec.speakers_video_path, {"format": 1, "source": "teams-screen", "fps": 2, "speakers": {}})
+    seen = []
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False: seen.append(
+        (force, r.speakers_path.exists(), r.speakers_video_path.exists())))
+    res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--force"])
+    assert res.exit_code == 0, res.output
+    assert seen == [(True, False, False)]
 
 
 def test_choose_language_restricts_to_expected():
@@ -1704,3 +1720,14 @@ def test_nearest_voice_group_is_a_hint_from_0_45():
     assert _nearest_group("SPEAKER_02", emb, secs) == {"label": "SPEAKER_01", "score": 0.6}
     assert _nearest_group("SPEAKER_02", {"SPEAKER_02": [0.0, 1.0], "SPEAKER_00": [1.0, 0.05]}, secs) is None
     assert GROUP_HINT_MIN == 0.45
+
+
+def test_a_recording_is_not_recognised_by_its_own_prints(tmp_path):
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll("jana", [1.0, 0.0], "2026-10-01_0900_a", "SPEAKER_00")
+    vp.enroll("petr", [0.6, 0.8], "2026-09-01_0900_b", "SPEAKER_01")
+    assert vp.scores([1.0, 0.0])[0][0] == "jana"
+    ranked = vp.scores([1.0, 0.0], exclude_stem="2026-10-01_0900_a")  # Jana's only print is from this recording
+    assert [pid for pid, _ in ranked] == ["petr"]
+    assert vp.recognize({"SPEAKER_00": [1.0, 0.0]}, 0.5, 0.1, exclude_stem="2026-10-01_0900_a") == {"SPEAKER_00": ("petr", 0.6)}

@@ -212,6 +212,18 @@
   .meeting .row2 { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
   #filter { min-width: 160px; }
   #filter.bad { border-color: var(--warn); }
+  #pick option.optRunning { color: var(--warn); }
+  #pick option.optQueued { color: var(--accent); }
+  /* a transcribed recording waiting in the queue: one slim line pinned with the sub-tabs */
+  .subtabs { flex-wrap: wrap; }
+  .subtabs.runningHere button, .subtabs.runningHere select { display: none; }
+  .queueBanner { order: -1; flex-basis: 100%; display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap;
+                 margin-bottom: 8px; padding: 5px 10px; border-left: 3px solid var(--accent); border-radius: 4px;
+                 background: var(--card); font-size: 13px; }
+  .queueBanner .state { color: var(--accent); font-weight: 600; }
+  .queueBanner .note { color: var(--muted); }
+  .queueBanner .queueActs { margin: 0 0 0 auto; gap: 6px; }
+  .queueBanner .queueActs button { padding: 3px 10px; font-size: 12px; }
   /* stands out while any filter is on: the list is not complete */
   #clearFilters { border: 1px solid transparent; background: var(--warn); color: #111111; border-radius: 999px;
                   padding: 3px 12px; font: inherit; font-size: 13px; font-weight: 700; cursor: pointer; white-space: nowrap;
@@ -649,7 +661,10 @@ function renderPick(jump) {
   for (const r of shown) {
     const o = document.createElement("option");
     o.value = r.stem;
-    o.textContent = `${fmtDate(r.start)} – ${r.title} [${rowState(r).text}]`
+    const q = queuePlace(r.stem);
+    if (q) o.className = q.running ? "optRunning" : "optQueued";  // coloured in the open list
+    o.textContent = (q ? (q.running ? "⏳ zpracovává se · " : `⏳ ve frontě ${q.place}. · `) : "")
+      + `${fmtDate(r.start)} – ${r.title}` + (q ? "" : ` [${rowState(r).text}]`)
       + (openOutside && r.stem === openOutside.stem ? " (otevřená, mimo filtr)" : "");
     pick.appendChild(o);
   }
@@ -802,6 +817,7 @@ async function loadRecording(/** @type {string} */ stem) {
     return;
   }
   meta.textContent = `${fmtDate(r.start)} · ${Math.round((r.duration_s || 0) / 60)} min · ${r.language || "?"} · mluvčí z: ${(r.speaker_sources || []).join(", ") || "diarizace"}`;
+  renderQueueBanner();
   renderSpeakers();
   markClean();
   docPick.innerHTML = ""; docPick.dataset.stem = "";
@@ -814,9 +830,10 @@ function queuePlace(/** @type {string} */ stem) {
   const j = jobsState;
   if (!j) return null;
   if (j.current && j.current.stem === stem)
-    return { running: true, id: j.current.id, since: j.current.started || "", held: false };
+    return { running: true, id: j.current.id, since: j.current.started || "", startedAt: j.current.started_at || "",
+             force: !!j.current.force, held: false };
   const at = (j.queue || []).findIndex((/** @type {any} */ q) => q.stem === stem);
-  return at < 0 ? null : { running: false, id: j.queue[at].id, place: at + 1, held: !!j.held,
+  return at < 0 ? null : { running: false, id: j.queue[at].id, place: at + 1, held: !!j.held, force: !!j.queue[at].force,
                            before: j.current ? j.current.stem : "" };
 }
 
@@ -828,6 +845,44 @@ async function moveJob(/** @type {number} */ id, /** @type {string} */ how, /** 
     setStatus(r.text || "pořadí změněno", "ok");
     if (r.jobs) setJobs(r.jobs);
   } catch (e) { setStatus(String(e), "err"); btn.disabled = false; }
+}
+
+/** A transcribed recording in the queue: a slim line pinned with the sub-tabs (the page stays readable and
+ * editable – nothing changes until its turn). Once its processing starts, the old state is going away: the page
+ * empties to the same "being processed" view as a new recording, with the queue buttons, and saving is off. */
+function renderQueueBanner() {
+  const old = document.getElementById("queueBanner");
+  if (old) old.remove();
+  const q = review && review.transcribed ? queuePlace(review.stem) : null;
+  for (const id of ["save", "saveSum", "saveTitle"]) {
+    const b = /** @type {HTMLButtonElement} */ ($(id));
+    if (q && q.running) { b.disabled = true; b.dataset.queueLock = "1"; }
+    else if (b.dataset.queueLock) { delete b.dataset.queueLock; b.disabled = false; if (id === "saveTitle") updateDirty(); }
+  }
+  $("subtabs").classList.toggle("runningHere", !!(q && q.running));  // no old transcript or minutes to open
+  if (!q || !review) return;
+  const what = q.force ? "nový přepis od nuly" : "zpracování";
+  if (q.running) {
+    if (!main.querySelector("[data-running]")) {
+      showSub("speakers", false);
+      main.innerHTML = "";
+      baseline = "";  // the cards are gone: nothing unsaved, so the page may reload the new transcript at the end
+      updateDirty();
+      const box = document.createElement("div"); box.className = "empty"; box.dataset.running = review.stem;
+      box.innerHTML = `<p><b>${escapeHtml(review.title)}</b> se právě zpracovává znovu.</p>` +
+        `<p class="queued">⏳ Běží ${what}${q.since ? ` (od ${escapeHtml(q.since)})` : ""} – přepis, mluvčí i zápis se nahrazují.</p>` +
+        `<p>Až doběhne, nový přepis se tu ukáže sám.</p>`;
+      box.appendChild(queueButtons(q));
+      main.appendChild(box);
+    }
+    return;
+  }
+  const bar = document.createElement("div"); bar.id = "queueBanner"; bar.className = "queueBanner";
+  bar.innerHTML = `<span class="state">⏳ ve frontě ${q.place}.</span>` +
+    `<span class="note">${what}${q.held ? " · čeká na konec nahrávání" : q.before ? ` · teď běží ${escapeHtml(q.before)}` : ""}` +
+    ` · do té doby se nic nemění</span>`;
+  bar.appendChild(queueButtons(q));
+  $("subtabs").appendChild(bar);
 }
 
 function renderNotTranscribed(r) {
@@ -843,6 +898,15 @@ function renderNotTranscribed(r) {
       : `<p class="queued">⏳ Je ve frontě na zpracování – <b>${q.place}. v pořadí</b>.` +
         (q.held ? " Čeká na konec nahrávání." : q.before ? ` Teď běží ${escapeHtml(q.before)}.` : "") + `</p>`) +
       `<p>Až doběhne, přepis se tu ukáže sám.</p>`;
+    box.appendChild(queueButtons(q));
+    main.appendChild(box);
+    return;
+  }
+  renderNotTranscribedOffer(r, box, est);
+}
+
+/** "Zpracovat jako další", "Zpracovat hned", "Zrušit zpracování" for a queued or running job */
+function queueButtons(/** @type {any} */ q) {
     const row = document.createElement("p"); row.className = "queueActs";
     if (!q.running) {
       if (q.place > 1) {
@@ -872,10 +936,10 @@ function renderNotTranscribed(r) {
                    "zpracování se zastaví a dosavadní práce se zahodí – potvrďte druhým kliknutím, nebo Zrušit");
     } else cancel.title = "Vyřadí nahrávku z fronty; zpracovat ji jde znovu kdykoli";
     row.appendChild(cancel);
-    box.appendChild(row);
-    main.appendChild(box);
-    return;
-  }
+    return row;
+}
+
+function renderNotTranscribedOffer(/** @type {Review} */ r, /** @type {HTMLElement} */ box, /** @type {number} */ est) {
   box.innerHTML = `<p><b>${escapeHtml(r.title)}</b> ještě nemá přepis, takže není co kontrolovat.</p>` +
     (r.has_mix ? `<p>Přepsat, exportovat a udělat zápis teď? Zhruba ${est} min, grafická karta bude po tu dobu vytížená.</p>`
                : `<p>Nahrávka nemá zvuk (chybí mix i stopy), přepsat ji nejde.</p>`);
@@ -1459,6 +1523,7 @@ function setJobs(/** @type {any} */ j) {
   jobsState = j;
   if (before !== JSON.stringify(j && [j.current, j.queue, j.held])) {
     if (allRows.length) renderPick();  // the list says what is being processed or waits
+    renderQueueBanner();
     // an open recording without a transcript shows its place in the queue: keep it current
     if (review && !review.transcribed && main.querySelector("[data-queued]")) renderNotTranscribed(review);
   }

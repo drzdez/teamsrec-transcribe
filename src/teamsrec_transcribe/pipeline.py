@@ -625,7 +625,8 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
     matches: dict = {}
     unknown = {lab: v for lab, v in embeddings.items() if lab.startswith("SPEAKER_") and not names.get(lab)}
     vs = cfg.voiceprints
-    for label, (pid, score) in vp.recognize(unknown, vs.threshold, vs.margin, durations, vs.min_seconds).items():
+    for label, (pid, score) in vp.recognize(unknown, vs.threshold, vs.margin, durations, vs.min_seconds,
+                                            exclude_stem=rec.stem).items():
         person = people.get(pid)
         if person is None:  # print of a person that was deleted from the registry
             continue

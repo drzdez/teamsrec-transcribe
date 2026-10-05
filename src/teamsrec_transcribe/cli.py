@@ -435,6 +435,11 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
     cfg = _cfg(ctx)
     rec = resolve_target(cfg, target, allow_import=False)
     if kind == "process":
+        if force:  # from scratch: the labels change, so the manual names and the OCR names of last time go now
+            from .pipeline import reset_names
+            reset_names(rec)
+            if rec.speakers_video_path.exists():
+                rec.speakers_video_path.unlink()
         do_process(cfg, rec, force=force)
     elif kind == "summary":
         do_summarize(cfg, rec, force=True)

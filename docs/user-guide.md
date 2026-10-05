@@ -336,8 +336,9 @@ stopped after 10 s without an answer, or at once when no page is open), stop at 
 goes back to the front of the queue and finishes by itself after the recording; a job asked for during a recording waits for its end too (unless the setting is to let it run). The same tape says when the page has
 lost its server (open the review page again from the tray icon).
 
-**⚡ … co nejrychleji (cloud)** next to "Ano, přepsat a zpracovat" and "Přepsat znovu od nuly" runs the same job on
-cloud services only: transcription by ElevenLabs (or OpenAI, `[transcribe] cloud_provider`), minutes by Claude
+**⚡ … rychle přes cloud** is an emergency fast track next to "Ano, přepsat a zpracovat" and "Přepsat znovu od nuly";
+the normal processing stays local. It runs the same job on cloud services only: transcription *and* diarization in
+one request by ElevenLabs Scribe (or OpenAI, `[transcribe] cloud_provider`), minutes by Claude
 (`[summarize] cloud_model`, default claude-opus-5-5), no comparison minutes on the local Ollama and no analysis of the
 Teams window videos – fast, and the graphics card stays quiet. It asks first: the meeting's audio and transcript
 leave the PC. Speakers are not recognised by voice prints then (the cloud returns no voice data); the microphone still

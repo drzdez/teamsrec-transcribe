@@ -971,12 +971,13 @@ function renderNotTranscribedOffer(/** @type {Review} */ r, /** @type {HTMLEleme
   main.appendChild(box);
 }
 
-/** "⚡ co nejrychleji (cloud)": the same job with cloud services only – fast and quiet, the audio and the transcript
- * leave the PC, no voice recognition by prints. Off with a reason when a key is missing. */
+/** The emergency fast track (fasttrack.py), next to the local action: the same job on cloud services only –
+ * transcription with diarization and the minutes – fast and quiet; the audio and the transcript leave the PC, no voice
+ * recognition by prints. Off with a reason when a key is missing. The local way stays the default. */
 function cloudButton(/** @type {Review} */ r, /** @type {string} */ what, /** @type {() => void} */ go) {
   const c = r.cloud || { ok: false, missing: "", provider: "", model: "" };
   const b = document.createElement("button"); b.type = "button"; b.className = "cloud-btn";
-  b.textContent = `⚡ ${what} co nejrychleji (cloud)`;
+  b.textContent = `⚡ ${what} rychle přes cloud`;
   if (!c.ok) {
     b.disabled = true;
     b.title = `chybí klíč: ${c.missing} – doplňte ho v Nastavení → Klíče API`;

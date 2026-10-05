@@ -1754,8 +1754,9 @@ def test_replies_of_a_mixed_group_move_to_another_speaker_a_new_one_or_unassigne
 
 
 def test_cloud_only_run_uses_cloud_services_and_needs_their_keys(tmp_path, monkeypatch):
-    from teamsrec_transcribe import settings
-    from teamsrec_transcribe.config import SummarizeSettings, cloud_only
+    from teamsrec_transcribe import fasttrack, settings
+    from teamsrec_transcribe.config import SummarizeSettings
+    from teamsrec_transcribe.fasttrack import cloud_only
     from teamsrec_transcribe.web import review as rv
     cfg = Config(out_dir=tmp_path, summarize=SummarizeSettings(compare=("ollama:qwen3:8b", "anthropic:claude-opus-5-5")))
     fast = cloud_only(cfg)
@@ -1764,7 +1765,7 @@ def test_cloud_only_run_uses_cloud_services_and_needs_their_keys(tmp_path, monke
     assert fast.video.enabled is False and cfg.transcribe.provider == "whisperx", "the config itself stays"
     keys = {"anthropic": "k"}
     monkeypatch.setattr(settings, "get_secret", lambda name: keys.get(name, ""))
-    ready = rv.cloud_ready(cfg)
+    ready = fasttrack.cloud_ready(cfg)
     assert not ready["ok"] and "elevenlabs" in ready["missing"]
     rec = _make_transcribed(tmp_path)
     state = rv.ReviewState(cfg)

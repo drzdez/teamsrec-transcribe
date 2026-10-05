@@ -78,6 +78,7 @@ from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
                         same_person_groups, set_meeting_link, unmerge_speakers)
 from ..voiceprints import Voiceprints, cosine, speech_seconds
+from ..fasttrack import cloud_ready  # the emergency fast track, separate from the local path
 from ..providers.base import Segment
 from ..recording import Recording, RecordingError, iter_recordings, resolve_recording
 from ..speakers import speaker_list
@@ -293,14 +294,6 @@ def speaker_languages(segs: list[Segment], default: str | None) -> dict[str, dic
         out[label] = {"language": main, "own": bool(default) and main not in (default, "?"),
                       "mixed": len([v for v in by.values() if v >= 5]) > 1}
     return out
-
-
-def cloud_ready(cfg: Config) -> dict:
-    """Whether "co nejrychleji (cloud)" can run: a key for the cloud transcription and for Claude. Names only."""
-    need = {cfg.transcribe.cloud_provider: f"přepis ({cfg.transcribe.cloud_provider})", "anthropic": "zápis (Claude)"}
-    missing = [what for name, what in need.items() if not settings.get_secret(name)]
-    return {"ok": not missing, "missing": ", ".join(missing), "provider": cfg.transcribe.cloud_provider,
-            "model": cfg.summarize.cloud_model}
 
 
 def build_review(cfg: Config, rec: Recording) -> dict:
@@ -981,7 +974,7 @@ class ReviewState:
         # from scratch drops the manual names and the cached window analysis when the job starts (run-job), so a
         # recording waiting in the queue keeps everything and can be cancelled without loss
         if cloud and not cloud_ready(self.cfg)["ok"]:
-            raise ValueError("co nejrychleji (cloud) potřebuje klíče: " + cloud_ready(self.cfg)["missing"])
+            raise ValueError("rychle přes cloud potřebuje klíče: " + cloud_ready(self.cfg)["missing"])
         what = ("nový přepis od nuly" if force else "zpracování") + (" (cloud)" if cloud else "")
         return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else [])
                             + (["--cloud"] if cloud else []),

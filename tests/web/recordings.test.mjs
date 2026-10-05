@@ -189,6 +189,6 @@ test("typing a filter opens its first match", async t => {
 test("a recording without a transcript offers the cloud-only run next to the local one", async t => {
   const p = await openPage(t, BOARD_NEW);
   const fast = await waitFor(() => p.doc.querySelector("#main button.cloud-btn"), "the cloud button");
-  assert.match(fast.textContent, /co nejrychleji \(cloud\)/);
+  assert.match(fast.textContent, /rychle přes cloud/);
   assert.ok(fast.disabled ? /chybí klíč/.test(fast.title) : /do cloudu/.test(fast.title), "says why or what leaves the PC");
 });

@@ -295,9 +295,17 @@ def speaker_languages(segs: list[Segment], default: str | None) -> dict[str, dic
     return out
 
 
+def cloud_ready(cfg: Config) -> dict:
+    """Whether "co nejrychleji (cloud)" can run: a key for the cloud transcription and for Claude. Names only."""
+    need = {cfg.transcribe.cloud_provider: f"přepis ({cfg.transcribe.cloud_provider})", "anthropic": "zápis (Claude)"}
+    missing = [what for name, what in need.items() if not settings.get_secret(name)]
+    return {"ok": not missing, "missing": ", ".join(missing), "provider": cfg.transcribe.cloud_provider,
+            "model": cfg.summarize.cloud_model}
+
+
 def build_review(cfg: Config, rec: Recording) -> dict:
     if not rec.transcript_path.exists():  # the page offers to process it
-        return {"stem": rec.stem, "title": rec.title, "start": rec.sidecar.get("start"),
+        return {"stem": rec.stem, "title": rec.title, "start": rec.sidecar.get("start"), "cloud": cloud_ready(cfg),
                 "duration_s": rec.sidecar.get("duration_s"), "source": rec.source, "transcribed": False,
                 "has_mix": bool(rec.mix_path and rec.mix_path.exists()) or bool(rec.track_path("sys")),
                 "speakers": [], "known_names": [], "people": [], "display_default": cfg.people_display,
@@ -364,6 +372,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                              "unaligned": data.get("provider") == "whisperx"
                                           and "align_s" not in (data.get("timings") or {})},
         "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
+        "cloud": cloud_ready(cfg),
         "speakers": speakers, "known_names": known_names(cfg, people),
         "same_person": [{"person": pid, "labels": labels, "name": (people.get(pid) or Person(pid)).full}
                         for pid, labels in same_person_groups(rec, people).items()],
@@ -966,14 +975,17 @@ class ReviewState:
                             start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
-    def run_process(self, rec: Recording, force: bool = False) -> tuple[int, int]:
+    def run_process(self, rec: Recording, force: bool = False, cloud: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
         # from scratch drops the manual names and the cached window analysis when the job starts (run-job), so a
         # recording waiting in the queue keeps everything and can be cancelled without loss
-        return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else []),
-                            "zpracováno", rec.stem,
-                            start=f"{rec.stem}: {'nový přepis od nuly' if force else 'zpracování'} spuštěno")
+        if cloud and not cloud_ready(self.cfg)["ok"]:
+            raise ValueError("co nejrychleji (cloud) potřebuje klíče: " + cloud_ready(self.cfg)["missing"])
+        what = ("nový přepis od nuly" if force else "zpracování") + (" (cloud)" if cloud else "")
+        return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else [])
+                            + (["--cloud"] if cloud else []),
+                            "zpracováno", rec.stem, start=f"{rec.stem}: {what} spuštěno")
 
     def status(self, events: int = 40) -> dict:
         with self.lock:
@@ -1157,7 +1169,8 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json({"ok": True, "stem": rec.stem, "title": rec.title})
 
         def r_process(self, q, body, stem):
-            job, position = state.run_process(self._recording(stem), force=bool(body.get("force")))
+            job, position = state.run_process(self._recording(stem), force=bool(body.get("force")),
+                                              cloud=bool(body.get("cloud")))
             self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_speaker_replies(self, q, body, stem, label):

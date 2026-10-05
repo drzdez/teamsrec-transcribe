@@ -300,9 +300,8 @@ missing), `○ bez přepisu`, `? nepojmenované` (someone left unnamed), and `�
 and the dates – and 📅 od – do for any range (both days included); a button fills od – do with its range, so it can be
 adjusted. One click shows only those recordings and opens the newest; a second click clears the filter. The rows
 combine (a meeting, a state and a time); **✕ smazat filtry** next to the count "N z M" turns them all off at once. What does not fit the width scrolls sideways – drag the row with the mouse,
-or use the wheel. The text filter also finds dates: `2026-09-03`, `3.9.2026`, or a regexp such as `2026-09-0[34]`. When you type the filter by hand, the
-open recording does not disappear from the list (it is marked as open, outside the filter), so the selection does not
-jump.
+or use the wheel. The text filter also finds dates: `2026-09-03`, `3.9.2026`, or a regexp such as `2026-09-0[34]`. Typing the filter opens its first
+match; only with unsaved changes the open recording stays in the list (marked as open, outside the filter).
 
 Top tabs: **Schůzka** (the selected recording), **Lidé (společné)**, **Nastavení** and **Nápověda**. Inside Schůzka
 are the sub-tabs **Mluvčí** (assigning names), **Přepis** (readable transcript with time and speaker) and **Zápis**
@@ -336,6 +335,13 @@ in the middle of the window with **Přerušit** and **Nechat běžet**; the desk
 stopped after 10 s without an answer, or at once when no page is open), stop at once, or let it run. A stopped job
 goes back to the front of the queue and finishes by itself after the recording; a job asked for during a recording waits for its end too (unless the setting is to let it run). The same tape says when the page has
 lost its server (open the review page again from the tray icon).
+
+**⚡ … co nejrychleji (cloud)** next to "Ano, přepsat a zpracovat" and "Přepsat znovu od nuly" runs the same job on
+cloud services only: transcription by ElevenLabs (or OpenAI, `[transcribe] cloud_provider`), minutes by Claude
+(`[summarize] cloud_model`, default claude-opus-5-5), no comparison minutes on the local Ollama and no analysis of the
+Teams window videos – fast, and the graphics card stays quiet. It asks first: the meeting's audio and transcript
+leave the PC. Speakers are not recognised by voice prints then (the cloud returns no voice data); the microphone still
+names you. Without the keys (Nastavení → Klíče API) the button is greyed out and says which one is missing.
 
 Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
 `⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as

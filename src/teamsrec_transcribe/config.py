@@ -31,6 +31,7 @@ class TranscribeSettings:
     diarize_model: str = "pyannote/speaker-diarization-community-1"
     openai_model: str = "gpt-4o-transcribe-diarize"  # provider = "openai" (cloud: the audio goes to OpenAI)
     elevenlabs_model: str = "scribe_v2"                # provider = "elevenlabs" (cloud: the audio goes to ElevenLabs)
+    cloud_provider: str = "elevenlabs"  # "co nejrychleji" on the page: the transcription service of a cloud-only run
     glossary: tuple[str, ...] = ()
     device: str = "cuda"
 
@@ -66,6 +67,7 @@ class SummarizeSettings:
     #                             30 min instead of 1). Longer transcripts are summarized in parts and merged.
     ollama_timeout_s: int = 1800
     compare: tuple[str, ...] = ()  # extra "provider:model" runs written to <stem>.summary.<model>.md (POC comparison)
+    cloud_model: str = "claude-opus-5-5"  # "co nejrychleji" on the page: the Claude model of a cloud-only run
 
 
 @dataclass(frozen=True)
@@ -84,6 +86,19 @@ class Config:
     @property
     def inbox_dir(self) -> Path:
         return self.out_dir / "_inbox"
+
+
+def cloud_only(cfg: "Config") -> "Config":
+    """The same configuration for a run that uses cloud services only (the page's "co nejrychleji"): transcription
+    by [transcribe] cloud_provider, minutes by Claude [summarize] cloud_model, no comparison minutes on the local
+    Ollama, no analysis of the Teams window videos (local OCR). Fast and quiet; the audio and the transcript leave
+    the PC. No voice recognition by prints: the cloud transcription returns no voice embeddings."""
+    from dataclasses import replace
+    return replace(cfg,
+                   transcribe=replace(cfg.transcribe, provider=cfg.transcribe.cloud_provider),
+                   summarize=replace(cfg.summarize, provider="anthropic", model=cfg.summarize.cloud_model,
+                                     compare=tuple(c for c in cfg.summarize.compare if not c.startswith("ollama:"))),
+                   video=replace(cfg.video, enabled=False))
 
 
 def default_config_path() -> Path:

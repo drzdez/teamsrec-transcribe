@@ -428,11 +428,15 @@ def _require_ffmpeg() -> None:
 @_errors
 def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as"),
             target: str = typer.Argument(...), force: bool = typer.Option(False),
+            cloud: bool = typer.Option(False, help="cloud services only (the page's 'co nejrychleji')"),
             provider: str = typer.Option(""), model: str = typer.Option("")):
     """One background job of the review page, in a process of its own, so the page can stop it (a recording
     started: the GPU must not break the recorded sound)."""
     from .pipeline import do_process, do_summarize, do_summarize_compare, resolve_target, summarize_as
     cfg = _cfg(ctx)
+    if cloud:
+        from .config import cloud_only
+        cfg = cloud_only(cfg)
     rec = resolve_target(cfg, target, allow_import=False)
     if kind == "process":
         if force:  # from scratch: the labels change, so the manual names and the OCR names of last time go now

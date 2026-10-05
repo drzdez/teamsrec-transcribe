@@ -173,3 +173,22 @@ test("one button next to the count clears every filter, the open recording stays
   assert.ok(clear.hidden);
   assert.equal(p.$("pick").value, open, "what is open stays open");
 });
+
+test("typing a filter opens its first match", async t => {
+  const p = await openPage(t, WEEKLY);
+  await waitFor(() => p.doc.querySelector(".card"), "the weekly recording");
+  p.input(p.$("filter"), "archi");
+  await waitFor(() => p.$("pick").value !== WEEKLY && /archi/i.test(p.$("pick").selectedOptions[0].textContent),
+                "the first archi recording selected");
+  const stem = p.$("pick").value;
+  await waitFor(() => p.window.location.hash === "#" + stem, "and opened");
+  assert.ok(!options(p).some(o => o.includes("mimo filtr")), "nothing left behind outside the filter");
+  p.input(p.$("filter"), "");
+});
+
+test("a recording without a transcript offers the cloud-only run next to the local one", async t => {
+  const p = await openPage(t, BOARD_NEW);
+  const fast = await waitFor(() => p.doc.querySelector("#main button.cloud-btn"), "the cloud button");
+  assert.match(fast.textContent, /co nejrychleji \(cloud\)/);
+  assert.ok(fast.disabled ? /chybí klíč/.test(fast.title) : /do cloudu/.test(fast.title), "says why or what leaves the PC");
+});

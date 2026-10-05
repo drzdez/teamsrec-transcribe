@@ -1751,3 +1751,44 @@ def test_replies_of_a_mixed_group_move_to_another_speaker_a_new_one_or_unassigne
     assert "SPEAKER_02" in rec.file(".txt").read_text(encoding="utf-8"), "exports regenerated"
     with pytest.raises(RecordingError):
         assign_segments(cfg, rec, [{"start": 5, "from": "SPEAKER_01", "speaker": "SPEAKER_77"}])
+
+
+def test_cloud_only_run_uses_cloud_services_and_needs_their_keys(tmp_path, monkeypatch):
+    from teamsrec_transcribe import settings
+    from teamsrec_transcribe.config import SummarizeSettings, cloud_only
+    from teamsrec_transcribe.web import review as rv
+    cfg = Config(out_dir=tmp_path, summarize=SummarizeSettings(compare=("ollama:qwen3:8b", "anthropic:claude-opus-5-5")))
+    fast = cloud_only(cfg)
+    assert (fast.transcribe.provider, fast.summarize.provider, fast.summarize.model) == ("elevenlabs", "anthropic", "claude-opus-5-5")
+    assert fast.summarize.compare == ("anthropic:claude-opus-5-5",), "nothing on the local GPU"
+    assert fast.video.enabled is False and cfg.transcribe.provider == "whisperx", "the config itself stays"
+    keys = {"anthropic": "k"}
+    monkeypatch.setattr(settings, "get_secret", lambda name: keys.get(name, ""))
+    ready = rv.cloud_ready(cfg)
+    assert not ready["ok"] and "elevenlabs" in ready["missing"]
+    rec = _make_transcribed(tmp_path)
+    state = rv.ReviewState(cfg)
+    with pytest.raises(ValueError, match="klíče"):
+        state.run_process(rec, cloud=True)
+    keys["elevenlabs"] = "k"
+    calls = []
+    monkeypatch.setattr(rv, "run_cli", lambda argv, on_proc, on_line: calls.append(argv))
+    state.run_process(rec, force=True, cloud=True)
+    import time as _time
+    for _ in range(100):
+        if calls:
+            break
+        _time.sleep(0.02)
+    assert calls[0][-3:] == [rec.stem, "--force", "--cloud"]
+
+
+def test_run_job_cloud_flag_switches_the_services(tmp_path, monkeypatch):
+    from typer.testing import CliRunner
+    from teamsrec_transcribe import cli, pipeline as pl
+    rec = _make_transcribed(tmp_path)
+    seen = []
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False: seen.append(
+        (cfg.transcribe.provider, cfg.summarize.provider, cfg.video.enabled)))
+    res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--cloud"])
+    assert res.exit_code == 0, res.output
+    assert seen == [("elevenlabs", "anthropic", False)]

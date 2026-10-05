@@ -39,6 +39,8 @@ without recognition.
   locally on the graphics card and the audio does not leave the PC. With `provider = "openai"` or `"elevenlabs"` – or
   the command `compare-transcribe --provider …` – **the audio of the whole meeting** (compressed) is sent to OpenAI or
   ElevenLabs. That has to be chosen deliberately and colleagues told.
+- **"Co nejrychleji (cloud)"** on the review page sends both: the audio to the cloud transcription service and the
+  transcript text to Claude, for that one recording; the page asks before it starts.
 - **The transcript text only for minutes through Claude:** when the summary service is Claude (`provider = "anthropic"`)
   or Claude is among the comparison summaries (`compare`), the transcript text (with the speakers' names) is sent to
   Anthropic's Claude API to write the minutes. With `provider = "ollama"` and an empty `compare` nothing leaves.

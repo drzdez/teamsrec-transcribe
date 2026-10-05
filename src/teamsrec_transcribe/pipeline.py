@@ -819,6 +819,8 @@ def do_summarize_compare(cfg: Config, rec: Recording, *, force: bool = False) ->
         if not model:
             log.error("%s: compare entry %r must be provider:model", rec.stem, spec)
             continue
+        if (provider, model) == (cfg.summarize.provider, cfg.summarize.model):
+            continue  # the main minutes are this model already (e.g. the fast track with Claude): no second copy
         if summary_path_for(cfg, rec, provider, model).exists() and not force:
             continue
         try:

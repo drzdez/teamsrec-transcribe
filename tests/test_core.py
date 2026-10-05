@@ -1900,3 +1900,25 @@ def test_processing_places_say_what_runs_where():
     assert cloud["Rozlišení mluvčích (diarizace)"] == ("cloud", ""), "part of the cloud transcription, no own setting"
     assert cloud["Poznání po hlase"][0] == "off"
     assert processing_places(base)[-1]["fasttrack"] is True
+
+
+def test_minutes_by_another_model_count_as_minutes_and_the_main_tab_says_so(tmp_path, monkeypatch):
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.config import SummarizeSettings
+    from teamsrec_transcribe.web.review import has_minutes, list_recordings, summary_info
+    rec = _make_transcribed(tmp_path)
+    rec.summary_path.unlink()
+    assert not has_minutes(rec) and list_recordings(Config(out_dir=tmp_path))[0]["summary"] is False
+    other = rec.file(".summary.claude-opus-5-5.md")
+    other.write_text("<!-- teamsrec-transcribe summary | anthropic: claude-opus-5-5 | created: x -->\n# T", encoding="utf-8")
+    assert has_minutes(rec) and list_recordings(Config(out_dir=tmp_path))[0]["summary"] is True
+    rec.summary_path.write_text(other.read_text(encoding="utf-8"), encoding="utf-8")
+    from teamsrec_transcribe.web.review import recording_docs
+    assert [x["label"] for x in recording_docs(rec)["summaries"]] == ["claude-opus-5-5 · hlavní", "claude-opus-5-5"]
+    assert summary_info(rec.summary_path, True)["label"] == "claude-opus-5-5", "alone it is just the model"
+    calls = []
+    monkeypatch.setattr(pl, "summarize_as", lambda cfg, r, p, m: calls.append((p, m)))
+    cfg = Config(out_dir=tmp_path, summarize=SummarizeSettings(provider="anthropic", model="claude-opus-5-5",
+                                                              compare=("anthropic:claude-opus-5-5", "ollama:qwen3:8b")))
+    pl.do_summarize_compare(cfg, rec, force=True)
+    assert calls == [("ollama", "qwen3:8b")], "no second copy of the main minutes"

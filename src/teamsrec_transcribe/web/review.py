@@ -369,7 +369,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                              # no word alignment: replies stay ~30 s long and can mix voices (2026-10-05)
                              "unaligned": data.get("provider") == "whisperx"
                                           and "align_s" not in (data.get("timings") or {})},
-        "has_summary": rec.summary_path.exists(), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
+        "has_summary": has_minutes(rec), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "cloud": cloud_ready(cfg),
         "timings": timings.latest(rec),  # how long each part of the last jobs took
         "voices_missing": needs_voices(data),  # a fast-track transcript: voices can be added locally
@@ -385,6 +385,12 @@ def build_review(cfg: Config, rec: Recording) -> dict:
 
 
 SUMMARY_STAMP = re.compile(r"<!--\s*teamsrec-transcribe summary \| (?P<provider>[^:|]+):\s*(?P<model>[^|]+?)\s*(?:\|[^>]*?created:\s*(?P<created>[^|>]+?))?\s*(?:\||-->)")
+
+
+def has_minutes(rec: Recording) -> bool:
+    """Any minutes at all: the main one or one by another model (the list must not say "bez zápisu" when the only
+    minutes are a Claude one)."""
+    return rec.summary_path.exists() or any(rec.dir.glob(f"{rec.stem}.summary.*.md"))
 
 
 def summary_info(path: Path, main: bool) -> dict:
@@ -408,6 +414,11 @@ def recording_docs(rec: Recording) -> dict:
         summaries.append(summary_info(rec.summary_path, True))
     for p in sorted(rec.dir.glob(f"{rec.stem}.summary.*.md")):
         summaries.append(summary_info(p, False))
+    # two tabs of the same model (the main minutes and a comparison by it): the main one says so, so a close does
+    # not delete the wrong one
+    for s in summaries:
+        if s["main"] and any(o is not s and o["label"] == s["label"] for o in summaries):
+            s["label"] = f"{s['label']} · hlavní"
     others = [{"file": p.name, "label": f"přepis ({p.name[len(rec.stem) + 1:-4]})"}
               for p in sorted(rec.dir.glob(f"{rec.stem}.*.txt"))]
     return {"transcript": rec.file(".txt").name if rec.file(".txt").exists() else None, "summaries": summaries,
@@ -464,7 +475,7 @@ def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
                 unresolved = None
         out.append({"stem": r.stem, "title": r.title, "start": r.sidecar.get("start"),
                     "transcribed": r.transcript_path.exists(), "unresolved": unresolved,
-                    "summary": r.summary_path.exists()})
+                    "summary": has_minutes(r)})
     return out
 
 

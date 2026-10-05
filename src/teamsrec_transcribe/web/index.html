@@ -117,6 +117,8 @@
   }
   .langLine { margin: 4px 0 10px; font-size: 14px; }
   .timings { margin: 0 0 10px; font-size: 13px; color: var(--muted); }
+  .minutesRunNote { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--card);
+                    color: var(--accent); font-size: 13px; }
   .timings > summary { cursor: pointer; }
   .timings table { border-collapse: collapse; margin: 8px 0 4px 14px; }
   .timings caption { text-align: left; color: var(--fg); padding: 2px 0; }
@@ -896,6 +898,7 @@ function renderQueueBanner() {
   }
   $("subtabs").classList.toggle("runningHere", rewriting);  // no old transcript or minutes to open
   if (!q || !review) return;
+  if (q.name === "summary" || q.name === "summarize-as") return;  // minutes: said in the Zápis tab only (minutesJob)
   const what = q.name === "summary" ? "nový zápis" : q.name === "summarize-as" ? "zápis jiným modelem"
     : q.name === "voices" ? "doplnění hlasů" : q.force ? "nový přepis od nuly" : "zpracování";
   if (rewriting) {
@@ -1708,6 +1711,9 @@ function setJobs(/** @type {any} */ j) {
   if (before !== JSON.stringify(j && [j.current, j.queue, j.held])) {
     if (allRows.length) renderPick();  // the list says what is being processed or waits
     renderQueueBanner();
+    // the Zápis tab says that minutes are being written; at their end the page reloads the recording by itself
+    if (review && subTab === "summary" && !docMain.hidden && minutesJob() && !docMain.querySelector("[data-minutes-run]"))
+      renderDoc();
     // an open recording without a transcript shows its place in the queue: keep it current
     if (review && !review.transcribed && main.querySelector("[data-queued]")) renderNotTranscribed(review);
   }
@@ -2023,14 +2029,31 @@ async function renderDoc(/** @type {number|null=} */ scrollTo = null) {
     }
     file = docPick.value || list[0].file;
   }
-  if (!file) { docMain.innerHTML = `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`; return; }
+  const making = subTab === "summary" ? minutesJob() : "";
+  if (!file) {
+    docMain.innerHTML = making
+      ? `<div class="empty minutesRun" data-minutes-run="1"><p class="queued">⏳ ${escapeHtml(making)}</p><p>Až bude hotový, ukáže se tu sám.</p></div>`
+      : `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`;
+    return;
+  }
   docMain.innerHTML = '<div class="empty">Načítám…</div>';
   try {
     const r = await api(recUrl(review.stem, "docs", file));
-    docMain.innerHTML = subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text);
+    docMain.innerHTML = (making ? `<p class="minutesRunNote" data-minutes-run="1">⏳ ${escapeHtml(making)} – tady je zatím ten předchozí; nový se ukáže sám.</p>` : "")
+      + (subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text));
     externalLinks(docMain);  // a link in the minutes must not replace the page
     if (scrollTo !== null && scrollTo !== undefined) scroller().scrollTop = scrollTo;
   } catch (e) { docMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
+}
+
+/** Minutes being written or waiting for this recording, as a sentence for the Zápis tab ("" = none). */
+function minutesJob() {
+  const q = review ? queuePlace(review.stem) : null;
+  if (!q || !["summary", "summarize-as"].includes(String(q.name))) return "";
+  const which = (jobsState && ((q.running ? jobsState.current : (jobsState.queue || []).find((/** @type {any} */ x) => x.id === q.id)) || {}).text) || "";
+  const model = (which.match(/zápis (\S+) se generuje/) || [])[1];
+  const what = q.name === "summarize-as" && model ? `Zápis ${model}` : "Nový zápis";
+  return q.running ? `${what} se právě generuje (od ${q.since})` : `${what} čeká ve frontě (${q.place}. v pořadí)`;
 }
 
 /** the .txt export: header lines, then [hh:mm:ss] Name: text */

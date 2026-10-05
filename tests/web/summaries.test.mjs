@@ -92,3 +92,15 @@ test("summaries: an unconfirmed delete goes back to x and its question leaves th
                 "the question gone after 4 s", 6000);
   assert.ok(tabs(p).includes("test"), "nothing deleted");
 });
+
+test("minutes being written: said in the Zápis tab, not above the tabs", async t => {
+  const p = await openPage(t, WEEKLY);
+  await waitFor(() => p.doc.querySelector(".card"), "speakers");
+  p.doc.querySelector('#subtabs [data-sub="summary"]').click();
+  await waitFor(() => p.doc.querySelector("#docMain") && !p.$("docMain").hidden, "the Zápis tab");
+  p.$("saveSum").click(); p.$("saveSum").click();  // regenerate the minutes (asks first)
+  await waitFor(() => p.doc.querySelector("#docMain [data-minutes-run]"), "the note in the Zápis tab");
+  assert.match(p.$("docMain").textContent, /zápis se právě generuje/i);
+  assert.ok(!p.doc.getElementById("queueBanner"), "no line above the tabs for minutes");
+  await waitFor(() => !p.doc.querySelector("#docMain [data-minutes-run]"), "gone when done", 8000);
+});

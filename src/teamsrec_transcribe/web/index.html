@@ -195,6 +195,13 @@
   input[type=text], select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg); font: inherit; }
   input[type=text]:focus { outline: 2px solid var(--accent); border-color: transparent; }
   .same { font-size: 13px; color: var(--muted); }
+  .ta { position: relative; }
+  .taList { position: absolute; left: 0; right: 0; top: 100%; z-index: 5; margin: 2px 0 0; padding: 4px 0; list-style: none;
+            max-height: 260px; overflow-y: auto; background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+            box-shadow: 0 4px 14px rgba(0,0,0,.12); font-size: 13px; }
+  .taList li { padding: 5px 10px; cursor: pointer; }
+  .taList li.on, .taList li[data-n]:hover { background: var(--chip); }
+  .taList li.none { color: var(--muted); cursor: default; }
   table { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
   th { font-size: 13px; color: var(--muted); font-weight: 500; }
@@ -556,6 +563,64 @@ const filterInput = /** @type {HTMLInputElement} */ ($("filter"));
 /** lower case without diacritics, so "archi" finds "Archi board" and "Jiří" finds "Jiri" */
 function foldText(/** @type {string} */ s) {
   return s.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+/**
+ * A picker you type into: the list narrows to items whose text (and `also`, e.g. aliases) contains every typed word,
+ * anywhere, without regard to diacritics or case ("svob", "peta", "jiri"); arrows move, Enter or a click picks,
+ * Esc closes. Focus alone shows the whole list, like a select.
+ * @param {string} placeholder
+ * @param {{value:string,text:string,also?:string}[]} items
+ * @param {(value:string) => void} onPick
+ */
+function typeahead(placeholder, items, onPick) {
+  const box = document.createElement("div"); box.className = "ta";
+  const input = document.createElement("input"); input.type = "text"; input.className = "same taInput";
+  input.placeholder = placeholder; input.autocomplete = "off";
+  const list = document.createElement("ul"); list.className = "taList"; list.hidden = true;
+  box.append(input, list);
+  const keys = items.map(it => foldText(`${it.text} ${it.also || ""}`));
+  /** @type {number[]} */ let shown = [];
+  let active = 0;
+  function render() {
+    const words = foldText(input.value).split(/\s+/).filter(Boolean);
+    shown = items.map((_, i) => i).filter(i => words.every(w => keys[i].includes(w)));
+    active = Math.min(active, Math.max(shown.length - 1, 0));
+    list.innerHTML = shown.length
+      ? shown.map((i, n) => `<li data-n="${n}"${n === active ? ' class="on"' : ""}>${escapeHtml(items[i].text)}</li>`).join("")
+      : '<li class="none">nic neodpovídá</li>';
+    list.hidden = false;
+    list.querySelector("li.on")?.scrollIntoView?.({ block: "nearest" });
+  }
+  function close() { list.hidden = true; input.value = ""; active = 0; }
+  function pickAt(/** @type {number} */ n) {
+    const i = shown[n];
+    if (i === undefined) return;
+    close(); input.blur();
+    onPick(items[i].value);
+  }
+  input.addEventListener("focus", () => { active = 0; render(); });
+  input.addEventListener("input", () => { active = 0; render(); });
+  input.addEventListener("blur", () => { setTimeout(close, 150); });
+  input.addEventListener("keydown", e => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (list.hidden) { render(); return; }
+      active = (active + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % Math.max(shown.length, 1);
+      render();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (!list.hidden) pickAt(active);
+    } else if (e.key === "Escape") {
+      close(); input.blur();
+    }
+  });
+  // mousedown, not click: picks before the input's blur closes the list
+  list.addEventListener("mousedown", e => {
+    const li = /** @type {HTMLElement} */ (e.target).closest("li[data-n]");
+    if (li) { e.preventDefault(); pickAt(Number(/** @type {HTMLElement} */ (li).dataset.n)); }
+  });
+  return box;
 }
 
 /** the filter is a regular expression when it compiles, otherwise plain text */
@@ -1448,27 +1513,24 @@ function card(sp, i) {
     updateShown();
   }
   if (people.length) {
-    const pickP = document.createElement("select"); pickP.className = "same";
-    pickP.innerHTML = '<option value="">vybrat známou osobu…</option>' +
-      people.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(`${p.first} ${p.last}`.trim() || p.nick)}${p.nick ? " (" + escapeHtml(p.nick) + ")" : ""}</option>`).join("");
-    pickP.onchange = () => {
-      const p = people.find(x => x.id === pickP.value);
-      if (p) setFields({ first: p.first, last: p.last, nick: p.nick, display: p.display });
-      pickP.value = ""; updateDirty();
-    };
-    side.appendChild(pickP);
+    side.appendChild(typeahead("vybrat známou osobu… (pište pro hledání)",
+      people.map(p => ({ value: p.id, text: `${`${p.first} ${p.last}`.trim() || p.nick}${p.nick ? ` (${p.nick})` : ""}`,
+                         also: [p.display, ...(p.aliases || [])].join(" ") })),
+      id => {
+        const p = people.find(x => x.id === id);
+        if (p) setFields({ first: p.first, last: p.last, nick: p.nick, display: p.display });
+        updateDirty();
+      }));
   }
   const others = (review ? review.speakers : []).filter(o => o.label !== sp.label);
   if (others.length) {
-    const sel = document.createElement("select"); sel.className = "same";
-    sel.innerHTML = '<option value="">stejná osoba jako…</option>' +
-      others.map(o => `<option value="${escapeHtml(o.label)}">${escapeHtml(o.label)}${o.name && o.name !== o.label ? " = " + escapeHtml(o.name) : ""}</option>`).join("");
-    sel.onchange = () => {
-      const src = /** @type {HTMLElement|null} */ (main.querySelector(`.side[data-label="${CSS.escape(sel.value)}"]`));
-      if (src) { const f = collectFields(src); if (!(f.first || f.last || f.nick)) f.first = sel.value; setFields(f); }
-      sel.value = ""; updateDirty();
-    };
-    side.appendChild(sel);
+    side.appendChild(typeahead("stejná osoba jako… (pište pro hledání)",
+      others.map(o => ({ value: o.label, text: `${o.label}${o.name && o.name !== o.label ? " = " + o.name : ""}` })),
+      label => {
+        const src = /** @type {HTMLElement|null} */ (main.querySelector(`.side[data-label="${CSS.escape(label)}"]`));
+        if (src) { const f = collectFields(src); if (!(f.first || f.last || f.nick)) f.first = label; setFields(f); }
+        updateDirty();
+      }));
   }
   updateShown();
   const rm = document.createElement("button"); rm.type = "button"; rm.className = "link danger small";

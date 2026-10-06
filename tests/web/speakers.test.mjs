@@ -9,7 +9,13 @@ import { BOARD_OLD, WEEKLY, openPage, server, waitFor } from "./page.mjs";
 const cards = p => [...p.doc.querySelectorAll(".card")];
 const heading = card => card.querySelector(".label").textContent;
 const cardOf = (p, label) => cards(p).find(c => c.querySelector(".side").dataset.label === label);
-const selectStartingWith = (card, text) => [...card.querySelectorAll("select")].find(s => s.options[0].textContent.startsWith(text));
+const pickerStartingWith = (card, text) => [...card.querySelectorAll("input.taInput")].find(i => i.placeholder.startsWith(text));
+/** type into a picker and press Enter: the first match is picked */
+const typeAndPick = (p, input, text) => {
+  input.dispatchEvent(new p.window.Event("focus"));
+  p.input(input, text);
+  input.dispatchEvent(new p.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+};
 
 test("naming speakers: heading follows the fields, a known person fills them, save writes the server", async t => {
   const p = await openPage(t, WEEKLY);
@@ -27,13 +33,18 @@ test("naming speakers: heading follows the fields, a known person fills them, sa
   assert.equal(heading(s0), "SPEAKER_00", "empty fields fall back to the label");
 
   const s1 = cardOf(p, "SPEAKER_01");
-  p.change(selectStartingWith(s1, "vybrat"), "petr-svoboda");
+  const picker = pickerStartingWith(s1, "vybrat");
+  p.input(picker, "PETA");  // the nickname in brackets, any case, no diacritics
+  assert.deepEqual([...picker.parentElement.querySelectorAll("li[data-n]")].map(li => li.textContent), ["Petr Svoboda (Péťa)"]);
+  p.input(picker, "zzz");
+  assert.match(picker.parentElement.querySelector(".taList").textContent, /nic neodpovídá/);
+  typeAndPick(p, picker, "svob");
   const fields = ["first", "last", "nick"].map(k => s1.querySelector(`[data-key="${k}"]`).value);
   assert.deepEqual(fields, ["Petr", "Svoboda", "Péťa"]);
   assert.match(s1.querySelector(".shown").textContent, /v zápisu: Péťa/);
   assert.ok(p.$("dirty").classList.contains("changed"), "unsaved changes are shown");
 
-  p.change(selectStartingWith(s0, "stejná"), "SPEAKER_01");  // SPEAKER_00 is the same person
+  typeAndPick(p, pickerStartingWith(s0, "stejná"), "speaker_01");  // SPEAKER_00 is the same person
   assert.equal(heading(s0), "Petr Svoboda");
 
   p.$("save").click();

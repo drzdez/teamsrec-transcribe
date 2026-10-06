@@ -429,6 +429,8 @@ def _require_ffmpeg() -> None:
 def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices | pull"),
             target: str = typer.Argument(...), force: bool = typer.Option(False),
             cloud: bool = typer.Option(False, help="emergency fast track: cloud services only (fasttrack.py)"),
+            minutes_anyway: bool = typer.Option(True, "--minutes-anyway/--minutes-when-named",
+                                                help="write the minutes even with unnamed speakers"),
             provider: str = typer.Option(""), model: str = typer.Option("")):
     """One background job of the review page, in a process of its own, so the page can stop it (a recording
     started: the GPU must not break the recorded sound)."""
@@ -445,7 +447,7 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
     timings.start_run(kind + (" --force" if force else "") + (" --cloud" if cloud else ""))
     ok = False
     try:
-        _run_job(cfg, rec, kind, force, provider, model)
+        _run_job(cfg, rec, kind, force, provider, model, minutes_anyway or cloud)
         ok = True
     finally:
         timings.finish_run(rec, ok)  # how long each part took, for the page (<stem>.timings.json)
@@ -468,7 +470,7 @@ def _pull(cfg, model: str) -> None:
     print(f"PROGRESS {model} stažen", flush=True)
 
 
-def _run_job(cfg, rec, kind: str, force: bool, provider: str, model: str) -> None:
+def _run_job(cfg, rec, kind: str, force: bool, provider: str, model: str, minutes_anyway: bool = True) -> None:
     from .pipeline import do_process, do_summarize, do_summarize_compare, summarize_as
     from .timings import step
     if kind == "process":
@@ -477,7 +479,7 @@ def _run_job(cfg, rec, kind: str, force: bool, provider: str, model: str) -> Non
             reset_names(rec)
             if rec.speakers_video_path.exists():
                 rec.speakers_video_path.unlink()
-        do_process(cfg, rec, force=force)
+        do_process(cfg, rec, force=force, minutes_anyway=minutes_anyway)
     elif kind == "summary":
         with step(f"zápis ({cfg.summarize.provider} {cfg.summarize.model})"):
             do_summarize(cfg, rec, force=True)

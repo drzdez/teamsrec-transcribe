@@ -211,6 +211,7 @@
   button.primary-btn { padding: 10px 18px; border-radius: 8px; border: 0; background: var(--accent); color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
   button.primary-btn:disabled { opacity: .5; cursor: default; }
   .processActs { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .minutesAnyway { font-size: 13px; color: var(--muted); cursor: pointer; margin-left: 8px; }
   button.cloud-btn { padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent); background: transparent;
                      color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
   .toolbar button.cloud-btn { padding: 3px 9px; font-size: 13px; font-weight: 400; margin: 0 0 0 6px; }
@@ -404,7 +405,7 @@
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
  * @typedef {{start:number,end:number,at:string,text:string}} Reply
- * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,nearest?:{label:string,score:number}|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,hint_name?:string,nearest?:{label:string,score:number}|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number,voiceprint?:boolean}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
@@ -1004,6 +1005,7 @@ function renderNotTranscribedOffer(/** @type {Review} */ r, /** @type {HTMLEleme
     const row = document.createElement("p"); row.className = "processActs";
     row.append(b, fast);
     box.appendChild(row);
+    const opt = document.createElement("p"); opt.appendChild(minutesAnywayBox()); box.appendChild(opt);
   }
   main.appendChild(box);
 }
@@ -1028,11 +1030,24 @@ function cloudButton(/** @type {Review} */ r, /** @type {string} */ what, /** @t
   return b;
 }
 
+/** Local processing writes the minutes only when every speaker has a name (otherwise they would be regenerated
+ * right after naming); this box asks for them anyway. The fast track always writes them. */
+function minutesAnywayBox() {
+  const l = document.createElement("label"); l.className = "minutesAnyway";
+  l.title = "Bez zaškrtnutí lokální zpracování udělá jen přepis; zápis vznikne, až budou mluvčí pojmenovaní (Uložit a přegenerovat zápis). "
+    + "Zaškrtnuto: zápis hned, i s nepojmenovanými SPEAKER_xx.";
+  l.innerHTML = '<input type="checkbox" class="minutesAnywayBox"> zápis hned, i když mluvčí nebudou poznaní';
+  return l;
+}
+function minutesAnyway() {
+  return [...document.querySelectorAll("input.minutesAnywayBox")].some(b => /** @type {HTMLInputElement} */ (b).checked);
+}
+
 async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonElement} */ btn, cloud = false) {
   btn.disabled = true;
   /** @type {any} */ let r;
   try {
-    r = await api(recUrl(stem, "process"), send("POST", cloud ? { cloud: true } : undefined));
+    r = await api(recUrl(stem, "process"), send("POST", cloud ? { cloud: true } : { minutes_anyway: minutesAnyway() }));
     if (!r.ok) throw new Error(r.error || "nelze spustit");
   } catch (e) { setStatus(String(e), "err"); btn.disabled = false; return; }
   setBusy(true);
@@ -1196,7 +1211,7 @@ function renderSpeakers() {
       setStatus("spouštím nový přepis…");
       /** @type {any} */ let r;
       try {
-        r = await api(recUrl(stem, "process"), send("POST", { force: true, ...(cloud ? { cloud: true } : {}) }));
+        r = await api(recUrl(stem, "process"), send("POST", { force: true, ...(cloud ? { cloud: true } : { minutes_anyway: minutesAnyway() }) }));
         if (!r.ok) throw new Error(r.error || "nelze spustit");
       } catch (e) { setStatus(String(e), "err"); return; }
       setBusy(true);
@@ -1213,6 +1228,7 @@ function renderSpeakers() {
     armedButton(b, `Potvrdit nový přepis (~${mins} min, jména se zahodí)`, () => fromScratch(false));
     bar.appendChild(b);
     bar.appendChild(cloudButton(review, "Přepsat znovu", () => { fromScratch(true); }));
+    bar.appendChild(minutesAnywayBox());
     main.appendChild(bar);
   }
   if (review.can_unmerge) {
@@ -1327,6 +1343,23 @@ function card(sp, i) {
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "") +
     (review && (review.voices_mixed || []).includes(sp.label)
       ? '<p class="hint">podle lokálních hlasů tu možná mluví dva lidé – poslechněte si „Projít repliky“</p>' : "");
+  if (sp.hint && sp.hint_name) {  // the minutes guessed a name: one click fills it in, like the voice hint
+    const hp = left.querySelector("p.hint");
+    if (hp) {
+      const use = document.createElement("button"); use.type = "button"; use.className = "play"; use.textContent = "použít toto jméno";
+      use.title = `vyplní ${sp.hint_name} (odhad ze zápisu – ověřte poslechem)`;
+      use.onclick = () => {
+        const known = people.find(p => `${p.first} ${p.last}`.trim().toLowerCase() === String(sp.hint_name).toLowerCase()
+                                       || (p.aliases || []).some(a => a.toLowerCase() === String(sp.hint_name).toLowerCase()));
+        const parts = String(sp.hint_name).split(/\s+/);
+        setFields(known ? { first: known.first, last: known.last, nick: known.nick, display: known.display }
+                        : { first: parts[0] || "", last: parts.slice(1).join(" "), nick: "", display: "" });
+        /** @type {HTMLInputElement|null} */ (side.querySelector('[data-key="first"]'))?.focus();
+      };
+      hp.appendChild(document.createTextNode(" "));
+      hp.appendChild(use);
+    }
+  }
   if (sp.voice_hint) {
     const vh = sp.voice_hint;
     const p = document.createElement("p"); p.className = "hint";
@@ -2046,7 +2079,10 @@ async function renderDoc(/** @type {number|null=} */ scrollTo = null) {
   if (!file) {
     docMain.innerHTML = making
       ? `<div class="empty minutesRun" data-minutes-run="1"><p class="queued">⏳ ${escapeHtml(making)}</p><p>Až bude hotový, ukáže se tu sám.</p></div>`
-      : problem + `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`;
+      : problem + `<div class="empty">${subTab === "transcript" ? "Přepis zatím není."
+        : review.speakers.some(sp => sp.unresolved && !sp.unassigned)
+          ? "Zápis zatím není – počká, až budou mluvčí pojmenovaní (aby nevznikal dvakrát). Pojmenujte je na kartě Mluvčí a dejte Uložit a přegenerovat zápis; nebo ho vygenerujte hned modelem nahoře."
+          : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`;
     addPullButtons();
     return;
   }

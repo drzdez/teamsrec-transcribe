@@ -12,7 +12,8 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   GET    /api/recordings/{stem}/docs/{file}            a transcript .txt or a .summary*.md of the recording
   PUT    /api/recordings/{stem}/names                  {"names": {label: name|fields}, "title"?, "summary"?}
   PUT    /api/recordings/{stem}/title                  {"title"} rename the meeting only (folder and files follow)
-  POST   /api/recordings/{stem}/process                {"force"?, "cloud"?} transcribe + export + summarize in the background
+  POST   /api/recordings/{stem}/process                {"force"?, "cloud"?, "minutes_anyway"?} transcribe + export +
+                                                        minutes (locally they wait for named speakers unless asked)
   POST   /api/recordings/{stem}/voices                 fast-track post-processing: local voices for a cloud transcript
   POST   /api/recordings/{stem}/recognize              match unnamed labels against the voice prints
   POST   /api/recordings/{stem}/summaries              {"provider", "model"} a summary with that model, in the background
@@ -205,6 +206,19 @@ def pick_samples(segs: list[Segment], n: int = SAMPLES_PER_SPEAKER) -> list[Segm
     return picks
 
 
+def summary_hint_names(rec: Recording) -> dict[str, str]:
+    """The names the minutes' Speakers table guessed for still-unnamed labels ({label: name}), for a one-click
+    "použít toto jméno" next to the note."""
+    if not rec.summary_path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in rec.summary_path.read_text(encoding="utf-8").splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and is_label(cells[0]) and cells[1] not in ("?", "", "–", "-") and len(cells[1]) <= 60:
+            out[cells[0]] = cells[1].strip("*_ ")
+    return out
+
+
 def summary_hints(rec: Recording) -> dict[str, str]:
     """Notes from the Speakers table at the end of the summary: '| SPEAKER_00 | ? | led the meeting |'."""
     if not rec.summary_path.exists():
@@ -316,6 +330,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     people = People.load(cfg.out_dir, cfg.people_display)
     hints = summary_hints(rec)
+    hint_names = summary_hint_names(rec)
     voice = data.get("voice_matches") or {}
     vp = Voiceprints.load(cfg.out_dir)
     embeddings = data.get("speaker_embeddings") or {}
@@ -359,6 +374,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                         if label == "UNKNOWN" else []),
             **langs.get(label, {"language": data.get("language"), "own": False, "mixed": False}),
             "hint": hints.get(label, ""),
+            "hint_name": hint_names.get(label, "") if is_label(label) and not value else "",
             "samples": [{"start": round(s.start, 2), "end": round(min(s.end, s.start + CLIP_MAX_S), 2),
                          "at": _fmt_hms(s.start), "text": s.text[:140]} for s in pick_samples(ss)],
             "excerpts": [{"at": _fmt_hms(s.start), "text": s.text[:200]} for s in
@@ -1043,7 +1059,8 @@ class ReviewState:
         return self.run_job("voices", ["run-job", "voices", rec.stem], "hlasy doplněny", rec.stem,
                             start=f"{rec.stem}: doplňují se hlasy (lokální diarizace)")
 
-    def run_process(self, rec: Recording, force: bool = False, cloud: bool = False) -> tuple[int, int]:
+    def run_process(self, rec: Recording, force: bool = False, cloud: bool = False,
+                    minutes_anyway: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
         # from scratch drops the manual names and the cached window analysis when the job starts (run-job), so a
@@ -1051,8 +1068,10 @@ class ReviewState:
         if cloud and not cloud_ready(self.cfg)["ok"]:
             raise ValueError("rychle přes cloud potřebuje klíče: " + cloud_ready(self.cfg)["missing"])
         what = ("nový přepis od nuly" if force else "zpracování") + (" (cloud)" if cloud else "")
+        # local: the minutes wait for named speakers unless asked otherwise; the fast track always writes them
         return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else [])
-                            + (["--cloud"] if cloud else []),
+                            + (["--cloud"] if cloud else [])
+                            + ([] if cloud or minutes_anyway else ["--minutes-when-named"]),
                             "zpracováno", rec.stem, start=f"{rec.stem}: {what} spuštěno")
 
     def status(self, events: int = 40) -> dict:
@@ -1250,7 +1269,8 @@ def _handler(state: ReviewState, server_ref: dict):
 
         def r_process(self, q, body, stem):
             job, position = state.run_process(self._recording(stem), force=bool(body.get("force")),
-                                              cloud=bool(body.get("cloud")))
+                                              cloud=bool(body.get("cloud")),
+                                              minutes_anyway=bool(body.get("minutes_anyway")))
             self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_speaker_replies(self, q, body, stem, label):

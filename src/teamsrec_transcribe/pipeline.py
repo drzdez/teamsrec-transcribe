@@ -921,11 +921,34 @@ def auto_purge(cfg: Config) -> list[dict]:
         return []
 
 
-def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:
+UNNAMED_MIN_SECONDS = 20.0  # an unnamed speaker this long holds the minutes back (shorter ones: a cough, a "mhm")
+
+
+def unnamed_speakers(rec: Recording, min_seconds: float = UNNAMED_MIN_SECONDS) -> list[str]:
+    """Speaker labels of the transcript nobody named yet (SPEAKER_xx, no entry in speakers.json) that said at least
+    `min_seconds`. Unassigned replies (UNKNOWN) are not a speaker to name."""
+    if not rec.transcript_path.exists():
+        return []
+    data = rec.read_json(rec.transcript_path)
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    secs = speech_seconds(data.get("segments") or [])
+    return [lab for lab in data.get("speakers", [])
+            if lab.startswith("SPEAKER_") and not names.get(lab) and secs.get(lab, 0.0) >= min_seconds]
+
+
+def do_process(cfg: Config, rec: Recording, *, force: bool = False, minutes_anyway: bool = True) -> None:
+    """Transcript, exports and the minutes. With minutes_anyway=False (the review page's local processing) the
+    minutes wait while speakers are unnamed: they would be written with SPEAKER_xx and regenerated right after the
+    names are filled in (Uložit a přegenerovat zápis), a needless 2–10 minutes on the GPU."""
     do_transcribe(cfg, rec, force=force)
     with step("export (txt, srt)"):
         do_export(cfg, rec)
-    if cfg.summarize.enabled:
+    waiting = [] if minutes_anyway else unnamed_speakers(rec)
+    if cfg.summarize.enabled and waiting:
+        log.info("%s: minutes held back – unnamed speakers: %s (name them, then Uložit a přegenerovat zápis)",
+                 rec.stem, ", ".join(waiting))
+        print(f"PROGRESS zápis počká: nepojmenovaní mluvčí {', '.join(waiting)}", flush=True)
+    elif cfg.summarize.enabled:
         try:
             with step(f"zápis ({cfg.summarize.provider} {cfg.summarize.model})"):
                 do_summarize(cfg, rec, force=force)

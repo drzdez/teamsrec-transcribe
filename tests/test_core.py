@@ -477,7 +477,7 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls and calls[0][-3:] == ["run-job", "process", rec.stem], "processing runs as a child process"
+    assert calls and calls[0][-4:] == ["run-job", "process", rec.stem, "--minutes-when-named"], "processing runs as a child process"
     assert calls[0][:2] == ["--out-dir", str(tmp_path)], "with the server's folder"
     assert st.status()["message"] == "zpracováno" and st.status()["job"] == "process"
     ev = st.status()["events"]
@@ -491,7 +491,7 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
         if not st.status()["busy"]:
             break
         time.sleep(0.02)
-    assert calls[-1][-4:] == ["run-job", "process", rec.stem, "--force"] and rec.speakers_path.exists()
+    assert calls[-1][-5:] == ["run-job", "process", rec.stem, "--force", "--minutes-when-named"] and rec.speakers_path.exists()
 
 
 def test_run_job_from_scratch_drops_the_names_when_it_starts(tmp_path, monkeypatch):
@@ -503,7 +503,7 @@ def test_run_job_from_scratch_drops_the_names_when_it_starts(tmp_path, monkeypat
     rec.write_json(rec.speakers_path, {"SPEAKER_00": "petr-svoboda"})
     rec.write_json(rec.speakers_video_path, {"format": 1, "source": "teams-screen", "fps": 2, "speakers": {}})
     seen = []
-    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False: seen.append(
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False, **kw: seen.append(
         (force, r.speakers_path.exists(), r.speakers_video_path.exists())))
     res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--force"])
     assert res.exit_code == 0, res.output
@@ -1794,7 +1794,7 @@ def test_run_job_cloud_flag_switches_the_services(tmp_path, monkeypatch):
     from teamsrec_transcribe import cli, pipeline as pl
     rec = _make_transcribed(tmp_path)
     seen = []
-    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False: seen.append(
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False, **kw: seen.append(
         (cfg.transcribe.provider, cfg.summarize.provider, cfg.video.enabled)))
     res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--cloud"])
     assert res.exit_code == 0, res.output
@@ -1840,7 +1840,7 @@ def test_a_job_records_how_long_each_part_took(tmp_path, monkeypatch):
     from teamsrec_transcribe.web.review import build_review
     rec = _make_transcribed(tmp_path)
 
-    def fake_process(cfg, r, force=False):
+    def fake_process(cfg, r, force=False, **kw):
         with timings.step("přepis (fake)", {"transcribe_s": 1.5, "align_s": 0.5, "note": "x"}):
             pass
         with timings.step("zápis (ollama m)"):
@@ -1855,7 +1855,7 @@ def test_a_job_records_how_long_each_part_took(tmp_path, monkeypatch):
     assert runs[0]["steps"][0]["parts"] == {"transcribe_s": 1.5, "align_s": 0.5}, "numbers only"
     assert build_review(Config(out_dir=tmp_path), rec)["timings"][0]["job"] == "process --force"
 
-    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False: (_ for _ in ()).throw(RuntimeError("boom")))
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
     CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem])
     assert timings.latest(rec, 5)[0]["ok"] is False, "a failed job is recorded too"
     with timings.step("outside a job"):  # a CLI command: measured and logged, nothing written
@@ -2050,3 +2050,36 @@ def test_a_reply_is_split_where_its_words_change_speaker():
     short_start = {"start": 0, "end": 7.4, "speaker": "SPEAKER_00", "text": "…",
                    "words": [w(0, "a", "SPEAKER_01")] + [w(1 + i * 0.5, f"i{i}", "SPEAKER_00") for i in range(8)]}
     assert [p["speaker"] for p in split_on_speaker_change([short_start])] == ["SPEAKER_00"], "a one-word start joins"
+
+
+def test_a_name_the_minutes_guessed_can_be_used_with_one_click(tmp_path):
+    from teamsrec_transcribe.web.review import build_review, summary_hint_names
+    rec = _make_transcribed(tmp_path)
+    rec.summary_path.write_text("# T\n\n## Mluvčí\n| Označení | Jméno | Poznámka |\n|---|---|---|\n"
+                                "| SPEAKER_00 | ? | vedl schůzku |\n| SPEAKER_01 | **Martin Bulla** | navrhl proces |\n",
+                                encoding="utf-8")
+    assert summary_hint_names(rec) == {"SPEAKER_01": "Martin Bulla"}
+    sp = {s["label"]: s for s in build_review(Config(out_dir=tmp_path), rec)["speakers"]}
+    assert sp["SPEAKER_01"]["hint_name"] == "Martin Bulla" and sp["SPEAKER_00"]["hint_name"] == ""
+    assert sp["SPEAKER_01"]["hint"].startswith("**Martin Bulla**") or "Martin Bulla" in sp["SPEAKER_01"]["hint"]
+
+
+def test_local_minutes_wait_for_named_speakers_unless_asked(tmp_path, monkeypatch):
+    from teamsrec_transcribe import pipeline as pl
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)  # SPEAKER_00 (12 s) and SPEAKER_01 (8 s) unnamed, Jana named
+    monkeypatch.setattr(pl, "do_transcribe", lambda cfg, rec, force=False: rec.transcript_path)
+    made = []
+    monkeypatch.setattr(pl, "do_summarize", lambda cfg, r, force=False: made.append("main"))
+    monkeypatch.setattr(pl, "do_summarize_compare", lambda cfg, r, force=False: made.append("compare"))
+    assert pl.unnamed_speakers(rec, min_seconds=5) == ["SPEAKER_00", "SPEAKER_01"]
+    assert pl.unnamed_speakers(rec) == [], "under 20 s they do not hold the minutes back"
+    pl.do_process(cfg, rec, minutes_anyway=False)
+    assert made == ["main", "compare"]
+    monkeypatch.setattr(pl, "UNNAMED_MIN_SECONDS", 5.0)
+    monkeypatch.setattr(pl, "unnamed_speakers", lambda r, min_seconds=5.0: ["SPEAKER_00"])
+    made.clear()
+    pl.do_process(cfg, rec, minutes_anyway=False)
+    assert made == [], "an unnamed speaker: the minutes wait"
+    pl.do_process(cfg, rec, minutes_anyway=True)
+    assert made == ["main", "compare"], "asked for them anyway"

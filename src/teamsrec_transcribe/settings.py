@@ -9,6 +9,7 @@ them - encrypted for the Windows user, never shown again, usable at once without
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
@@ -270,6 +271,29 @@ def processing_places(values: dict) -> list[dict]:
     return rows
 
 
+_ollama_seen: dict[tuple[str, str], tuple[float, bool | None]] = {}
+
+
+def ollama_has(url: str, model: str, timeout: float = 0.7, cache_s: float = 20.0) -> bool | None:
+    """Is the model in the local Ollama? None when Ollama does not answer (not running). Asked on every recording the
+    page opens, so: 127.0.0.1 instead of "localhost" (Windows tries ::1 first and loses ~0.7 s) and a 20 s memory."""
+    import time
+    import urllib.request
+    key = (url, model)
+    hit = _ollama_seen.get(key)
+    if hit and time.monotonic() - hit[0] < cache_s:
+        return hit[1]
+    base = url.rstrip("/").replace("//localhost", "//127.0.0.1")
+    try:
+        with urllib.request.urlopen(base + "/api/tags", timeout=timeout) as r:
+            names = {m.get("name", "") for m in json.loads(r.read().decode("utf-8")).get("models", [])}
+        found: bool | None = model in names or f"{model}:latest" in names
+    except Exception:
+        found = None
+    _ollama_seen[key] = (time.monotonic(), found)
+    return found
+
+
 def describe(path: Path | None = None) -> dict:
     """What the settings page shows: sections with fields and values, key states, input devices."""
     path = path or default_config_path()
@@ -287,7 +311,17 @@ def describe(path: Path | None = None) -> dict:
         "inputs": input_devices(),
         "suggestions": suggestions(values),
         "places": processing_places(values),
+        "ollama": _ollama_state(values),
     }
+
+
+def _ollama_state(values: dict) -> dict | None:
+    """For the overview: is the local minutes model really there (Ollama running, the model in its folder)."""
+    if str(values.get("summarize.provider") or "ollama") != "ollama" or not values.get("summarize.enabled", True):
+        return None
+    model = str(values.get("summarize.model") or "")
+    has = ollama_has(str(values.get("summarize.ollama_url") or "http://localhost:11434"), model)
+    return {"model": model, "ok": bool(has), "running": has is not None}
 
 
 # ------------------------------------------------------------------ validating

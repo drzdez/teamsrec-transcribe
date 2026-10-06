@@ -121,6 +121,8 @@
   .exportBox input { flex: 1 1 320px; min-width: 200px; }
   .exportBox button.primary { padding: 4px 14px; border-radius: 8px; border: 0; background: var(--accent);
                               color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
+  .minutesProblem { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--err); background: var(--card);
+                    color: var(--err); font-size: 13px; }
   .minutesRunNote { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--card);
                     color: var(--accent); font-size: 13px; }
   .timings > summary { cursor: pointer; }
@@ -409,7 +411,7 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,export_folder?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,export_folder?:string,minutes_problem?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean,unaligned?:boolean}} RecordingRow
  */
 
@@ -2038,16 +2040,18 @@ async function renderDoc(/** @type {number|null=} */ scrollTo = null) {
     file = docPick.value || list[0].file;
   }
   const making = subTab === "summary" ? minutesJob() : "";
+  const problem = subTab === "summary" && review.minutes_problem
+    ? `<p class="minutesProblem">⚠ ${escapeHtml(review.minutes_problem)}</p>` : "";
   if (!file) {
     docMain.innerHTML = making
       ? `<div class="empty minutesRun" data-minutes-run="1"><p class="queued">⏳ ${escapeHtml(making)}</p><p>Až bude hotový, ukáže se tu sám.</p></div>`
-      : `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`;
+      : problem + `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`;
     return;
   }
   docMain.innerHTML = '<div class="empty">Načítám…</div>';
   try {
     const r = await api(recUrl(review.stem, "docs", file));
-    docMain.innerHTML = (making ? `<p class="minutesRunNote" data-minutes-run="1">⏳ ${escapeHtml(making)} – tady je zatím ten předchozí; nový se ukáže sám.</p>` : "")
+    docMain.innerHTML = problem + (making ? `<p class="minutesRunNote" data-minutes-run="1">⏳ ${escapeHtml(making)} – tady je zatím ten předchozí; nový se ukáže sám.</p>` : "")
       + (subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text));
     externalLinks(docMain);  // a link in the minutes must not replace the page
     if (scrollTo !== null && scrollTo !== undefined) scroller().scrollTop = scrollTo;
@@ -2295,7 +2299,7 @@ function closeSettings() {
 /** @param {SettingsData} d */
 /** "Kde se co zpracovává": every part of the processing with where it runs under these settings (this PC or the
  * cloud), and which setting chooses it – recomputed after every save. */
-function placesCard(/** @type {any[]} */ rows) {
+function placesCard(/** @type {any[]} */ rows, /** @type {any} */ ollama) {
   const card = document.createElement("section"); card.className = "card setSec places";
   const all = rows.filter(r => !r.fasttrack && r.where !== "off");
   const anyCloud = all.some(r => r.where === "cloud");
@@ -2308,6 +2312,13 @@ function placesCard(/** @type {any[]} */ rows) {
   t.innerHTML = rows.map(r => `<tr${r.fasttrack ? ' class="fast"' : ""}><td>${escapeHtml(r.step)}</td><td>${badge(r.where)}</td>` +
     `<td class="how">${escapeHtml(String(r.how || ""))}${r.choice ? ` <span class="setKey">· nastavení ${escapeHtml(r.choice)}</span>` : ""}</td></tr>`).join("");
   card.appendChild(t);
+  if (ollama && !ollama.ok) {
+    const w = document.createElement("p"); w.className = "minutesProblem";
+    w.textContent = ollama.running
+      ? `⚠ Ollama nemá model ${ollama.model} – lokální zápis nevznikne. Stáhněte ho (ollama pull ${ollama.model}) nebo zkontrolujte složku modelů v nastavení Ollamy.`
+      : `⚠ Ollama neběží – lokální zápis (${ollama.model}) nevznikne, dokud ji nespustíte.`;
+    card.appendChild(w);
+  }
   return card;
 }
 
@@ -2316,7 +2327,7 @@ function renderSettings(d) {
   settingsLoaded = {};
   $("settingsPath").textContent = d.path;
   settingsMain.innerHTML = "";
-  if (d.places) settingsMain.appendChild(placesCard(d.places));
+  if (d.places) settingsMain.appendChild(placesCard(d.places, d.ollama));
   settingsMain.appendChild(keysCard(d));
 
   for (const s of d.sections) {

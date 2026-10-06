@@ -930,7 +930,7 @@ def do_process(cfg: Config, rec: Recording, *, force: bool = False) -> None:
             with step(f"zápis ({cfg.summarize.provider} {cfg.summarize.model})"):
                 do_summarize(cfg, rec, force=force)
         except Exception as e:  # summary is optional: no model, no API key, network, refusal
-            log.error("%s: summary failed: %s", rec.stem, e)
+            log.error("%s: zápis se nepodařil: %s", rec.stem, e)
         do_summarize_compare(cfg, rec, force=force)
 
 

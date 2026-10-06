@@ -64,11 +64,12 @@ def _ollama(system: str, user: str, settings: SummarizeSettings, num_ctx: int | 
             data = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         msg = e.read().decode("utf-8", "replace")[:300]
-        if e.code == 404:
-            raise LLMError(f"ollama: model {settings.model!r} not found, run `ollama pull {settings.model}`") from e
+        if e.code == 404:  # 2026-10-06: Ollama's model folder was moved, every local minutes failed in 2 s
+            raise LLMError(f"Ollama nemá model {settings.model} – stáhněte ho (ollama pull {settings.model}) nebo "
+                           f"zkontrolujte složku modelů v nastavení Ollamy") from e
         raise LLMError(f"ollama: HTTP {e.code}: {msg}") from e
     except urllib.error.URLError as e:
-        raise LLMError(f"ollama: cannot reach {settings.ollama_url} ({e.reason}); is Ollama running?") from e
+        raise LLMError(f"Ollama neběží ({settings.ollama_url}: {e.reason}) – spusťte ji") from e
     text = (data.get("message") or {}).get("content", "").strip()
     prompt_tokens, out_tokens = data.get("prompt_eval_count") or 0, data.get("eval_count") or 0
     truncated = data.get("done_reason") == "length"

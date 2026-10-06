@@ -374,7 +374,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "has_summary": has_minutes(rec), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "cloud": cloud_ready(cfg),
         "timings": timings.latest(rec),  # how long each part of the last jobs took
-        "export_folder": exports.folder_for(cfg.out_dir, rec.title),  # "Uložit jako minule" for this meeting name
+        "export_folder": exports.folder_for(cfg.out_dir, rec.title),
+        "minutes_problem": minutes_problem(cfg),  # the local minutes model is missing / Ollama is not running  # "Uložit jako minule" for this meeting name
         "voices_missing": needs_voices(data),  # a fast-track transcript: voices can be added locally
         "voices_mixed": sorted(((data.get("voices_from") or {}).get("mixed") or {}).keys()),
         "speakers": speakers, "known_names": known_names(cfg, people),
@@ -388,6 +389,21 @@ def build_review(cfg: Config, rec: Recording) -> dict:
 
 
 SUMMARY_STAMP = re.compile(r"<!--\s*teamsrec-transcribe summary \| (?P<provider>[^:|]+):\s*(?P<model>[^|]+?)\s*(?:\|[^>]*?created:\s*(?P<created>[^|>]+?))?\s*(?:\||-->)")
+
+
+def minutes_problem(cfg: Config) -> str:
+    """Why the local minutes would fail now ("" = fine or not local): Ollama not running, or without the model
+    (2026-10-06: the model folder was moved in Ollama's settings and every local minutes failed in 2 s)."""
+    sm = cfg.summarize
+    if not sm.enabled or sm.provider != "ollama":
+        return ""
+    has = settings.ollama_has(sm.ollama_url, sm.model)
+    if has is None:
+        return f"Ollama neběží – lokální zápis ({sm.model}) teď nevznikne; spusťte Ollamu."
+    if not has:
+        return (f"Ollama nemá model {sm.model} – lokální zápis teď nevznikne. Stáhněte ho (ollama pull {sm.model}) "
+                f"nebo zkontrolujte složku modelů v nastavení Ollamy.")
+    return ""
 
 
 def is_unaligned(data: dict) -> bool:
@@ -937,6 +953,9 @@ class ReviewState:
                     job["fn"]()
                 with self.lock:
                     self.message = done
+                if job.get("errors"):  # the job ended, but a part of it failed (typically the local minutes)
+                    first = job["errors"][0].split(": ", 1)[-1]
+                    outcome = (f"{done}: {stem}, ale část se nepodařila – {first}", "err")
             except Exception as e:  # shown on the page, not fatal
                 with self.lock:
                     self.error = str(e)
@@ -986,6 +1005,7 @@ class ReviewState:
             parts = line.split(" ", 2)
             if len(parts) == 3 and parts[1] == "ERROR":
                 self.event(parts[2], "err", job["stem"])
+                job.setdefault("errors", []).append(parts[2])
         try:
             run_cli(args, on_proc, on_line)
         except RuntimeError:

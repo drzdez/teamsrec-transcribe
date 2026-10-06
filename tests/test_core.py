@@ -1960,3 +1960,26 @@ def test_a_copy_of_the_minutes_goes_where_this_meeting_went_last_time(tmp_path):
         exports.save_copy(rec, "../secret.md", str(target), out)
     with pytest.raises(RecordingError):
         exports.save_copy(rec, rec.summary_path.name, "relative/folder", out)
+
+
+def test_missing_local_minutes_model_is_said_and_the_job_ends_as_an_error(tmp_path, monkeypatch):
+    import time as _time
+    from teamsrec_transcribe import settings
+    from teamsrec_transcribe.web import review as rv
+    cfg = Config(out_dir=tmp_path)
+    monkeypatch.setattr(settings, "ollama_has", lambda url, model, **kw: False)
+    assert "nemá model gemma4:31b" in rv.minutes_problem(cfg)
+    monkeypatch.setattr(settings, "ollama_has", lambda url, model, **kw: None)
+    assert "neběží" in rv.minutes_problem(cfg)
+
+    def cli(argv, on_proc, on_line):  # the child logs the failed minutes, the job itself ends fine
+        on_line("2026-10-06 ERROR 2026-10-06_1030_x: zápis se nepodařil: Ollama nemá model gemma4:31b – stáhněte ho")
+    monkeypatch.setattr(rv, "run_cli", cli)
+    state = rv.ReviewState(cfg)
+    state.run_job("process", ["run-job", "process", "s1"], "zpracováno", "s1")
+    for _ in range(200):
+        if not state.busy:
+            break
+        _time.sleep(0.02)
+    end = [e for e in state.events if e["job_end"]][-1]
+    assert end["level"] == "err" and "ale část se nepodařila" in end["text"] and "Ollama nemá model" in end["text"]

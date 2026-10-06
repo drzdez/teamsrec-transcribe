@@ -99,6 +99,49 @@ def _levels(wav, segments: list[dict]) -> tuple[list[float], float]:
     return out, float(np.median(db))
 
 
+MIN_TURN_WORDS = 3     # a speaker change inside a reply counts from this many words ...
+MIN_TURN_SECONDS = 1.0  # ... or this long; shorter flips are diarization noise and stay with their neighbour
+
+
+def split_on_speaker_change(segments: list[dict]) -> list[dict]:
+    """Split a reply where its words change speaker. Whisper's replies are sentences, and the diarization only names
+    the words; a reply then kept the majority speaker even when two people spoke in it (2026-10-06: Martin's 15 s and
+    Ivan's last words as one reply of Ivan). Words without a speaker go with the one before them; a run shorter than
+    MIN_TURN_WORDS words and MIN_TURN_SECONDS seconds is not a turn."""
+    out: list[dict] = []
+    for seg in segments:
+        words = [w for w in seg.get("words") or [] if "start" in w and "end" in w]
+        if len(words) < 2 * MIN_TURN_WORDS:
+            out.append(seg)
+            continue
+        runs: list[list[dict]] = []
+        for w in words:
+            who = w.get("speaker") or (runs[-1][-1].get("speaker") if runs else None)
+            if runs and (runs[-1][-1].get("speaker") or who) == who:
+                runs[-1].append({**w, "speaker": who})
+            else:
+                runs.append([{**w, "speaker": who}])
+        merged: list[list[dict]] = []
+        for run in runs:  # short runs join the run before (or the next one, at the start)
+            short = len(run) < MIN_TURN_WORDS and run[-1]["end"] - run[0]["start"] < MIN_TURN_SECONDS
+            if merged and (short or merged[-1][0]["speaker"] == run[0]["speaker"]):
+                merged[-1].extend(run)
+            else:
+                merged.append(run)
+        if len(merged) > 1 and len(merged[0]) < MIN_TURN_WORDS:
+            first = merged.pop(0)
+            merged[0][:0] = first
+        if len(merged) == 1:
+            out.append(seg)
+            continue
+        for run in merged:
+            speakers = [w["speaker"] for w in run if w.get("speaker")]
+            who = max(set(speakers), key=speakers.count) if speakers else seg.get("speaker")
+            out.append({**seg, "start": run[0]["start"], "end": run[-1]["end"], "speaker": who,
+                        "text": " ".join(str(w.get("word", "")).strip() for w in run).strip(), "words": run})
+    return out
+
+
 def drop_hallucinations(wav, segments: list[dict]) -> tuple[list[dict], list[str]]:
     levels, median = _levels(wav, segments)
     keep, dropped = [], []
@@ -264,6 +307,12 @@ class WhisperXProvider:
             t = time.time()
             dia, embeddings = diarize_audio(wav, settings.diarize_model, device)  # one embedding per label
             result = whisperx.assign_word_speakers(dia, result)
+            before = len(result["segments"])
+            try:
+                result = {**result, "segments": split_on_speaker_change(result["segments"])}
+            except Exception as e:  # never lose the transcript over the refinement
+                log.warning("splitting replies by speaker skipped: %s", e)
+            timings["split_replies"] = len(result["segments"]) - before
             timings["diarize_s"] = round(time.time() - t, 1)
 
         speaker_languages: dict[str, str] = {}

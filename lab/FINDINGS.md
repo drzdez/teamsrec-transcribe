@@ -146,6 +146,18 @@ alignment there are no word times, so no speaker turns inside a reply; the reply
 alignment model falls back to the local cache, the transcript records `timings.align_skipped`, and the page warns about
 an unaligned transcript.
 
+## Replies with two speakers; very short replies of the user (2026-10-06)
+
+"Ivan Kratochvíl, Martin Bulla": the reply at 00:10:44 was 18 s of Martin and Ivan's last words, kept as one reply of
+Ivan. Whisper's replies are sentences; the diarization names the words, and the reply took the majority speaker. Now a
+reply is split where its words change speaker (runs of at least 3 words or 1 s; shorter flips are noise): 18 of 141
+replies split in that meeting, 00:10:44 became Martin 644–650 s and Ivan 650–662 s.
+
+"Slyším" at 00:00:03 (0.4 s, the user's mic fully active) stayed with Ivan: replies under 1.5 s are not given to the
+user by the mic. Lowering that is not safe – across 8 meetings, 17 short replies had the mic fully active, and several
+were somebody else's (Slovak sentences said over the user: overlapping speech). Such replies are moved by hand
+(Projít repliky).
+
 ## The user's label holding other people's replies (2026-10-05)
 
 In "Postgre rollout" transcribed by the fast track (ElevenLabs), the user's group had 93 replies, and several were

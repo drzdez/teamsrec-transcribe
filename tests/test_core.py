@@ -2030,3 +2030,23 @@ def test_run_job_pull_prints_progress(monkeypatch, capsys):
     assert res.exit_code == 0, res.output
     assert "PROGRESS stahuje se gemma4:31b: pulling manifest" in res.output
     assert "PROGRESS stahuje se gemma4:31b: 100% (20.0 / 20.0 GB)" in res.output and "PROGRESS gemma4:31b stažen" in res.output
+
+
+def test_a_reply_is_split_where_its_words_change_speaker():
+    from teamsrec_transcribe.providers.whisperx_provider import split_on_speaker_change
+    w = lambda t, word, who: {"start": t, "end": t + 0.4, "word": word, "speaker": who}
+    martin = [w(i * 0.5, f"m{i}", "SPEAKER_01") for i in range(10)]
+    ivan = [w(5 + i * 0.5, f"i{i}", "SPEAKER_00") for i in range(5)]
+    blip = [w(2.0, "x", "SPEAKER_00")]  # one word flipped in the middle: noise
+    seg = {"start": 0, "end": 7.4, "speaker": "SPEAKER_01", "text": "…", "words": martin[:4] + blip + martin[4:] + ivan}
+    parts = split_on_speaker_change([seg])
+    assert [(p["speaker"], len(p["words"])) for p in parts] == [("SPEAKER_01", 11), ("SPEAKER_00", 5)]
+    assert parts[1]["start"] == 5 and parts[1]["text"] == "i0 i1 i2 i3 i4"
+    one = {"start": 0, "end": 4.9, "speaker": "SPEAKER_01", "text": "m", "words": martin}
+    assert split_on_speaker_change([one]) == [one], "one speaker: the reply stays as it was"
+    unknown = {"start": 0, "end": 7.4, "speaker": "SPEAKER_01", "text": "…",
+               "words": martin + [{"start": 5.0, "end": 5.3, "word": "a"}] + ivan}
+    assert [p["speaker"] for p in split_on_speaker_change([unknown])] == ["SPEAKER_01", "SPEAKER_00"]
+    short_start = {"start": 0, "end": 7.4, "speaker": "SPEAKER_00", "text": "…",
+                   "words": [w(0, "a", "SPEAKER_01")] + [w(1 + i * 0.5, f"i{i}", "SPEAKER_00") for i in range(8)]}
+    assert [p["speaker"] for p in split_on_speaker_change([short_start])] == ["SPEAKER_00"], "a one-word start joins"

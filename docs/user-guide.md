@@ -175,8 +175,11 @@ their prints are deleted at once and no new ones are made. What is stored, where
 colleagues: [privacy.md](privacy.md).
 
 Whom you have named once (on the page or with `label-speakers`) is recognised by voice in later recordings: **confirming**
-a name stores a voice print from the diarization in `_speakers\voiceprints.json` (only on this PC, at most 10 prints per
-person, and only ones that add something new – an almost identical sample is dropped).
+a name stores a voice print from the diarization in `_speakers\voiceprints.json` (only on this PC, at most 20 prints per
+person – `[voiceprints] max_prints`, in Nastavení "Otisků na osobu" – and only ones that add something new – an almost identical sample is dropped). Over the limit the weakest print
+goes: first one of poor quality (flagged as possibly two voices, an outlier that agrees with the person's other prints
+far less than they agree with each other – mixed voices, broken audio, a wrong name – or one from under a minute of
+speech), otherwise the one closest to another print. Prints from different headsets and rooms stay.
 
 What the application only guessed – a name label from the video, your voice from the microphone track, a match with a
 print – **is not stored permanently**: it stays with that meeting and the card shows "nepotvrzeno". Such a name gets
@@ -189,6 +192,14 @@ best, it gets the name at once. On the page this shows in green as "poznáno po 
 correct a wrong match by changing the name. Settings `[voiceprints]`: `enabled`, `threshold` (the match needed),
 `margin` (the lead over the second best). Delete one person's prints with
 `teamsrec-transcribe people forget-voice <id>`; the whole `voiceprints.json` can be deleted at any time.
+
+A direct (1:1) call is named after the other person: the capture reads the call window ("Karel Horák | Microsoft
+Teams"). When such a recording has exactly one other voice that spoke at least 20 s and no calendar meeting is linked,
+that voice gets the caller's name if the caller is a known person and the voice prints agree or found nobody
+("podle přímého hovoru: …", unconfirmed until you save). When the voice resembles somebody else, neither name is used
+and the card asks "⚠ přímý hovor s Karel Horák, ale hlas připomíná Jan Novák (shoda 0.83) – kdo to je?" with a button
+for each; a caller who is not in the people list yet is offered with "použít toto jméno". Saving the name stores the
+voice print, so the next call with that person is recognised.
 
 An older recording with unknown speakers can be compared with the prints collected since, without a new transcript:
 on the page the button "Zkusit poznat neznámé po hlase" above the cards, in a terminal
@@ -382,7 +393,10 @@ voice prints, the minutes follow via Claude in the same job.
 Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
 `⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as
 it is until its turn – a slim line pinned above the tabs says where it is in the queue, the page can be read and
-edited, and cancelling loses nothing; the manual names and the window analysis are dropped only when the job starts.
+edited, and cancelling loses nothing; the manual names, the window analysis and the voice prints this recording gave
+(only these – the people's prints from other meetings stay) are dropped only when the job starts. The prints come back
+from the new transcript when you save the names. A single print you do not trust is deleted without any new transcript
+in **Lidé (společné)** → the person → the print's ✕.
 Once it runs, the page empties to the same "being processed" view as a new recording (Uložit is off), and the new
 transcript appears by itself when it is done. A recording without a transcript that waits in the queue shows its
 place ("Je ve frontě – 2. v pořadí") instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and

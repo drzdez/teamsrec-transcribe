@@ -15,7 +15,8 @@ that can be sent to colleagues as it is.
 - **When it is made:** only when the user **confirms** on the review page (or with `label-speakers`) that a voice
   belongs to a person. The application's guesses (a name label from the video, a match with a print) are not stored
   permanently.
-- **How many:** at most 10 prints per person; almost identical ones are dropped.
+- **How many:** at most 20 prints per person (`[voiceprints] max_prints`); almost identical ones are dropped, and over the limit the weakest
+  one goes (possibly mixed voices, an outlier, little speech; otherwise the most redundant one).
 - **Default:** off. It is turned on in the settings (Nastavení → Hlasové otisky, `[voiceprints] enabled = true` in
   `%APPDATA%\teamsrec\teamsrec.toml`); `teamsrec-transcribe config --init` asks during installation.
 

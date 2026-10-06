@@ -350,9 +350,9 @@ def test_voiceprints_registry_and_recognition(tmp_path):
     vp.forget("petr")
     assert vp.count("petr") == 0
     # cap per person (distinct prints, otherwise they are skipped as adding nothing)
-    for i in range(15):
-        vp.enroll("x", [1.0 if j == i else 0.0 for j in range(15)], f"r{i}", "S")
-    assert vp.count("x") == 10
+    for i in range(25):
+        vp.enroll("x", [1.0 if j == i else 0.0 for j in range(25)], f"r{i}", "S")
+    assert vp.count("x") == 20
     # remap: two labels renamed to the same name are averaged, untouched labels keep their key
     emb = {"SPEAKER_00": a, "SPEAKER_01": [0.0, 0.0, 1.0, 0.0], "SPEAKER_02": b}
     before = ["SPEAKER_00", "SPEAKER_01", "SPEAKER_00", "SPEAKER_02"]
@@ -2126,3 +2126,107 @@ def test_local_minutes_wait_for_named_speakers_unless_asked(tmp_path, monkeypatc
     assert made == [], "an unnamed speaker: the minutes wait"
     pl.do_process(cfg, rec, minutes_anyway=True)
     assert made == ["main", "compare"], "asked for them anyway"
+
+
+def test_direct_call_names_the_other_person_unless_the_voice_says_someone_else(tmp_path):
+    """A 1:1 call: the call window names the other person. The voice that agrees or found nobody lets the name
+    through (unconfirmed); a voice that says someone else takes neither name and the page asks."""
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.web.review import build_review, save_names
+    cfg = Config(out_dir=tmp_path, user_name="Zdeněk")
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    ppl.ensure("Lukáš Hrubý"); ppl.ensure("Tomáš Malý"); ppl.save()
+    lukas, tomas = ppl.find("Lukáš Hrubý").id, ppl.find("Tomáš Malý").id
+    durations = {"Zdeněk": 300.0, "SPEAKER_00": 140.0, "SPEAKER_01": 4.0}
+
+    assert pl._direct_call_step(cfg, rec, durations, {}) is None, "a meeting title, not a call window"
+    rec.sidecar.update(title="Lukáš Hrubý", title_source="window"); rec.save_sidecar()
+    assert pl.direct_call_name(cfg, rec) == "Lukáš Hrubý"
+    assert pl._direct_call_step(cfg, rec, {**durations, "SPEAKER_01": 60.0}, {}) is None, "two long voices: not 1:1"
+
+    call = pl._direct_call_step(cfg, rec, durations, {})
+    assert call == {"label": "SPEAKER_00", "name": "Lukáš Hrubý", "person": lukas, "applied": True}
+    assert rec.read_json(rec.speakers_path) == {"SPEAKER_00": lukas}
+
+    rec.speakers_path.write_text('{"SPEAKER_00": "%s"}' % tomas, encoding="utf-8")  # the voice named Tomáš
+    matches = {"SPEAKER_00": {"person": tomas, "score": 0.83}}
+    call = pl._direct_call_step(cfg, rec, durations, matches)
+    assert call["voice"] == {"person": tomas, "score": 0.83} and not call.get("applied")
+    assert matches == {} and rec.read_json(rec.speakers_path) == {}, "neither name: the page asks"
+
+    data = rec.read_json(rec.transcript_path); data["direct_call"] = call; rec.write_json(rec.transcript_path, data)
+    sp = {s["label"]: s for s in build_review(cfg, rec)["speakers"]}
+    assert sp["SPEAKER_00"]["call"]["voice_name"] == "Tomáš Malý" and sp["SPEAKER_01"]["call"] is None
+    save_names(cfg, rec, {"SPEAKER_00": "Lukáš Hrubý"})
+    assert "direct_call" not in rec.read_json(rec.transcript_path), "decided by the user"
+
+    matches = {"SPEAKER_00": {"person": lukas, "score": 0.8}}
+    assert "voice" not in pl._direct_call_step(cfg, rec, durations, matches) and matches, "the voice agrees"
+
+
+def test_from_scratch_drops_only_this_recordings_voice_prints(tmp_path, monkeypatch):
+    """run-job process --force: the prints this recording gave go, the people's other prints stay."""
+    from typer.testing import CliRunner
+    from teamsrec_transcribe import cli, pipeline as pl
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    rec = _make_transcribed(tmp_path)
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll("jana", [1.0, 0.0, 0.0], rec.stem, "SPEAKER_00")
+    vp.enroll("jana", [0.0, 1.0, 0.0], "2026-09-01_0900_jine", "SPEAKER_01")
+    vp.enroll("petr", [0.0, 0.0, 1.0], rec.stem, "SPEAKER_01")
+    vp.save()
+    monkeypatch.setattr(pl, "do_process", lambda cfg, r, force=False, **kw: None)
+    res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem])
+    assert res.exit_code == 0, res.output
+    assert Voiceprints.load(tmp_path).count("jana") == 2, "not from scratch: the prints stay"
+    res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--force"])
+    assert res.exit_code == 0, res.output
+    vp = Voiceprints.load(tmp_path)
+    assert [p["stem"] for p in vp.people["jana"]] == ["2026-09-01_0900_jine"] and "petr" not in vp.people
+
+
+def test_voiceprints_over_the_limit_drop_the_weakest_not_the_oldest():
+    """20 prints per person; over that a poor one goes first (mixed, outlier, little speech), else the most
+    redundant one (the older of the closest pair)."""
+    import math
+    from teamsrec_transcribe.voiceprints import MAX_PER_PERSON, prune
+
+    def vec(angle, z=0.0):  # unit vectors around one voice; z pulls one away (another voice mixed in)
+        v = [math.cos(angle), math.sin(angle), z]
+        n = math.sqrt(sum(x * x for x in v))
+        return [x / n for x in v]
+
+    def prints(n):
+        return [{"v": vec(i * 0.05), "stem": f"s{i:02d}", "label": "A", "added": f"2026-09-{i + 1:02d}"} for i in range(n)]
+
+    assert MAX_PER_PERSON == 20
+    ps = prints(21)
+    ps[3]["v"] = vec(0.15, 2.5)  # an outlier
+    gone = prune(ps)
+    assert [g["stem"] for g in gone] == ["s03"] and len(ps) == 20
+
+    ps = prints(21)
+    ps[5]["mixed"] = True
+    assert [g["stem"] for g in prune(ps)] == ["s05"]
+
+    ps = prints(21)
+    ps[7]["seconds"] = 35.0
+    ps[8]["seconds"] = 120.0
+    assert [g["stem"] for g in prune(ps)] == ["s07"]
+
+    ps = prints(21)
+    ps[12]["v"] = vec(0.601)  # s12 and s13 nearly the same: the closest pair
+    ps[13]["v"] = vec(0.602)
+    assert [g["stem"] for g in prune(ps)] == ["s12"], "the older of the two closest prints"
+
+
+def test_voiceprints_limit_comes_from_the_settings(tmp_path):
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    cfg = Config(out_dir=tmp_path)
+    assert cfg.voiceprints.max_prints == 20
+    vp = Voiceprints.load(tmp_path, 3)
+    for i in range(5):
+        vp.enroll("x", [1.0 if j == i else 0.0 for j in range(5)], f"r{i}", "S")
+    assert vp.count("x") == 3

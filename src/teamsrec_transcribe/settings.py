@@ -176,6 +176,8 @@ SECTIONS: tuple[Section, ...] = (
         Field("voiceprints.margin", "Náskok před druhým", "float", _d(P, "margin")),
         Field("voiceprints.min_seconds", "Nejméně řeči (s)", "float", _d(P, "min_seconds"),
               "Kratší mluvčí se neporovnávají ani neukládají."),
+        Field("voiceprints.max_prints", "Otisků na osobu", "int", _d(P, "max_prints"),
+              "Víc otisků pokryje víc sluchátek a místností; nad limit odpadne nejslabší."),
     )),
     Section("retention", "Uchování", "", (
         Field("retention.audio_days", "Mazat zvuk po (dnech)", "int", _d(R, "audio_days"),

@@ -20,7 +20,9 @@ from datetime import datetime
 from pathlib import Path
 
 FILE_NAME = "voiceprints.json"
-MAX_PER_PERSON = 10
+MAX_PER_PERSON = 20  # more prints cover more headsets, rooms and calls; over the limit the weakest one goes (prune)
+GOOD_SECONDS = 60.0  # a print from less speech than this is a weaker average of the voice
+OUTLIER_GAP = 0.25  # a print this far below the person's typical agreement is likely mixed with other voices or broken
 MIN_SECONDS = 30.0  # embeddings of shorter speech are noisy (calibration: 12 s of the user scored 0.43 vs 0.94)
 NEAR_DUPLICATE = 0.95  # a print this similar to one already stored adds nothing (same voice, same conditions:
                        # two recordings of the same person on the same microphone scored 0.94, see lab/FINDINGS.md)
@@ -62,8 +64,9 @@ def remap_embeddings(emb: dict[str, list[float]], before: list[str | None], afte
 
 
 class Voiceprints:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, limit: int | None = None):
         self.path = path
+        self.limit = max(1, int(limit)) if limit else MAX_PER_PERSON  # [voiceprints] max_prints
         self.model = ""
         self.people: dict[str, list[dict]] = {}
         if path.exists():
@@ -72,8 +75,8 @@ class Voiceprints:
             self.people = {pid: list(prints) for pid, prints in data.get("people", {}).items()}
 
     @classmethod
-    def load(cls, out_dir: Path) -> "Voiceprints":
-        return cls(out_dir / "_speakers" / FILE_NAME)
+    def load(cls, out_dir: Path, limit: int | None = None) -> "Voiceprints":
+        return cls(out_dir / "_speakers" / FILE_NAME, limit)
 
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +85,7 @@ class Voiceprints:
 
     # ---- enrolment
     def enroll(self, pid: str, vector: list[float], stem: str, label: str, model: str = "",
-               near_duplicate: float = NEAR_DUPLICATE) -> bool:
+               near_duplicate: float = NEAR_DUPLICATE, seconds: float | None = None, mixed: bool = False) -> bool:
         """Store one print for a person; the same recording+label is never stored twice, and neither is a print
         that is nearly identical to one already there (the ten slots are worth more when they cover different
         microphones and rooms). Returns True if added."""
@@ -96,18 +99,36 @@ class Voiceprints:
             return False
         if any(cosine(u, p["v"]) >= near_duplicate for p in prints):
             return False
-        prints.append({"v": [round(x, 6) for x in u], "stem": stem, "label": label,
-                       "added": datetime.now().replace(microsecond=0).isoformat()})
-        del prints[:-MAX_PER_PERSON]
+        row = {"v": [round(x, 6) for x in u], "stem": stem, "label": label,
+               "added": datetime.now().replace(microsecond=0).isoformat()}
+        if seconds is not None:
+            row["seconds"] = round(seconds, 1)
+        if mixed:
+            row["mixed"] = True
+        prints.append(row)
+        prune(prints, self.limit)
         return True
 
     def forget(self, pid: str) -> None:
         self.people.pop(pid, None)
 
+    def forget_stem(self, stem: str) -> dict[str, int]:
+        """Drop the prints taken from one recording, of every person (their other prints stay). {person: n}."""
+        gone: dict[str, int] = {}
+        for pid in list(self.people):
+            keep = [p for p in self.people[pid] if p.get("stem") != stem]
+            if len(keep) != len(self.people[pid]):
+                gone[pid] = len(self.people[pid]) - len(keep)
+                if keep:
+                    self.people[pid] = keep
+                else:
+                    del self.people[pid]
+        return gone
+
     def rename(self, old: str, new: str) -> None:
         if old in self.people:
             self.people.setdefault(new, []).extend(self.people.pop(old))
-            del self.people[new][:-MAX_PER_PERSON]
+            prune(self.people[new], self.limit)
 
     def count(self, pid: str) -> int:
         return len(self.people.get(pid, []))
@@ -145,6 +166,44 @@ class Voiceprints:
         return out
 
 
+def prune(prints: list[dict], limit: int = MAX_PER_PERSON) -> list[dict]:
+    """Keep at most `limit` prints, dropping the weakest one at a time (in place; returns the dropped):
+    1. a print of poor quality first – flagged as possibly mixed voices, an outlier that agrees with the person's
+       other prints far less than they agree with each other (mixed with another voice, broken audio, a wrong
+       name), or one from little speech; the worst of them goes;
+    2. otherwise the most redundant one – the closest to another print (it adds the least: same voice, same
+       conditions); the older of the two goes.
+    Prints from different headsets and rooms stay, so recognition keeps working across conditions."""
+    dropped: list[dict] = []
+    while len(prints) > limit:
+        n = len(prints)
+        sims = [[cosine(prints[i]["v"], prints[j]["v"]) if i != j else -1.0 for j in range(n)] for i in range(n)]
+        mean = [sum(s for s in row if s > -1.0) / (n - 1) for row in sims]
+        typical = sorted(mean)[n // 2]
+
+        def poor(i: int) -> float:  # 0 = fine, higher = worse
+            p = prints[i]
+            score = 0.0
+            if p.get("mixed"):
+                score += 2.0
+            if mean[i] < typical - OUTLIER_GAP:
+                score += 1.0 + (typical - mean[i])
+            secs = p.get("seconds")
+            if secs is not None and secs < GOOD_SECONDS:
+                score += 0.5 + (GOOD_SECONDS - secs) / GOOD_SECONDS
+            return score
+
+        bad = max(range(n), key=poor)
+        if poor(bad) > 0:
+            victim = bad
+        else:
+            i = max(range(n), key=lambda k: max(sims[k]))
+            j = max(range(n), key=lambda k: sims[i][k])
+            victim = min(i, j, key=lambda k: prints[k].get("added", ""))
+        dropped.append(prints.pop(victim))
+    return dropped
+
+
 def speech_seconds(segments: list[dict]) -> dict[str, float]:
     out: dict[str, float] = {}
     for s in segments:
@@ -161,9 +220,10 @@ def enroll_from_recording(vp: Voiceprints, transcript: dict, names: dict[str, st
     emb = transcript.get("speaker_embeddings") or {}
     model = transcript.get("diarize_model") or ""
     secs = speech_seconds(transcript.get("segments") or [])
+    mixed = set(((transcript.get("voices_from") or {}).get("mixed") or {}))  # fast track: a group of two voices
     added = 0
     for label, pid in names.items():
         vec = emb.get(label)
         if vec and pid and not pid.startswith("SPEAKER_") and secs.get(label, 0.0) >= min_seconds:
-            added += vp.enroll(pid, vec, stem, label, model)
+            added += vp.enroll(pid, vec, stem, label, model, seconds=secs.get(label), mixed=label in mixed)
     return added

@@ -332,7 +332,8 @@ def build_review(cfg: Config, rec: Recording) -> dict:
     hints = summary_hints(rec)
     hint_names = summary_hint_names(rec)
     voice = data.get("voice_matches") or {}
-    vp = Voiceprints.load(cfg.out_dir)
+    call = data.get("direct_call") or {}
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     embeddings = data.get("speaker_embeddings") or {}
     group_secs = speech_seconds(data.get("segments") or [])  # the groups that still have replies
     by: dict[str, list[Segment]] = {}
@@ -364,7 +365,12 @@ def build_review(cfg: Config, rec: Recording) -> dict:
             "voice_hint": _voice_hint(vp, people, embeddings.get(label), is_label(label) and not value, secs,
                                       cfg.voiceprints.threshold, rec.stem),
             "nearest": _nearest_group(label, embeddings, group_secs),
-            "confirmed": bool(value) and bool(manual.get(label)) and label not in voice,
+            "confirmed": (bool(value) and bool(manual.get(label)) and label not in voice
+                          and not (call.get("label") == label and call.get("applied"))),
+            # a direct call: the window named the other person (applied, or asked when the voice says someone else)
+            "call": ({**call, "voice_name": (people.get(call["voice"]["person"]) or Person(call["voice"]["person"])).full}
+                     if call.get("label") == label and call.get("voice") else
+                     (call if call.get("label") == label else None)),
             "seconds": round(secs, 1),
             "count": len(ss),
             "unassigned": label == "UNKNOWN",
@@ -598,8 +604,11 @@ def save_names(cfg: Config, rec: Recording, names: dict) -> dict[str, str]:
     if clean and rec.transcript_path.exists():  # a name the user saw and saved is confirmed, not a guess any more
         data = rec.read_json(rec.transcript_path)
         voice = data.get("voice_matches") or {}
-        if any(lab in voice for lab in clean):
+        call = data.get("direct_call") or {}
+        if any(lab in voice for lab in clean) or call.get("label") in clean:
             data["voice_matches"] = {lab: v for lab, v in voice.items() if lab not in clean}
+            if call.get("label") in clean:
+                data.pop("direct_call")  # decided by the user
             rec.write_json(rec.transcript_path, data)
     enroll_names(cfg, rec, clean)  # only now does the print go into the shared registry
     return clean
@@ -609,7 +618,7 @@ def merge_people(cfg: Config, keep: str, drop: str, stem: str | None = None) -> 
     people = People.load(cfg.out_dir, cfg.people_display)
     changed = people.merge(keep, drop, iter_recordings(cfg.out_dir))
     people.save()
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     vp.rename(drop, keep)
     vp.save()
     for r in changed:
@@ -627,7 +636,7 @@ def person_detail(cfg: Config, pid: str) -> dict:
     p = people.get(pid)
     if p is None:
         raise RecordingError(f"unknown person {pid!r}")
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     recs = {r.stem: r for r in iter_recordings(cfg.out_dir)}
     prints = []
     for pr in vp.people.get(pid, []):
@@ -648,14 +657,14 @@ def person_detail(cfg: Config, pid: str) -> dict:
                     pass
         prints.append(row)
     d = {"id": p.id, "first": p.first, "last": p.last, "nick": p.nick, "display": p.display, "aliases": p.aliases,
-         "shown": p.name(people.default_mode), "model": vp.model, "prints": prints,
+         "shown": p.name(people.default_mode), "model": vp.model, "limit": vp.limit, "prints": prints,
          "recordings": sorted({r.stem for r in recs.values() if r.speakers_path.exists()
                                and pid in r.read_json(r.speakers_path).values()}, reverse=True)}
     return d
 
 
 def forget_print(cfg: Config, pid: str, stem: str | None, label: str | None) -> int:
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     before = vp.count(pid)
     if stem and label:
         vp.people[pid] = [pr for pr in vp.people.get(pid, []) if not (pr.get("stem") == stem and pr.get("label") == label)]
@@ -669,7 +678,7 @@ def forget_print(cfg: Config, pid: str, stem: str | None, label: str | None) -> 
 
 def people_rows(cfg: Config) -> dict:
     people = People.load(cfg.out_dir, cfg.people_display)
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     rows = people.to_json()
     for r in rows:
         r["prints"] = vp.count(r["id"])
@@ -679,7 +688,7 @@ def people_rows(cfg: Config) -> dict:
 
 def _drop_opted_out_prints(cfg: Config, people: People) -> list[str]:
     """Somebody opted out of voice recognition: their prints go right away, not at the next enrolment."""
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     gone = [pid for pid in people.no_voiceprint() if vp.count(pid)]
     for pid in gone:
         vp.forget(pid)

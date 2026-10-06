@@ -261,7 +261,7 @@ def people_list(ctx: typer.Context):
     from .voiceprints import Voiceprints
     cfg = _cfg(ctx)
     ppl = People.load(cfg.out_dir, cfg.people_display)
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     for p in ppl.people:
         typer.echo(f"{p.id:28s} {p.full:28s} nick={p.nick or '-':12s} shown={p.name(ppl.default_mode):16s} prints={vp.count(p.id)}")
     if not ppl.people:
@@ -477,8 +477,9 @@ def _run_job(cfg, rec, kind: str, force: bool, provider: str, model: str, minute
     from .timings import step
     if kind == "process":
         if force:  # from scratch: the labels change, so the manual names and the OCR names of last time go now
-            from .pipeline import reset_names
+            from .pipeline import reset_names, reset_voiceprints
             reset_names(rec)
+            reset_voiceprints(cfg, rec)
             if rec.speakers_video_path.exists():
                 rec.speakers_video_path.unlink()
         before = None

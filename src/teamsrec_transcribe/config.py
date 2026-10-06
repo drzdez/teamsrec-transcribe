@@ -48,6 +48,7 @@ class VoiceprintSettings:
     threshold: float = 0.55  # cosine similarity needed to name a label by voice (calibrated 2026-09-11, lab/FINDINGS.md)
     margin: float = 0.10  # ... and how far ahead of the runner-up person it must be
     min_seconds: float = 30.0  # labels with less speech are neither recognised nor enrolled
+    max_prints: int = 20  # prints kept per person; over that the weakest goes (voiceprints.prune)
 
 
 @dataclass(frozen=True)
@@ -192,6 +193,7 @@ enabled = {voiceprints}              # recognise people by voice (biometric data
 threshold = 0.55             # cosine similarity needed; margin = lead over the runner-up
 margin = 0.10
 min_seconds = 30             # a speaker must talk this long before their voice is compared or stored
+max_prints = 20              # voice prints kept per person; over that the weakest one goes (mixed, outlier, redundant)
 
 [summarize]
 enabled = true               # run as part of `process`

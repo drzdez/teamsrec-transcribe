@@ -208,7 +208,7 @@ def rename_recording(cfg: Config, rec: Recording, title: str) -> Recording:
     for md in [new.summary_path, *new_dir.glob(f"{new_stem}.summary.*.md")]:
         if md.exists():
             _fix_heading(md, title)
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     touched = False
     for prints in vp.people.values():
         for pr in prints:
@@ -263,7 +263,7 @@ def merge_same_person(cfg: Config, rec: Recording) -> dict:
     segments = data.get("segments") or []
     secs = speech_seconds(segments)
     emb = data.get("speaker_embeddings") or {}
-    vp = Voiceprints.load(cfg.out_dir) if cfg.voiceprints.enabled else None
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints) if cfg.voiceprints.enabled else None
     prints = 0
     done = []
     for pid, labels in groups.items():
@@ -591,10 +591,14 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
     durations = speech_seconds([{"start": s.start, "end": s.end, "speaker": s.speaker} for s in res.segments])
     with step("poznání po hlase"):
         voice_matches = _voiceprints_step(cfg, rec, embeddings, durations, mic_mapping, res.diarize_model)
+    call = _direct_call_step(cfg, rec, durations, voice_matches)
     if voice_matches:
         speaker_sources.append("voiceprint")
+    if call and call.get("applied"):
+        speaker_sources.append("call")
     if timeline:
-        if _video_names_whole_groups(cfg, rec, res.segments, timeline, voice_matches):
+        held = {**voice_matches, **({call["label"]: {"person": call.get("person", "")}} if call else {})}
+        if _video_names_whole_groups(cfg, rec, res.segments, timeline, held):
             speaker_sources.append("video")
     speaker_sources.append("diarization")
 
@@ -613,6 +617,7 @@ def do_transcribe(cfg: Config, rec: Recording, *, force: bool = False, diarize: 
         "languages": sorted({s.language or res.language for s in res.segments} | {res.language}),
         "speaker_embeddings": embeddings,  # keyed by the final speaker names, unit vectors
         "voice_matches": voice_matches,
+        **({"direct_call": call} if call else {}),
         "segments": [s.to_json() for s in res.segments],
     }
     rec.write_json(rec.transcript_path, transcript)
@@ -662,7 +667,7 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
     stay in its own transcript, so confirming later still works. Returns {label: {"person", "score"}}."""
     if not cfg.voiceprints.enabled or not embeddings:
         return {}
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     people = People.load(cfg.out_dir, cfg.people_display)
     names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     matches: dict = {}
@@ -681,6 +686,66 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
     return matches
 
 
+def direct_call_name(cfg: Config, rec: Recording) -> str:
+    """The other person's name when the recording is a direct (1:1) Teams call: the title was read from the call
+    window ("Jana Nováková | Microsoft Teams"), it is shaped like a name, it is not the user, and no calendar meeting
+    is linked. "" otherwise."""
+    sc = rec.sidecar
+    title = (rec.title or "").strip()
+    if sc.get("title_source") != "window" or sc.get("calendar") or not _looks_like_a_name(title):
+        return ""
+    if cfg.user_name and _norm_name(title) == _norm_name(cfg.user_name):
+        return ""
+    return title
+
+
+def _norm_name(s: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c)).casefold().strip()
+
+
+def _direct_call_step(cfg: Config, rec: Recording, durations: dict[str, float], voice_matches: dict) -> dict | None:
+    """A direct call has one other person, and the call window names them. When exactly one unnamed voice group
+    spoke long enough (UNNAMED_MIN_SECONDS), that group is the caller:
+    - the voice agrees, or found nobody: the group gets the caller's name (a known person: speakers.json, not
+      confirmed yet – the print is stored only when the user saves);
+    - the voice says someone else: neither name is applied, the page asks (two people with similar voices, or a
+      wrong print – 2026-10-06: a call with one colleague recognised as another at 0.83);
+    - the caller is not a known person yet: the page offers the name.
+    Changes speakers.json and `voice_matches` in place; returns what the page shows ({"label", "name", "person",
+    "applied"?, "voice"?}) or None when this is not a direct call."""
+    name = direct_call_name(cfg, rec)
+    if not name:
+        return None
+    big = [lab for lab, secs in durations.items() if lab.startswith("SPEAKER_") and secs >= UNNAMED_MIN_SECONDS]
+    if len(big) != 1:
+        log.info("%s: direct call with %s, but %d long unnamed voice groups – not named by the call", rec.stem,
+                 name, len(big))
+        return None
+    label = big[0]
+    person = People.load(cfg.out_dir, cfg.people_display).find(name)
+    info: dict = {"label": label, "name": person.full if person else name, "person": person.id if person else ""}
+    names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    voice = voice_matches.get(label)
+    if voice and person and voice["person"] == person.id:
+        return info  # the voice already says the same
+    if voice:
+        info["voice"] = voice
+        voice_matches.pop(label, None)
+        if names.get(label) == voice["person"]:
+            names.pop(label)
+            rec.write_json(rec.speakers_path, names)
+        log.info("%s: direct call with %s, but the voice of %s resembles %s (%.2f) – left for the user", rec.stem,
+                 name, label, voice["person"], voice["score"])
+        return info
+    if person and not names.get(label):
+        names[label] = person.id
+        rec.write_json(rec.speakers_path, names)
+        info["applied"] = True
+        log.info("%s: %s named by the direct call: %s", rec.stem, label, person.full)
+    return info
+
+
 def recognize_voices(cfg: Config, rec: Recording) -> dict:
     """Compare the transcript's stored embeddings of still-unnamed labels with the voice prints collected since
     (no re-transcription). Matches go to speakers.json + voice_matches; exports are regenerated."""
@@ -693,7 +758,12 @@ def recognize_voices(cfg: Config, rec: Recording) -> dict:
                              f"existed); run `transcribe --force`")
     durations = speech_seconds(data.get("segments") or [])
     matches = _voiceprints_step(cfg, rec, embeddings, durations, {}, data.get("diarize_model") or "")
-    data["voice_matches"] = {**(data.get("voice_matches") or {}), **matches}
+    known = {**(data.get("voice_matches") or {}), **matches}
+    call = _direct_call_step(cfg, rec, durations, known)  # may take back a voice match that contradicts the call
+    if call:
+        data["direct_call"] = call
+    matches = {lab: m for lab, m in matches.items() if lab in known}
+    data["voice_matches"] = known
     if matches and "voiceprint" not in data.get("speaker_sources", []):
         data["speaker_sources"] = [s for s in data.get("speaker_sources", []) if s != "diarization"] + ["voiceprint", "diarization"]
     rec.write_json(rec.transcript_path, data)
@@ -707,7 +777,7 @@ def enroll_names(cfg: Config, rec: Recording, names: dict[str, str]) -> int:
         return 0
     opted_out = People.load(cfg.out_dir, cfg.people_display).no_voiceprint()
     names = {lab: pid for lab, pid in names.items() if pid not in opted_out}
-    vp = Voiceprints.load(cfg.out_dir)
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     added = enroll_from_recording(vp, rec.read_json(rec.transcript_path), names, rec.stem, cfg.voiceprints.min_seconds)
     if added:
         vp.save()
@@ -898,6 +968,18 @@ def purge_audio(cfg: Config, days: int, *, dry_run: bool = False, now: datetime 
         rec.save_sidecar()
         log.info("%s: audio purged (%d files, %.0f MB)", rec.stem, len(files), size / 1e6)
     return out
+
+
+def reset_voiceprints(cfg: Config, rec: Recording) -> dict[str, int]:
+    """A transcript from scratch redoes the voices too: the prints this recording gave go (only these; the people's
+    prints from other recordings stay) and come back from the new transcript when the names are saved."""
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
+    gone = vp.forget_stem(rec.stem)
+    if gone:
+        vp.save()
+        log.info("%s: voice prints of this recording dropped before a fresh transcript: %s", rec.stem,
+                 ", ".join(f"{pid} ({n})" for pid, n in gone.items()))
+    return gone
 
 
 def reset_names(rec: Recording) -> dict:

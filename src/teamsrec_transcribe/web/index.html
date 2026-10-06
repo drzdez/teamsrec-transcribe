@@ -413,7 +413,7 @@
  * @typedef {{id:string,full:string,nick:string,shown:string}} PersonInfo
  * @typedef {{first:string,last:string,nick:string,display:string}} Fields
  * @typedef {{start:number,end:number,at:string,text:string}} Reply
- * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,hint_name?:string,nearest?:{label:string,score:number}|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
+ * @typedef {{label:string,unresolved:boolean,unassigned?:boolean,replies?:Reply[],language?:string|null,own?:boolean,mixed?:boolean,name:string,fields:Fields,person:PersonInfo|null,voice:VoiceMatch|null,voice_hint:VoiceHint|null,hint_name?:string,call?:{label:string,name:string,person:string,applied?:boolean,voice?:{person:string,score:number},voice_name?:string}|null,nearest?:{label:string,score:number}|null,confirmed?:boolean,seconds:number,count:number,hint:string,samples:Sample[],excerpts:{at:string,text:string}[]}} Speaker
  * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],prints?:number,voiceprint?:boolean}} Person
  * @typedef {{person:string,score:number,name:string}} VoiceMatch
  * @typedef {{person:string,name:string,score:number,fields:Fields,why:string,threshold:number}} VoiceHint
@@ -1290,7 +1290,8 @@ function renderSpeakers() {
     const mins = Math.max(2, Math.round((review.duration_s || 0) / 60 / 6) + 3);
     b.textContent = "Přepsat znovu od nuly";
     b.title = "Nový přepis, diarizace i analýza oken Teams (transcribe --force): mluvčí se rozdělí znovu, "
-      + "jmenovky z videa se přečtou znovu a ruční přiřazení jmen u této nahrávky se zahodí. "
+      + "jmenovky z videa se přečtou znovu a ruční přiřazení jmen u této nahrávky se zahodí, stejně jako hlasové otisky "
+      + "z této nahrávky (otisky z jiných schůzek zůstanou; nové se uloží, až jména znovu uložíte). "
       + "Hodí se, když se do jednoho označení promíchali dva lidé.";
     const fromScratch = async (/** @type {boolean} */ cloud) => {
       const stem = review ? review.stem : "";
@@ -1311,7 +1312,7 @@ function renderSpeakers() {
       if (error) setStatus(`nový přepis selhal: ${error}`, "err");
       else setStatus("hotovo: nový přepis, mluvčí jsou znovu k pojmenování", "ok");
     };
-    armedButton(b, `Potvrdit nový přepis (~${mins} min, jména se zahodí)`, () => fromScratch(false));
+    armedButton(b, `Potvrdit nový přepis (~${mins} min, jména i hlasové otisky z této schůzky se zahodí)`, () => fromScratch(false));
     bar.appendChild(b);
     bar.appendChild(cloudButton(review, "Přepsat znovu", () => { fromScratch(true); }));
     bar.appendChild(minutesAnywayBox());
@@ -1428,8 +1429,35 @@ function card(sp, i) {
     `<span class="chip lang${sp.own ? " own" : ""}" title="${sp.own ? "přepsáno znovu v jazyce tohoto mluvčího (jazyk po mluvčích)" : "jazyk, ve kterém byl mluvčí přepsán"}${sp.mixed ? "; část replik v jiném jazyce" : ""}">${escapeHtml(langName(sp.language))}${sp.own ? " · vlastní" : ""}${sp.mixed ? " +" : ""}</span>` +
     (sp.voice ? `<p class="voice">poznáno po hlase: ${escapeHtml(sp.voice.name)} (shoda ${sp.voice.score.toFixed(2)}) – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (sp.hint ? `<p class="hint">${escapeHtml(sp.hint)}</p>` : "") +
+    (sp.call && sp.call.applied && !sp.voice
+      ? `<p class="voice">podle přímého hovoru: ${escapeHtml(sp.call.name)} – už použito v přepisu i zápisu; pokud nesedí, opravte jméno a uložte</p>` : "") +
     (review && (review.voices_mixed || []).includes(sp.label)
       ? '<p class="hint">podle lokálních hlasů tu možná mluví dva lidé – poslechněte si „Projít repliky“</p>' : "");
+  /** a name into the fields: a known person with all their fields, otherwise first + last */
+  function fillName(/** @type {string} */ name) {
+    const n = name.toLowerCase();
+    const known = people.find(p => `${p.first} ${p.last}`.trim().toLowerCase() === n || (p.aliases || []).some(a => a.toLowerCase() === n));
+    const parts = name.split(/\s+/);
+    setFields(known ? { first: known.first, last: known.last, nick: known.nick, display: known.display }
+                    : { first: parts[0] || "", last: parts.slice(1).join(" "), nick: "", display: "" });
+    updateDirty();
+  }
+  if (sp.call && !sp.call.applied && sp.unresolved && !(sp.name && sp.name !== sp.label)) {
+    // a direct call: the window says who the other person is; the voice disagrees, or the person is new
+    const p = document.createElement("p"); p.className = "hint callHint";
+    p.textContent = sp.call.voice
+      ? `⚠ přímý hovor s ${sp.call.name}, ale hlas připomíná ${sp.call.voice_name} (shoda ${sp.call.voice.score.toFixed(2)}) – kdo to je? `
+      : `přímý hovor s ${sp.call.name} `;
+    const opts = sp.call.voice ? [sp.call.name, sp.call.voice_name || ""] : [sp.call.name];
+    for (const name of opts.filter(Boolean)) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "play";
+      b.textContent = sp.call.voice ? name : "použít toto jméno";
+      b.title = `vyplní ${name}; uložením se potvrdí a hlas se uloží k této osobě`;
+      b.onclick = () => fillName(name);
+      p.appendChild(b); p.appendChild(document.createTextNode(" "));
+    }
+    left.appendChild(p);
+  }
   if (sp.hint && sp.hint_name) {  // the minutes guessed a name: one click fills it in, like the voice hint
     const hp = left.querySelector("p.hint");
     if (hp) {
@@ -1992,7 +2020,7 @@ async function savePeople() {
 
 /**
  * @typedef {{stem:string,label:string,added:string,dims:number,title:string|null,start:string|null,seconds:number|null,samples:Sample[],has_mix:boolean}} PrintRow
- * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,prints:PrintRow[],recordings:string[]}} PersonDetail
+ * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],recordings:string[]}} PersonDetail
  */
 async function openPerson(/** @type {string} */ id) {
   stopAudio(); setStatus("");
@@ -2010,7 +2038,7 @@ async function openPerson(/** @type {string} */ id) {
   const info = document.createElement("p"); info.className = "people-help";
   info.innerHTML = `id <code>${escapeHtml(d.id)}</code> · v zápisu: <b>${escapeHtml(d.shown)}</b>` +
     (d.nick ? ` · přezdívka ${escapeHtml(d.nick)}` : "") + (d.aliases.length ? ` · aliasy: ${escapeHtml(d.aliases.join(", "))}` : "") +
-    `<br>Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš 10 nejnovějších; model ${escapeHtml(d.model || "?")}). ` +
+    `<br>Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš ${d.limit || 20} – nad limit odpadne nejslabší: smíchaný či vybočující hlas, krátká řeč, jinak ten, který se nejvíc podobá jinému; model ${escapeHtml(d.model || "?")}). ` +
     `Přiřazen v nahrávkách: ${d.recordings.length ? d.recordings.map(s => `<code>${escapeHtml(s)}</code>`).join(", ") : "zatím žádné"}.`;
   peopleMain.appendChild(info);
   if (!d.prints.length) {

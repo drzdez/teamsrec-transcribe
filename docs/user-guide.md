@@ -364,6 +364,12 @@ address bar and a box to type or paste a path; it may appear behind the window).
 meeting was; nothing is overwritten. The folder is remembered by the meeting name (`<OUT_DIR>/_export_folders.json`),
 so the next meeting of the same name offers it, and **Uložit jako minule** saves there with one click.
 
+When the local minutes cannot be made – Ollama is not running, or its model folder does not have the model (e.g. after
+moving the folder in Ollama's settings) – the Zápis tab and Nastavení → Kde se co zpracovává say so in red, and a
+processing whose minutes failed ends in red ("…, ale část se nepodařila – …"). Ollama never downloads a model by itself;
+**Stáhnout <model>** in that red line downloads it as a queued job (it asks first – tens of GB; the progress shows in the
+job line at the bottom; it can be cancelled). For a 24 GB graphics card gemma4:31b is the measured choice.
+
 Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
 `⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as
 it is until its turn – a slim line pinned above the tabs says where it is in the queue, the page can be read and

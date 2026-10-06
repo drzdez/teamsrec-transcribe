@@ -426,7 +426,7 @@ def _require_ffmpeg() -> None:
 
 @app.command("run-job", hidden=True)
 @_errors
-def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices"),
+def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices | pull"),
             target: str = typer.Argument(...), force: bool = typer.Option(False),
             cloud: bool = typer.Option(False, help="emergency fast track: cloud services only (fasttrack.py)"),
             provider: str = typer.Option(""), model: str = typer.Option("")):
@@ -434,6 +434,9 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
     started: the GPU must not break the recorded sound)."""
     from .pipeline import resolve_target
     cfg = _cfg(ctx)
+    if kind == "pull":  # download the local minutes model into Ollama (no recording)
+        _pull(cfg, target)
+        return
     if cloud:  # the emergency fast track (fasttrack.py): cloud services only, for this job
         from .fasttrack import cloud_only
         cfg = cloud_only(cfg)
@@ -446,6 +449,23 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
         ok = True
     finally:
         timings.finish_run(rec, ok)  # how long each part took, for the page (<stem>.timings.json)
+
+
+def _pull(cfg, model: str) -> None:
+    """Progress as "PROGRESS <text>" lines: the review server shows them as the job's text."""
+    import time
+    from .llm import ollama_pull
+    last = [0.0]
+
+    def progress(done: int, total: int, status: str) -> None:
+        now = time.monotonic()
+        if now - last[0] < 2 and done < total:
+            return
+        last[0] = now
+        text = (f"{done / total:.0%} ({done / 1e9:.1f} / {total / 1e9:.1f} GB)" if total else status)
+        print(f"PROGRESS stahuje se {model}: {text}", flush=True)
+    ollama_pull(cfg.summarize.ollama_url, model, progress)
+    print(f"PROGRESS {model} stažen", flush=True)
 
 
 def _run_job(cfg, rec, kind: str, force: bool, provider: str, model: str) -> None:

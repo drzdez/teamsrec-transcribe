@@ -123,6 +123,7 @@
                               color: var(--accent-fg); font: inherit; font-weight: 600; cursor: pointer; }
   .minutesProblem { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--err); background: var(--card);
                     color: var(--err); font-size: 13px; }
+  .minutesProblem .pullBtn { margin-left: 6px; color: var(--fg); }
   .minutesRunNote { margin: 0 0 10px; padding: 6px 10px; border-left: 3px solid var(--accent); background: var(--card);
                     color: var(--accent); font-size: 13px; }
   .timings > summary { cursor: pointer; }
@@ -411,7 +412,7 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,export_folder?:string,minutes_problem?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,export_folder?:string,minutes_problem?:string,minutes_pull?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
  * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean,unaligned?:boolean}} RecordingRow
  */
 
@@ -2041,21 +2042,50 @@ async function renderDoc(/** @type {number|null=} */ scrollTo = null) {
   }
   const making = subTab === "summary" ? minutesJob() : "";
   const problem = subTab === "summary" && review.minutes_problem
-    ? `<p class="minutesProblem">⚠ ${escapeHtml(review.minutes_problem)}</p>` : "";
+    ? `<p class="minutesProblem" data-pull="${escapeHtml(review.minutes_pull || "")}">⚠ ${escapeHtml(review.minutes_problem)}</p>` : "";
   if (!file) {
     docMain.innerHTML = making
       ? `<div class="empty minutesRun" data-minutes-run="1"><p class="queued">⏳ ${escapeHtml(making)}</p><p>Až bude hotový, ukáže se tu sám.</p></div>`
       : problem + `<div class="empty">${subTab === "transcript" ? "Přepis zatím není." : "Zápis zatím není – vyberte model nahoře a Vygenerovat zápis."}</div>`;
+    addPullButtons();
     return;
   }
   docMain.innerHTML = '<div class="empty">Načítám…</div>';
   try {
     const r = await api(recUrl(review.stem, "docs", file));
+    setTimeout(addPullButtons, 0);
     docMain.innerHTML = problem + (making ? `<p class="minutesRunNote" data-minutes-run="1">⏳ ${escapeHtml(making)} – tady je zatím ten předchozí; nový se ukáže sám.</p>` : "")
       + (subTab === "transcript" ? renderTranscript(r.text) : renderMarkdown(r.text));
     externalLinks(docMain);  // a link in the minutes must not replace the page
     if (scrollTo !== null && scrollTo !== undefined) scroller().scrollTop = scrollTo;
   } catch (e) { docMain.innerHTML = `<div class="empty">${escapeHtml(String(e))}</div>`; }
+}
+
+/** "Stáhnout <model>" in every note that says the local minutes model is missing: a queued job (it can be
+ * cancelled; its progress shows in the job line at the bottom); asks first – the model has tens of GB. */
+function addPullButtons() {
+  for (const note of document.querySelectorAll(".minutesProblem[data-pull]")) {
+    const model = /** @type {HTMLElement} */ (note).dataset.pull;
+    if (!model || note.querySelector("button")) continue;
+    const b = document.createElement("button"); b.type = "button"; b.className = "play pullBtn";
+    b.textContent = `Stáhnout ${model}`;
+    b.title = "Ollama model stáhne do své složky modelů; běží ve frontě zpracování, jde zrušit";
+    armedButton(b, `Potvrdit stažení ${model} (desítky GB, může trvat i desítky minut)`, async () => {
+      /** @type {any} */ let r;
+      try {
+        r = await api("/api/ollama/pull", send("POST", { model }));
+        if (!r.ok) throw new Error(r.error || "nelze spustit");
+      } catch (e) { setStatus(String(e), "err"); return; }
+      setStatus(`stahuje se ${model} – průběh je dole u zpracování; stránku můžete používat`, "busy");
+      const error = await waitForJob(r.job).catch(e => String(e));
+      if (error) { setStatus(`stažení ${model} se nepodařilo: ${error}`, "err"); return; }
+      setStatus(`${model} stažen – lokální zápis teď půjde`, "ok");
+      if (review) { const stem = review.stem; await loadRecording(stem); }
+      if (!settingsBox.hidden) openSettings();
+    });
+    note.appendChild(document.createTextNode(" "));
+    note.appendChild(b);
+  }
 }
 
 /** Minutes being written or waiting for this recording, as a sentence for the Zápis tab ("" = none). */
@@ -2314,6 +2344,7 @@ function placesCard(/** @type {any[]} */ rows, /** @type {any} */ ollama) {
   card.appendChild(t);
   if (ollama && !ollama.ok) {
     const w = document.createElement("p"); w.className = "minutesProblem";
+    if (ollama.running) w.dataset.pull = ollama.model;
     w.textContent = ollama.running
       ? `⚠ Ollama nemá model ${ollama.model} – lokální zápis nevznikne. Stáhněte ho (ollama pull ${ollama.model}) nebo zkontrolujte složku modelů v nastavení Ollamy.`
       : `⚠ Ollama neběží – lokální zápis (${ollama.model}) nevznikne, dokud ji nespustíte.`;
@@ -2328,6 +2359,7 @@ function renderSettings(d) {
   $("settingsPath").textContent = d.path;
   settingsMain.innerHTML = "";
   if (d.places) settingsMain.appendChild(placesCard(d.places, d.ollama));
+  addPullButtons();
   settingsMain.appendChild(keysCard(d));
 
   for (const s of d.sections) {

@@ -1983,3 +1983,50 @@ def test_missing_local_minutes_model_is_said_and_the_job_ends_as_an_error(tmp_pa
         _time.sleep(0.02)
     end = [e for e in state.events if e["job_end"]][-1]
     assert end["level"] == "err" and "ale část se nepodařila" in end["text"] and "Ollama nemá model" in end["text"]
+
+
+def test_pulling_the_minutes_model_is_a_job_whose_progress_shows(tmp_path, monkeypatch):
+    import time as _time
+    from teamsrec_transcribe import settings
+    from teamsrec_transcribe.web import review as rv
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    monkeypatch.setattr(settings, "ollama_has", lambda url, model, **kw: False)
+    assert rv.build_review(cfg, rec)["minutes_pull"] == "gemma4:31b", "Ollama runs, the model is missing: offer it"
+    monkeypatch.setattr(settings, "ollama_has", lambda url, model, **kw: None)
+    assert rv.build_review(cfg, rec)["minutes_pull"] == "", "Ollama not running: nothing to download into"
+    seen = []
+
+    def cli(argv, on_proc, on_line):
+        seen.append(argv[-3:])
+        on_line("PROGRESS stahuje se gemma4:31b: 45% (9.0 / 19.9 GB)")
+        texts.append(state.jobs_state()["current"]["text"])
+    texts: list = []
+    monkeypatch.setattr(rv, "run_cli", cli)
+    state = rv.ReviewState(cfg)
+    settings._ollama_seen[("u", "m")] = (0.0, False)
+    state.run_pull("gemma4:31b")
+    for _ in range(200):
+        if not state.busy:
+            break
+        _time.sleep(0.02)
+    assert seen == [["run-job", "pull", "gemma4:31b"]]
+    assert texts == ["stahuje se gemma4:31b: 45% (9.0 / 19.9 GB)"], "the progress is the job's text"
+    assert settings._ollama_seen == {}, "after the download Ollama is asked again"
+    with pytest.raises(ValueError):
+        state.run_pull("gemma; rm -rf")
+
+
+def test_run_job_pull_prints_progress(monkeypatch, capsys):
+    from teamsrec_transcribe import cli, llm
+    from typer.testing import CliRunner
+
+    def fake_pull(url, model, progress):
+        progress(0, 0, "pulling manifest")
+        progress(10_000_000_000, 20_000_000_000, "pulling")
+        progress(20_000_000_000, 20_000_000_000, "success")
+    monkeypatch.setattr(llm, "ollama_pull", fake_pull)
+    res = CliRunner().invoke(cli.app, ["run-job", "pull", "gemma4:31b"])
+    assert res.exit_code == 0, res.output
+    assert "PROGRESS stahuje se gemma4:31b: pulling manifest" in res.output
+    assert "PROGRESS stahuje se gemma4:31b: 100% (20.0 / 20.0 GB)" in res.output and "PROGRESS gemma4:31b stažen" in res.output

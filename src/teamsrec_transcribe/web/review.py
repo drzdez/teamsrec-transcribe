@@ -39,6 +39,7 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/jobs/{id}/cancel                         drop a waiting job, or stop the running one for good
   GET    /api/recordings/{stem}/summaries/{file}/export   the folder remembered for this meeting name, the copy's name
   POST   /api/recordings/{stem}/summaries/{file}/export   {"folder"} save a copy there (and remember the folder)
+  POST   /api/ollama/pull                              {"model"?} download the minutes model into Ollama (a job)
   POST   /api/system/pick-folder                       {"initial"?} the Windows folder dialog -> {"folder"} ("" = cancel)
   POST   /api/system/sound-settings                    open the Windows sound dialog (devices, levels, the mic array)
   GET    /api/settings/models                          the model lists asked live (Ollama on this PC, Claude API)
@@ -375,7 +376,9 @@ def build_review(cfg: Config, rec: Recording) -> dict:
         "cloud": cloud_ready(cfg),
         "timings": timings.latest(rec),  # how long each part of the last jobs took
         "export_folder": exports.folder_for(cfg.out_dir, rec.title),
-        "minutes_problem": minutes_problem(cfg),  # the local minutes model is missing / Ollama is not running  # "Uložit jako minule" for this meeting name
+        "minutes_problem": minutes_problem(cfg),  # the local minutes model is missing / Ollama is not running
+        "minutes_pull": (cfg.summarize.model if settings.ollama_has(cfg.summarize.ollama_url, cfg.summarize.model) is False
+                         and cfg.summarize.provider == "ollama" and cfg.summarize.enabled else ""),  # "Uložit jako minule" for this meeting name
         "voices_missing": needs_voices(data),  # a fast-track transcript: voices can be added locally
         "voices_mixed": sorted(((data.get("voices_from") or {}).get("mixed") or {}).keys()),
         "speakers": speakers, "known_names": known_names(cfg, people),
@@ -962,6 +965,8 @@ class ReviewState:
                 outcome = (f"{name} selhalo: {e}", "err")
             finally:
                 logging.getLogger("teamsrec_transcribe").removeHandler(errors)
+                if name == "pull":
+                    settings._ollama_seen.clear()  # the model may be there now: ask Ollama again
                 with self.lock:
                     self.current = self.running = None
                     stopped = job.pop("stopped", False)
@@ -1002,6 +1007,13 @@ class ReviewState:
                 _kill_tree(proc)
 
         def on_line(line: str):
+            if line.startswith("PROGRESS "):  # a long job says how far it is (a model download)
+                with self.lock:
+                    job["text"] = line[len("PROGRESS "):].strip()
+                    if self.current and self.current.get("id") == job["id"]:
+                        self.current["text"] = job["text"]
+                self._push_jobs()
+                return
             parts = line.split(" ", 2)
             if len(parts) == 3 and parts[1] == "ERROR":
                 self.event(parts[2], "err", job["stem"])
@@ -1018,6 +1030,13 @@ class ReviewState:
         return self.run_job("summary", ["run-job", "summary", rec.stem], "zápis přegenerován", rec.stem,
                             start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
+
+    def run_pull(self, model: str) -> tuple[int, int]:
+        """Download the local minutes model into Ollama (a queued job: it can be cancelled, its progress shows)."""
+        if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,120}", model):
+            raise ValueError(f"not a model name: {model!r}")
+        return self.run_job("pull", ["run-job", "pull", model], f"model {model} stažen", "",
+                            start=f"stahuje se {model}")
 
     def run_voices(self, rec: Recording) -> tuple[int, int]:
         """Fast-track post-processing: local voices for a cloud transcript (fasttrack.add_voices), on the GPU."""
@@ -1061,6 +1080,7 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("GET", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)/export", "export_info"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/summaries/(?P<file>[^/]+)/export", "export_summary"),
     ("POST", r"/api/system/pick-folder", "pick_folder"),
+    ("POST", r"/api/ollama/pull", "ollama_pull"),
     ("GET", r"/api/summary-models", "summary_models"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/merge", "merge"),
     ("POST", rf"/api/recordings/{STEM_RE_PART}/speakers/unmerge", "unmerge"),
@@ -1392,6 +1412,10 @@ def _handler(state: ReviewState, server_ref: dict):
             target = exports.save_copy(rec, unquote(file), str(body.get("folder") or ""), state.cfg.out_dir)
             state.event(f"{rec.stem}: kopie zápisu uložena do {target}", "ok", rec.stem)
             self._json({"ok": True, "path": str(target), "folder": str(target.parent)})
+
+        def r_ollama_pull(self, q, body):
+            job, position = state.run_pull(str(body.get("model") or state.cfg.summarize.model))
+            self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_pick_folder(self, q, body):
             self._json({"folder": exports.pick_folder(str(body.get("initial") or ""))})

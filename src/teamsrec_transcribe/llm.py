@@ -117,3 +117,31 @@ def _anthropic(system: str, user: str, settings: SummarizeSettings) -> LLMResult
     text = "".join(block.text for block in response.content if block.type == "text").strip()
     return LLMResult(text=text, model=response.model, input_tokens=response.usage.input_tokens,
                      output_tokens=response.usage.output_tokens, truncated=response.stop_reason == "max_tokens")
+
+
+def ollama_pull(url: str, model: str, progress) -> None:
+    """Download a model into the local Ollama (POST /api/pull, streamed). `progress(done_bytes, total_bytes, status)` is
+    called as the layers come in; raises LLMError when Ollama refuses or is not running."""
+    base = url.rstrip("/").replace("//localhost", "//127.0.0.1")
+    req = urllib.request.Request(base + "/api/pull", data=json.dumps({"model": model, "stream": True}).encode("utf-8"),
+                                 headers={"Content-Type": "application/json"}, method="POST")
+    done: dict[str, int] = {}
+    total: dict[str, int] = {}
+    try:
+        with urllib.request.urlopen(req, timeout=3600) as resp:
+            for raw in resp:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line:
+                    continue
+                msg = json.loads(line)
+                if msg.get("error"):
+                    raise LLMError(f"Ollama: {msg['error']}")
+                digest = msg.get("digest")
+                if digest and msg.get("total"):
+                    total[digest] = int(msg["total"])
+                    done[digest] = int(msg.get("completed") or 0)
+                progress(sum(done.values()), sum(total.values()), str(msg.get("status") or ""))
+    except urllib.error.HTTPError as e:
+        raise LLMError(f"Ollama: HTTP {e.code}: {e.read().decode('utf-8', 'replace')[:300]}") from e
+    except urllib.error.URLError as e:
+        raise LLMError(f"Ollama neběží ({url}: {e.reason}) – spusťte ji") from e

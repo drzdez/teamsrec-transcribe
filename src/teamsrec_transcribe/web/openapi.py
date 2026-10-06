@@ -132,6 +132,9 @@ def spec(version: str) -> dict:
                 "post": _op("Save a copy of the minutes into a folder and remember it for the meeting name",
                             params=[STEM, {"name": "file", "in": "path", "required": True, "schema": {"type": "string"}}],
                             body=_obj(folder=s))},
+            "/api/ollama/pull": {"post": _op("Download a model into the local Ollama as a queued job (progress in "
+                                             "the job's text); default the minutes model", tags=("settings",),
+                                             body=_obj(model=s))},
             "/api/system/pick-folder": {"post": _op("Open the Windows folder dialog on this PC; '' when cancelled",
                                                     tags=("settings",), body=_obj(initial=s))},
             "/api/jobs/{job}/cancel": {"post": _op("Drop a waiting job, or stop the running one for good",

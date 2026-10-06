@@ -11,6 +11,6 @@ test("Uložit a přegenerovat zápis on a recording without a transcript starts 
   assert.match(p.$("status").textContent, /spustí se celé zpracování/, "the question says what will run");
   p.$("saveSum").click();
   await waitFor(() => p.requests.some(r => r === `POST /api/recordings/${BOARD_NEW}/process`), "the processing started");
-  await waitFor(() => p.$("status").textContent === "hotovo: přepis, titulky i zápis", "processed");
+  await waitFor(() => /^hotovo: přepis a titulky; zápis počká/.test(p.$("status").textContent), "processed");
   assert.ok(p.doc.querySelector(".card"), "the new speakers are shown");
 });

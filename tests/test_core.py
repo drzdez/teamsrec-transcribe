@@ -1786,7 +1786,14 @@ def test_cloud_only_run_uses_cloud_services_and_needs_their_keys(tmp_path, monke
         if calls:
             break
         _time.sleep(0.02)
-    assert calls[0][-3:] == [rec.stem, "--force", "--cloud"]
+    assert calls[0][-4:] == [rec.stem, "--force", "--cloud", "--minutes-when-named"], "the fast track waits for names too"
+    calls.clear()
+    state.run_process(rec, cloud=True, minutes_anyway=True, voices=True)
+    for _ in range(100):
+        if calls:
+            break
+        _time.sleep(0.02)
+    assert calls[0][-3:] == [rec.stem, "--cloud", "--voices"]
 
 
 def test_run_job_cloud_flag_switches_the_services(tmp_path, monkeypatch):
@@ -1799,6 +1806,42 @@ def test_run_job_cloud_flag_switches_the_services(tmp_path, monkeypatch):
     res = CliRunner().invoke(cli.app, ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--cloud"])
     assert res.exit_code == 0, res.output
     assert seen == [("elevenlabs", "anthropic", False)]
+
+
+def test_fast_track_local_voices_run_before_the_minutes_decision(tmp_path, monkeypatch):
+    """--cloud --voices: the cloud transcript, then the local voices (they may name everyone), then the minutes
+    only when nobody is left unnamed; a failing voices step just leaves the minutes waiting."""
+    from typer.testing import CliRunner
+    from teamsrec_transcribe import cli, fasttrack, pipeline as pl
+    rec = _make_transcribed(tmp_path)
+    order = []
+    monkeypatch.setattr(pl, "do_transcribe", lambda cfg, r, force=False: order.append("transcript"))
+    monkeypatch.setattr(pl, "do_export", lambda cfg, r: None)
+    monkeypatch.setattr(pl, "do_summarize", lambda cfg, r, force=False: order.append(("minutes", cfg.summarize.provider)))
+    monkeypatch.setattr(pl, "do_summarize_compare", lambda cfg, r, force=False: None)
+    unnamed = [["SPEAKER_00"]]
+    monkeypatch.setattr(pl, "unnamed_speakers", lambda r, min_seconds=20.0: unnamed[0])
+
+    def voices(cfg, r):
+        order.append("voices")
+        unnamed[0] = []  # recognised everyone
+    monkeypatch.setattr(fasttrack, "add_voices", voices)
+    args = ["--out-dir", str(tmp_path), "run-job", "process", rec.stem, "--cloud", "--minutes-when-named"]
+    res = CliRunner().invoke(cli.app, args + ["--voices"])
+    assert res.exit_code == 0, res.output
+    assert order == ["transcript", "voices", ("minutes", "anthropic")]
+    order.clear(); unnamed[0] = ["SPEAKER_00"]
+    res = CliRunner().invoke(cli.app, args)
+    assert res.exit_code == 0, res.output
+    assert order == ["transcript"], "no local voices: the cloud names nobody, so the minutes wait"
+
+    def broken(cfg, r):
+        raise RuntimeError("no GPU")
+    monkeypatch.setattr(fasttrack, "add_voices", broken)
+    order.clear()
+    res = CliRunner().invoke(cli.app, args + ["--voices"])
+    assert res.exit_code == 0, res.output
+    assert order == ["transcript"]
 
 
 def test_fasttrack_voices_come_from_the_local_voice_that_overlaps_each_cloud_group(tmp_path, monkeypatch):

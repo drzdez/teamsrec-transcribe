@@ -370,11 +370,14 @@ processing whose minutes failed ends in red ("…, ale část se nepodařila –
 **Stáhnout <model>** in that red line downloads it as a queued job (it asks first – tens of GB; the progress shows in the
 job line at the bottom; it can be cancelled). For a 24 GB graphics card gemma4:31b is the measured choice.
 
-Local processing from the page writes the minutes only when every speaker who said at least 20 s has a name; otherwise
-it stops after the transcript (the Zápis tab says why), you name the speakers and **Uložit a přegenerovat zápis** writes
-the minutes once – instead of minutes with SPEAKER_xx regenerated right after. **zápis hned, i když mluvčí nebudou
-poznaní** next to the processing buttons asks for them anyway. The fast track (cloud) always writes them; the command
-line `process` too.
+Processing from the page (local and the fast track alike) writes the minutes only when every speaker who said at least
+20 s has a name; otherwise it stops after the transcript (the Zápis tab says why), you name the speakers and **Uložit a
+přegenerovat zápis** writes the minutes once – instead of minutes with SPEAKER_xx regenerated right after. **zápis hned,
+i když mluvčí nebudou poznaní** next to the processing buttons asks for them anyway, for both ways; the command line
+`process` always writes them. The cloud recognises nobody but you (the microphone track), so with the fast track alone
+the minutes wait for names; **u rychle přes cloud doplnit mluvčí lokálně** adds the local voices right after the cloud
+transcript (one diarization pass on the graphics card, no transcription) and, when everyone is recognised by their
+voice prints, the minutes follow via Claude in the same job.
 
 Jobs run one at a time, in order. The recordings list starts their rows with `⏳ zpracovává se ·` or
 `⏳ ve frontě 2. ·` (coloured text). A transcribed recording that waits for **Přepsat znovu od nuly** stays exactly as

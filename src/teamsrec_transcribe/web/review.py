@@ -12,7 +12,7 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   GET    /api/recordings/{stem}/docs/{file}            a transcript .txt or a .summary*.md of the recording
   PUT    /api/recordings/{stem}/names                  {"names": {label: name|fields}, "title"?, "summary"?}
   PUT    /api/recordings/{stem}/title                  {"title"} rename the meeting only (folder and files follow)
-  POST   /api/recordings/{stem}/process                {"force"?, "cloud"?, "minutes_anyway"?} transcribe + export +
+  POST   /api/recordings/{stem}/process                {"force"?, "cloud"?, "minutes_anyway"?, "voices"?} transcribe + export +
                                                         minutes (locally they wait for named speakers unless asked)
   POST   /api/recordings/{stem}/voices                 fast-track post-processing: local voices for a cloud transcript
   POST   /api/recordings/{stem}/recognize              match unnamed labels against the voice prints
@@ -1060,18 +1060,21 @@ class ReviewState:
                             start=f"{rec.stem}: doplňují se hlasy (lokální diarizace)")
 
     def run_process(self, rec: Recording, force: bool = False, cloud: bool = False,
-                    minutes_anyway: bool = False) -> tuple[int, int]:
+                    minutes_anyway: bool = False, voices: bool = False) -> tuple[int, int]:
         """force = transcribe again from scratch (new diarization, new labels), so the manual names go first:
         they are keyed by labels that will not exist any more, and a wrong one must not come back."""
         # from scratch drops the manual names and the cached window analysis when the job starts (run-job), so a
         # recording waiting in the queue keeps everything and can be cancelled without loss
         if cloud and not cloud_ready(self.cfg)["ok"]:
             raise ValueError("rychle přes cloud potřebuje klíče: " + cloud_ready(self.cfg)["missing"])
-        what = ("nový přepis od nuly" if force else "zpracování") + (" (cloud)" if cloud else "")
-        # local: the minutes wait for named speakers unless asked otherwise; the fast track always writes them
+        voices = voices and cloud
+        what = (("nový přepis od nuly" if force else "zpracování")
+                + ((" (cloud + hlasy lokálně)" if voices else " (cloud)") if cloud else ""))
+        # the minutes wait for named speakers unless asked otherwise (local and fast track alike); the fast track
+        # names nobody but the user, unless its local voices step (voices) recognises them
         return self.run_job("process", ["run-job", "process", rec.stem] + (["--force"] if force else [])
-                            + (["--cloud"] if cloud else [])
-                            + ([] if cloud or minutes_anyway else ["--minutes-when-named"]),
+                            + (["--cloud"] if cloud else []) + (["--voices"] if voices else [])
+                            + ([] if minutes_anyway else ["--minutes-when-named"]),
                             "zpracováno", rec.stem, start=f"{rec.stem}: {what} spuštěno")
 
     def status(self, events: int = 40) -> dict:
@@ -1270,7 +1273,8 @@ def _handler(state: ReviewState, server_ref: dict):
         def r_process(self, q, body, stem):
             job, position = state.run_process(self._recording(stem), force=bool(body.get("force")),
                                               cloud=bool(body.get("cloud")),
-                                              minutes_anyway=bool(body.get("minutes_anyway")))
+                                              minutes_anyway=bool(body.get("minutes_anyway")),
+                                              voices=bool(body.get("voices")))
             self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_speaker_replies(self, q, body, stem, label):

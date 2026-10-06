@@ -21,7 +21,7 @@ test("transcribing a new recording: live status over SSE, reload when done, hist
   go.click();
   await waitFor(() => p.$("quit").disabled, "the page busy while the job runs");
   await waitFor(() => p.doc.querySelector(".card"), "the page reloading the new transcript by itself");
-  await waitFor(() => p.$("status").textContent === "hotovo: přepis, titulky i zápis", "the result in the status line");
+  await waitFor(() => /^hotovo: přepis a titulky; zápis počká/.test(p.$("status").textContent), "the result in the status line");
   assert.ok(!p.$("quit").disabled, "the page is not busy any more");
   assert.ok(p.doc.querySelector("#main").textContent.includes("Nová nahrávka je přepsaná."));
 

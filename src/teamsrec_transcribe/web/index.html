@@ -219,6 +219,7 @@
   button.primary-btn:disabled { opacity: .5; cursor: default; }
   .processActs { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
   .minutesAnyway { font-size: 13px; color: var(--muted); cursor: pointer; margin-left: 8px; }
+  .processOpts { display: flex; gap: 6px 14px; justify-content: center; flex-wrap: wrap; }
   button.cloud-btn { padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent); background: transparent;
                      color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
   .toolbar button.cloud-btn { padding: 3px 9px; font-size: 13px; font-weight: 400; margin: 0 0 0 6px; }
@@ -1058,7 +1059,8 @@ function queueButtons(/** @type {any} */ q) {
 
 function renderNotTranscribedOffer(/** @type {Review} */ r, /** @type {HTMLElement} */ box, /** @type {number} */ est) {
   box.innerHTML = `<p><b>${escapeHtml(r.title)}</b> ještě nemá přepis, takže není co kontrolovat.</p>` +
-    (r.has_mix ? `<p>Přepsat, exportovat a udělat zápis teď? Zhruba ${est} min, grafická karta bude po tu dobu vytížená.</p>`
+    (r.has_mix ? `<p>Přepsat a rozpoznat mluvčí teď? Zhruba ${est} min, grafická karta bude po tu dobu vytížená. `
+                 + `Zápis vznikne rovnou, jen když se poznají všichni mluvčí – jinak počká, až je pojmenujete.</p>`
                : `<p>Nahrávka nemá zvuk (chybí mix i stopy), přepsat ji nejde.</p>`);
   if (r.has_mix) {
     const b = document.createElement("button"); b.type = "button"; b.className = "primary-btn";
@@ -1070,7 +1072,8 @@ function renderNotTranscribedOffer(/** @type {Review} */ r, /** @type {HTMLEleme
     const row = document.createElement("p"); row.className = "processActs";
     row.append(b, fast);
     box.appendChild(row);
-    const opt = document.createElement("p"); opt.appendChild(minutesAnywayBox()); box.appendChild(opt);
+    const opt = document.createElement("p"); opt.className = "processOpts";
+    opt.append(minutesAnywayBox(), cloudVoicesBox(r)); box.appendChild(opt);
   }
   main.appendChild(box);
 }
@@ -1088,35 +1091,52 @@ function cloudButton(/** @type {Review} */ r, /** @type {string} */ what, /** @t
     return b;
   }
   b.title = `přepis ${c.provider}, zápis Claude ${c.model}; bez grafické karty a bez hluku, ale zvuk i text schůzky odejdou `
-    + `do cloudu a hlasové otisky se nepoužijí (cloud nevrací hlasy)`;
+    + `do cloudu. Cloud mluvčí nerozpozná (nevrací hlasy) – zaškrtněte „doplnit mluvčí lokálně“, nebo je pojmenujte ručně`;
   b.onclick = go;
   confirmFirst(b, "Potvrdit: zvuk a přepis odejdou do cloudu",
                `zvuk schůzky půjde do ${c.provider}, text přepisu do Claude – potvrďte druhým kliknutím, nebo Zrušit`);
   return b;
 }
 
-/** Local processing writes the minutes only when every speaker has a name (otherwise they would be regenerated
- * right after naming); this box asks for them anyway. The fast track always writes them. */
+/** Processing (local and fast track) writes the minutes only when every speaker has a name (otherwise they would
+ * be regenerated right after naming); this box asks for them anyway. */
 function minutesAnywayBox() {
   const l = document.createElement("label"); l.className = "minutesAnyway";
-  l.title = "Bez zaškrtnutí lokální zpracování udělá jen přepis; zápis vznikne, až budou mluvčí pojmenovaní (Uložit a přegenerovat zápis). "
-    + "Zaškrtnuto: zápis hned, i s nepojmenovanými SPEAKER_xx.";
+  l.title = "Platí pro lokální zpracování i pro rychle přes cloud. Bez zaškrtnutí vznikne zápis jen tehdy, když se poznají "
+    + "všichni mluvčí; jinak počká, až je pojmenujete (Uložit a přegenerovat zápis). Zaškrtnuto: zápis hned, i s nepojmenovanými SPEAKER_xx.";
   l.innerHTML = '<input type="checkbox" class="minutesAnywayBox"> zápis hned, i když mluvčí nebudou poznaní';
   return l;
 }
 function minutesAnyway() {
   return [...document.querySelectorAll("input.minutesAnywayBox")].some(b => /** @type {HTMLInputElement} */ (b).checked);
 }
+/** Fast track only: the cloud recognises nobody, so after its transcript the local voices (one diarization pass on
+ * the GPU, no transcription) match the voice prints; when everyone is recognised, the minutes follow via Claude. */
+function cloudVoicesBox(/** @type {Review} */ r) {
+  const l = document.createElement("label"); l.className = "minutesAnyway";
+  l.title = "Jen pro ⚡ rychle přes cloud: po přepisu z cloudu se lokálně (grafická karta, jen rozlišení hlasů, bez přepisu) "
+    + "poznají mluvčí podle hlasových otisků. Když se poznají všichni, vznikne rovnou zápis přes cloud.";
+  l.innerHTML = '<input type="checkbox" class="cloudVoicesBox"> u rychle přes cloud doplnit mluvčí lokálně';
+  if (!(r.cloud && r.cloud.ok)) l.hidden = true;
+  return l;
+}
+function cloudVoices() {
+  return [...document.querySelectorAll("input.cloudVoicesBox")].some(b => /** @type {HTMLInputElement} */ (b).checked);
+}
+/** The body of a process request: the minutes option for both ways, the local voices for the fast track. */
+function processBody(/** @type {boolean} */ cloud, extra = {}) {
+  return { ...extra, minutes_anyway: minutesAnyway(), ...(cloud ? { cloud: true, voices: cloudVoices() } : {}) };
+}
 
 async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonElement} */ btn, cloud = false) {
   btn.disabled = true;
   /** @type {any} */ let r;
   try {
-    r = await api(recUrl(stem, "process"), send("POST", cloud ? { cloud: true } : { minutes_anyway: minutesAnyway() }));
+    r = await api(recUrl(stem, "process"), send("POST", processBody(cloud)));
     if (!r.ok) throw new Error(r.error || "nelze spustit");
   } catch (e) { setStatus(String(e), "err"); btn.disabled = false; return; }
   setBusy(true);
-  setStatus("zpracovávám: přepis, export, zápis… běží na serveru, stránku můžete obnovit i zavřít", "busy");
+  setStatus("zpracovávám: přepis, mluvčí, zápis (když se poznají všichni)… běží na serveru, stránku můžete obnovit i zavřít", "busy");
   queuedNote(r, "zpracování");
   let error = "";
   try { error = await waitForJob(r.job); }
@@ -1126,7 +1146,8 @@ async function startProcess(/** @type {string} */ stem, /** @type {HTMLButtonEle
   const end = finishedJobs.get(r.job);
   if (error) setStatus(`zpracování selhalo: ${error}`, "err");
   else if (end && /zrušeno/.test(end.text)) setStatus(end.text, "ok");  // cancelled from the page
-  else setStatus("hotovo: přepis, titulky i zápis", "ok");
+  else setStatus(review && review.has_summary ? "hotovo: přepis, titulky i zápis"
+                 : "hotovo: přepis a titulky; zápis počká, až pojmenujete mluvčí (Uložit a přegenerovat zápis)", "ok");
 }
 
 // ---------------------------------------------------------------- speakers tab
@@ -1276,7 +1297,7 @@ function renderSpeakers() {
       setStatus("spouštím nový přepis…");
       /** @type {any} */ let r;
       try {
-        r = await api(recUrl(stem, "process"), send("POST", { force: true, ...(cloud ? { cloud: true } : { minutes_anyway: minutesAnyway() }) }));
+        r = await api(recUrl(stem, "process"), send("POST", processBody(cloud, { force: true })));
         if (!r.ok) throw new Error(r.error || "nelze spustit");
       } catch (e) { setStatus(String(e), "err"); return; }
       setBusy(true);
@@ -1294,6 +1315,7 @@ function renderSpeakers() {
     bar.appendChild(b);
     bar.appendChild(cloudButton(review, "Přepsat znovu", () => { fromScratch(true); }));
     bar.appendChild(minutesAnywayBox());
+    bar.appendChild(cloudVoicesBox(review));
     main.appendChild(bar);
   }
   if (review.can_unmerge) {

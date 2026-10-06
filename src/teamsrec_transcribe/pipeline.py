@@ -936,13 +936,20 @@ def unnamed_speakers(rec: Recording, min_seconds: float = UNNAMED_MIN_SECONDS) -
             if lab.startswith("SPEAKER_") and not names.get(lab) and secs.get(lab, 0.0) >= min_seconds]
 
 
-def do_process(cfg: Config, rec: Recording, *, force: bool = False, minutes_anyway: bool = True) -> None:
-    """Transcript, exports and the minutes. With minutes_anyway=False (the review page's local processing) the
+def do_process(cfg: Config, rec: Recording, *, force: bool = False, minutes_anyway: bool = True,
+               before_minutes=None) -> None:
+    """Transcript, exports and the minutes. With minutes_anyway=False (the review page, local or fast track) the
     minutes wait while speakers are unnamed: they would be written with SPEAKER_xx and regenerated right after the
-    names are filled in (Uložit a přegenerovat zápis), a needless 2–10 minutes on the GPU."""
+    names are filled in (Uložit a přegenerovat zápis). `before_minutes(cfg, rec)` runs between the transcript and
+    that decision (the fast track's local voices, which may name the speakers); its failure only means no names."""
     do_transcribe(cfg, rec, force=force)
     with step("export (txt, srt)"):
         do_export(cfg, rec)
+    if before_minutes:
+        try:
+            before_minutes(cfg, rec)
+        except Exception as e:
+            log.error("%s: hlasy se nepodařilo doplnit: %s", rec.stem, e)
     waiting = [] if minutes_anyway else unnamed_speakers(rec)
     if cfg.summarize.enabled and waiting:
         log.info("%s: minutes held back – unnamed speakers: %s (name them, then Uložit a přegenerovat zápis)",

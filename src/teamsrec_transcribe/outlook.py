@@ -61,6 +61,9 @@ def pick_meeting(items: list[dict], at: datetime, title: str | None = None,
     return (best[1], "time") if best else (None, "")
 
 
+DATE_ORDERS = ("%m/%d/%Y", "%d/%m/%Y")  # month/day and day/month: see outlook_items
+
+
 def outlook_items(day: datetime) -> list[dict]:
     """Calendar items of one day from classic Outlook. Raises when Outlook/COM is not available."""
     import pythoncom  # pywin32, Windows only
@@ -72,21 +75,37 @@ def outlook_items(day: datetime) -> list[dict]:
         items = cal.Items
         items.IncludeRecurrences = True
         items.Sort("[Start]")
-        flt = f"[Start] >= '{day:%m/%d/%Y} 00:00' AND [Start] <= '{day:%m/%d/%Y} 23:59'"
-        out = []
-        for it in items.Restrict(flt):
+        out: list[dict] = []
+        seen: set = set()
+        # Restrict parses the date by the Windows regional settings: "10/07/2026" is 7 Oct in the US but 10 July
+        # in Czech (2026-10-07: no meeting found on days 1-12 of any month). Ask with both orders and keep the
+        # items that really start on that day.
+        for fmt in DATE_ORDERS:
+            flt = f"[Start] >= '{day:{fmt}} 00:00' AND [Start] <= '{day:{fmt}} 23:59'"
             try:
-                text = f"{it.Location or ''} {it.Body or ''}"
-                out.append({
-                    "subject": (it.Subject or "").strip(),
-                    "start": datetime(it.Start.year, it.Start.month, it.Start.day, it.Start.hour, it.Start.minute),
-                    "end": datetime(it.End.year, it.End.month, it.End.day, it.End.hour, it.End.minute),
-                    "organizer": (it.Organizer or "").strip(),
-                    "attendees": [r.Name for r in it.Recipients if r.Name],
-                    "teams": "teams.microsoft.com" in text.lower(),
-                })
-            except Exception:
+                found = items.Restrict(flt)
+            except Exception:  # a date the locale cannot read (day 13+ as a month)
                 continue
+            for it in found:
+                try:
+                    start = datetime(it.Start.year, it.Start.month, it.Start.day, it.Start.hour, it.Start.minute)
+                    if start.date() != day.date():
+                        continue
+                    end = datetime(it.End.year, it.End.month, it.End.day, it.End.hour, it.End.minute)
+                    subject = (it.Subject or "").strip()
+                    if (subject, start, end) in seen:
+                        continue
+                    seen.add((subject, start, end))
+                    text = f"{it.Location or ''} {it.Body or ''}"
+                    out.append({
+                        "subject": subject, "start": start, "end": end,
+                        "organizer": (it.Organizer or "").strip(),
+                        "attendees": [r.Name for r in it.Recipients if r.Name],
+                        "teams": "teams.microsoft.com" in text.lower(),
+                    })
+                except Exception:
+                    continue
+        out.sort(key=lambda it: it["start"])
         return out
     finally:
         pythoncom.CoUninitialize()

@@ -2144,6 +2144,12 @@ def test_direct_call_names_the_other_person_unless_the_voice_says_someone_else(t
     assert pl._direct_call_step(cfg, rec, durations, {}) is None, "a meeting title, not a call window"
     rec.sidecar.update(title="Lukáš Hrubý", title_source="window"); rec.save_sidecar()
     assert pl.direct_call_name(cfg, rec) == "Lukáš Hrubý"
+    rec.sidecar.update(title="Archi standup"); rec.save_sidecar()
+    assert pl.direct_call_name(cfg, rec) == "", "a meeting subject, not a name (2026-10-07)"
+    rec.sidecar.update(title="Archi Standup", teams_windows_seen=[
+        "Kompaktní zobrazení schůzky | Archi Standup | Microsoft Teams"]); rec.save_sidecar()
+    assert pl.direct_call_name(cfg, rec) == "", "the meeting's compact view names a meeting"
+    rec.sidecar.update(title="Lukáš Hrubý", teams_windows_seen=[]); rec.save_sidecar()
     assert pl._direct_call_step(cfg, rec, {**durations, "SPEAKER_01": 60.0}, {}) is None, "two long voices: not 1:1"
 
     call = pl._direct_call_step(cfg, rec, durations, {})
@@ -2230,3 +2236,40 @@ def test_voiceprints_limit_comes_from_the_settings(tmp_path):
     for i in range(5):
         vp.enroll("x", [1.0 if j == i else 0.0 for j in range(5)], f"r{i}", "S")
     assert vp.count("x") == 3
+
+
+def test_jobs_status_file_tells_the_tray_what_runs_and_what_ended(tmp_path, monkeypatch):
+    """%TEMP%\teamsrec-review-jobs.json for teamsrec-capture: busy while a job runs (yellow icon), the ended jobs
+    with what came out of them (the balloon), not running once the server stops; the page learns the plan."""
+    import json
+    import threading
+    import time
+    from teamsrec_transcribe.web import review as rv
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    rec.summary_path.unlink()
+    go = threading.Event()
+    monkeypatch.setattr(rv, "run_cli", lambda argv, on_proc, on_line: go.wait(5))
+    st = rv.ReviewState(cfg)
+    st.jobs_file = tmp_path / "jobs.json"
+    st.run_process(rec)
+    d = {}
+    for _ in range(100):
+        d = json.loads(st.jobs_file.read_text(encoding="utf-8")) if st.jobs_file.exists() else {}
+        if d.get("current"):
+            break
+        time.sleep(0.02)
+    assert d["busy"] and d["current"]["stem"] == rec.stem and d["current"]["title"] == rec.title
+    assert st.jobs_state()["current"]["plan"] == {"cloud": False, "voices": False, "minutes_wait": True}
+    go.set()
+    for _ in range(100):
+        if not st.status()["busy"]:
+            break
+        time.sleep(0.02)
+    time.sleep(0.1)
+    d = json.loads(st.jobs_file.read_text(encoding="utf-8"))
+    assert not d["busy"] and d["current"] is None
+    assert d["finished"][-1]["stem"] == rec.stem and d["finished"][-1]["ok"]
+    assert d["finished"][-1]["text"] == "přepis hotový; zápis počká, až pojmenujete mluvčí"
+    st.write_jobs_file(running=False)
+    assert json.loads(st.jobs_file.read_text(encoding="utf-8"))["running"] is False

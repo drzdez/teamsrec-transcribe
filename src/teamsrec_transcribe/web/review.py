@@ -102,6 +102,10 @@ IDLE_S = 90.0  # exit this long after the page's last heartbeat (the page pings 
 MAX_EVENTS = 200   # kept in memory only: the log is a convenience, the files are the truth
 LOCK = Path(tempfile.gettempdir()) / "teamsrec-review.json"
 CAPTURE_STATUS = Path(tempfile.gettempdir()) / "teamsrec-capture.json"  # written by teamsrec-capture on every change
+# written here on every change of the jobs, read by teamsrec-capture: the tray icon turns yellow while a job runs, and a
+# balloon says when a recording is processed – so the window can be closed while it works
+JOBS_STATUS = Path(tempfile.gettempdir()) / "teamsrec-review-jobs.json"
+FINISHED_KEPT = 10
 CAPTURE_POLL_S = 2.0
 
 
@@ -437,6 +441,15 @@ def is_unaligned(data: dict) -> bool:
     return data.get("provider") == "whisperx" and "align_s" not in (data.get("timings") or {})
 
 
+def _title_of(cfg: Config, stem: str) -> str:
+    if not stem:
+        return ""
+    try:
+        return resolve_recording(stem, cfg.out_dir).title or stem
+    except Exception:
+        return stem
+
+
 def has_minutes(rec: Recording) -> bool:
     """Any minutes at all: the main one or one by another model (the list must not say "bez zápisu" when the only
     minutes are a Claude one)."""
@@ -733,6 +746,9 @@ class ReviewState:
         self.next_job = 0
         self.held = False    # a recording runs: jobs wait (the GPU would break the recorded sound)
         self.asking = False  # the pages are asked whether to stop the running job for the recording
+        self.jobs_file: Path | None = None  # JOBS_STATUS when serving (never in tests)
+        self.jobs_file_lock = threading.Lock()
+        self.finished: list[dict] = []  # the last jobs that ended, for the tray's balloon
         self.wake = threading.Condition(self.lock)
 
     def seen(self) -> None:
@@ -916,11 +932,54 @@ class ReviewState:
         """What runs and what waits, for every page (SSE `jobs`, hello, /api/status)."""
         with self.lock:
             return {"current": dict(self.current) if self.current else None,
-                    "queue": [{**{k: j[k] for k in ("id", "name", "stem", "text")}, "force": j.get("force", False)}
+                    "queue": [{**{k: j[k] for k in ("id", "name", "stem", "text")}, "force": j.get("force", False),
+                               "plan": j.get("plan", {})}
                               for j in self.jobs],
                     "held": self.held, "asking": self.asking, "ask_s": RECORDING_ASK_S}
 
+    def jobs_file_json(self, running: bool = True) -> dict:
+        """For teamsrec-capture (JOBS_STATUS): busy, what runs, how many wait, and the jobs that ended."""
+        with self.lock:
+            cur = self.current
+            return {"app": "teamsrec-review", "pid": os.getpid(), "running": running,
+                    "busy": running and bool(self.busy), "held": self.held,
+                    "current": ({"stem": cur["stem"], "title": _title_of(self.cfg, cur["stem"]), "text": cur["text"],
+                                 "since": cur.get("started_at")} if cur and running else None),
+                    "queued": len(self.jobs) if running else 0, "finished": list(self.finished),
+                    "updated": datetime.now().isoformat(timespec="seconds")}
+
+    def write_jobs_file(self, running: bool = True) -> None:
+        if not self.jobs_file:
+            return
+        with self.jobs_file_lock:  # one writer at a time; a reader (the tray) may hold it for a moment: retry
+            tmp = self.jobs_file.with_suffix(".tmp")
+            for attempt in range(5):
+                try:
+                    tmp.write_text(json.dumps(self.jobs_file_json(running), ensure_ascii=False), encoding="utf-8")
+                    os.replace(tmp, self.jobs_file)
+                    return
+                except OSError as e:
+                    if attempt == 4:
+                        log.warning("jobs status not written: %s", e)
+                    time.sleep(0.05)
+
+    def _finished(self, job: dict, ok: bool, text: str) -> None:
+        """A job ended: remembered for the tray's balloon, with what came out of it."""
+        stem = job.get("stem") or ""
+        if ok and job.get("name") == "process" and stem:
+            try:
+                rec = resolve_recording(stem, self.cfg.out_dir)
+                text = ("přepis i zápis hotové" if has_minutes(rec)
+                        else "přepis hotový; zápis počká, až pojmenujete mluvčí")
+            except Exception:
+                pass
+        with self.lock:
+            self.finished = (self.finished + [{"id": job["id"], "name": job.get("name", ""), "stem": stem,
+                                               "title": _title_of(self.cfg, stem), "ok": ok, "text": text,
+                                               "at": datetime.now().isoformat(timespec="seconds")}])[-FINISHED_KEPT:]
+
     def _push_jobs(self) -> None:
+        self.write_jobs_file()
         state = self.jobs_state()
         with self.lock:
             subscribers = list(self.subscribers)
@@ -935,7 +994,10 @@ class ReviewState:
         with self.lock:
             self.next_job += 1
             job = {"id": self.next_job, "name": name, "stem": stem, "text": start or name, "fn": fn, "done": done,
-                   "force": isinstance(fn, list) and "--force" in fn}
+                   "force": isinstance(fn, list) and "--force" in fn,
+                   # what the job will make, for the page to say it up front
+                   "plan": ({"cloud": "--cloud" in fn, "voices": "--voices" in fn,
+                             "minutes_wait": "--minutes-when-named" in fn} if isinstance(fn, list) else {})}
             if isinstance(fn, list):  # a command: run in a child process that can be stopped
                 job["argv"], job["fn"] = fn, None
             self.jobs.append(job)
@@ -965,7 +1027,7 @@ class ReviewState:
                 job = self.jobs.pop(0)
                 self.running = job
                 self.current = {"id": job["id"], "name": job["name"], "stem": job["stem"], "text": job["text"],
-                                "force": job.get("force", False), "started": datetime.now().strftime("%H:%M"),
+                                "force": job.get("force", False), "plan": job.get("plan", {}), "started": datetime.now().strftime("%H:%M"),
                                 "started_at": datetime.now().isoformat(timespec="seconds")}
                 self.message, self.error, self.job = job["name"], "", job["name"]
             # logged before the work, so the order in the log is the real one
@@ -1013,6 +1075,7 @@ class ReviewState:
             elif stopped:
                 self.event(f"{job['text']} – přerušeno, pokračuje po konci nahrávání", "info", stem, job=job["id"])
             else:
+                self._finished(job, outcome[1] == "ok", outcome[0])
                 self.event(outcome[0], outcome[1], stem, reload=True, job_end=True, job=job["id"])
             self._push_jobs()
 
@@ -1599,6 +1662,8 @@ def serve(cfg: Config, rec: Recording | None, *, port: int = 0, open_browser: bo
             webbrowser.open(existing + fragment)
         return existing
     state = ReviewState(cfg)
+    state.jobs_file = JOBS_STATUS
+    state.write_jobs_file()
     ref: dict = {}
     server = ThreadingHTTPServer(("127.0.0.1", port), _handler(state, ref))
     ref["server"] = server
@@ -1615,6 +1680,7 @@ def serve(cfg: Config, rec: Recording | None, *, port: int = 0, open_browser: bo
         pass
     finally:
         server.server_close()
+        state.write_jobs_file(running=False)
         try:
             if json.loads(lock.read_text(encoding="utf-8")).get("pid") == os.getpid():
                 lock.unlink()

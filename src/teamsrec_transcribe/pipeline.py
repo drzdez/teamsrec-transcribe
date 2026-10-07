@@ -686,6 +686,9 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
     return matches
 
 
+MEETING_VIEWS = {"kompaktní zobrazení schůzky", "meeting compact view", "compact view"}
+
+
 def direct_call_name(cfg: Config, rec: Recording) -> str:
     """The other person's name when the recording is a direct (1:1) Teams call: the title was read from the call
     window ("Jana Nováková | Microsoft Teams"), it is shaped like a name, it is not the user, and no calendar meeting
@@ -694,6 +697,15 @@ def direct_call_name(cfg: Config, rec: Recording) -> str:
     title = (rec.title or "").strip()
     if sc.get("title_source") != "window" or sc.get("calendar") or not _looks_like_a_name(title):
         return ""
+    # a person's name has every word capitalised; a meeting subject often not ("Archi standup", 2026-10-07)
+    if not all(w[:1].isupper() for w in title.split()):
+        return ""
+    # the meeting's own windows ("Kompaktní zobrazení schůzky | Archi standup | …") or its calendar entry in Teams
+    # ("Calendar | Archi standup | …") name a meeting, not a person
+    for seen in sc.get("teams_windows_seen") or []:
+        parts = [p.strip() for p in seen.split("|")]
+        if len(parts) >= 3 and parts[1] == title and parts[0].lower() in MEETING_VIEWS:
+            return ""
     if cfg.user_name and _norm_name(title) == _norm_name(cfg.user_name):
         return ""
     return title
@@ -762,6 +774,8 @@ def recognize_voices(cfg: Config, rec: Recording) -> dict:
     call = _direct_call_step(cfg, rec, durations, known)  # may take back a voice match that contradicts the call
     if call:
         data["direct_call"] = call
+    else:
+        data.pop("direct_call", None)  # no longer a direct call (an older rule took a meeting for one)
     matches = {lab: m for lab, m in matches.items() if lab in known}
     data["voice_matches"] = known
     if matches and "voiceprint" not in data.get("speaker_sources", []):

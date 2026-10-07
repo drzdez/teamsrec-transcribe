@@ -940,11 +940,23 @@ function queuePlace(/** @type {string} */ stem) {
   if (!j) return null;
   if (j.current && j.current.stem === stem)
     return { running: true, id: j.current.id, name: j.current.name, since: j.current.started || "",
-             startedAt: j.current.started_at || "", force: !!j.current.force, held: false };
+             startedAt: j.current.started_at || "", force: !!j.current.force, held: false, plan: j.current.plan || {} };
   const at = (j.queue || []).findIndex((/** @type {any} */ q) => q.stem === stem);
   return at < 0 ? null : { running: false, id: j.queue[at].id, name: j.queue[at].name, place: at + 1, held: !!j.held,
-                           force: !!j.queue[at].force,
+                           force: !!j.queue[at].force, plan: j.queue[at].plan || {},
                            before: j.current ? j.current.stem : "" };
+}
+
+/** What a process job will make, so the expectation is set before it ends: the minutes may wait for names. */
+function processWhat(/** @type {any} */ q) {
+  if (q.name !== "process") return "zpracování";
+  const p = q.plan || {};
+  const transcript = p.cloud ? "přepis přes cloud" : "přepis";
+  const speakers = p.cloud ? (p.voices ? ", mluvčí lokálně podle hlasu" : "") : ", rozpoznání mluvčích";
+  if (!p.minutes_wait) return `${transcript}${speakers} a zápis`;
+  return p.cloud && !p.voices
+    ? `${transcript}; zápis počká, až pojmenujete mluvčí (cloud je nerozpozná)`
+    : `${transcript}${speakers}; zápis jen když se poznají všichni mluvčí, jinak počká, až je pojmenujete`;
 }
 
 /** a waiting job forward: "next" = right after the running one, "now" = stop the running one (it runs again after) */
@@ -1012,8 +1024,8 @@ function renderNotTranscribed(r) {
   const q = queuePlace(r.stem);
   if (q) {  // already asked for: say where it is instead of offering it again
     box.innerHTML = `<p><b>${escapeHtml(r.title)}</b> ještě nemá přepis.</p>` + (q.running
-      ? `<p class="queued">⏳ Právě se zpracovává${q.since ? ` (od ${escapeHtml(q.since)})` : ""} – přepis, export a zápis, zhruba ${est} min.</p>`
-      : `<p class="queued">⏳ Je ve frontě na zpracování – <b>${q.place}. v pořadí</b>.` +
+      ? `<p class="queued">⏳ Právě se zpracovává${q.since ? ` (od ${escapeHtml(q.since)})` : ""} – ${escapeHtml(processWhat(q))}, zhruba ${est} min.</p>`
+      : `<p class="queued">⏳ Je ve frontě na zpracování (${escapeHtml(processWhat(q))}) – <b>${q.place}. v pořadí</b>.` +
         (q.held ? " Čeká na konec nahrávání." : q.before ? ` Teď běží ${escapeHtml(q.before)}.` : "") + `</p>`) +
       `<p>Až doběhne, přepis se tu ukáže sám.</p>`;
     box.appendChild(queueButtons(q));
@@ -1400,7 +1412,39 @@ function meetingPanel(m) {
                   v => meetingAction("attach", JSON.parse(v)));
   }
   if (actions.children.length) box.appendChild(actions);
+  if (m.outlook_enabled && (!cal || ((cal.match || "time") === "time" && cal.status !== "confirmed")))
+    suggestMeetings(m, box);
   return box;
+}
+
+/** No meeting linked, or one picked only by time: the meetings that ran when the call started, one click each.
+ * Two or more = "which one was it?" (2026-10-07: a call in Archi standup, AI discussion at the same time). */
+async function suggestMeetings(/** @type {Meeting} */ m, /** @type {HTMLElement} */ box) {
+  if (!review || !m.start) return;
+  const stem = review.stem;
+  /** @type {any[]} */ let cands = [];
+  try { cands = (await api(recUrl(stem, "meeting", "candidates"))).candidates || []; } catch { return; }
+  if (!review || review.stem !== stem) return;
+  const at = new Date(m.start).getTime();
+  const running = cands.filter(c => new Date(c.start).getTime() - 10 * 60e3 <= at && at <= new Date(c.end).getTime())
+    .filter(c => !(m.calendar && c.subject === m.calendar.subject && c.start.slice(0, 16) === String(m.calendar.start || "").slice(0, 16)));
+  if (!running.length) return;
+  const sameTitle = (/** @type {any} */ c) => foldText(c.subject) === foldText(m.title || "");
+  running.sort((a, b) => Number(sameTitle(b)) - Number(sameTitle(a)));
+  const row = document.createElement("div"); row.className = "row2 suggestMeeting";
+  row.append(m.calendar
+    ? `⚠ v tu dobu byla v kalendáři i jiná schůzka – nebyla to tahle? `
+    : running.length > 1 ? "⚠ v tu dobu bylo v kalendáři víc schůzek – kterou to byla? " : "v kalendáři v tu dobu: ");
+  for (const c of running) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "play";
+    b.textContent = `${c.start.slice(11, 16)}–${c.end.slice(11, 16)} ${c.subject}${c.teams ? " (Teams)" : ""}, ${(c.attendees || []).length} lidí`
+      + (sameTitle(c) ? " · stejný název" : "");
+    b.title = (c.attendees || []).join(", ");
+    armedButton(b, `Potvrdit spojení s „${c.subject}“ (účastníci z kalendáře; přejmenuje složku)`,
+                () => meetingAction("attach", { subject: c.subject, start: c.start }));
+    row.appendChild(b); row.append(" ");
+  }
+  box.appendChild(row);
 }
 
 async function meetingAction(/** @type {string} */ action, /** @type {any=} */ candidate) {

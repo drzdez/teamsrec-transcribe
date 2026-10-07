@@ -329,7 +329,9 @@ calendar meeting is linked and how surely ("podle názvu schůzky" is reliable, 
 example an ad-hoc call during a scheduled meeting, or two meetings at once), and the participants with their source.
 Buttons: **Potvrdit spojení**, **Odpojit** (the calendar participants are removed, the title stays) and **spojit s
 jinou schůzkou** (offers Outlook meetings around that time; linking rewrites the title, the participants and the
-folder name). The organiser and the planned time from the calendar get into the minutes.
+folder name). The organiser and the planned time from the calendar get into the minutes. When no meeting is linked, or
+one only by time, the panel lists the meetings that ran when the call started as buttons ("⚠ v tu dobu bylo v kalendáři
+víc schůzek – kterou to byla?"), the one with the same name first; one click (confirmed by a second) links it.
 
 When the selected recording has no transcript yet, the page says so and offers the button "Ano, přepsat a zpracovat"
 (transcript, export, minutes).

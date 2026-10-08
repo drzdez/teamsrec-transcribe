@@ -1,4 +1,7 @@
-"""LLM backends for the summary: local Ollama (default) or the Claude API (Anthropic SDK)."""
+"""LLM backends for the summary: local Ollama (default), the Claude API (Anthropic SDK), or OpenAI.
+
+The OpenAI one speaks the Chat Completions API that most providers copy (Gemini, Mistral, OpenRouter, LM Studio,
+vLLM…), so another service is only another `openai_url`; only OpenAI itself is verified so far."""
 
 from __future__ import annotations
 
@@ -35,7 +38,66 @@ def complete(system: str, user: str, settings: SummarizeSettings) -> LLMResult:
         return _ollama(system, user, settings)
     if settings.provider == "anthropic":
         return _anthropic(system, user, settings)
-    raise LLMError(f"unknown summarize provider {settings.provider!r} (ollama | anthropic)")
+    if settings.provider == "openai":
+        return _openai(system, user, settings)
+    raise LLMError(f"unknown summarize provider {settings.provider!r} (ollama | anthropic | openai)")
+
+
+# ---------------------------------------------------------------- OpenAI (cloud; the Chat Completions API)
+
+OPENAI_URL = "https://api.openai.com/v1"
+
+
+def openai_key(url: str) -> str:
+    """OpenAI's own key for api.openai.com; another compatible service (not verified yet, so not offered on the
+    page) takes TEAMSREC_LLM_API_KEY."""
+    import os
+    from .settings import get_secret
+    return get_secret("openai") if "api.openai.com" in url else os.environ.get("TEAMSREC_LLM_API_KEY", "").strip()
+
+
+def _openai(system: str, user: str, settings: SummarizeSettings) -> LLMResult:
+    import requests
+    url = (settings.openai_url or OPENAI_URL).rstrip("/")
+    key = openai_key(url)
+    if not key and "api.openai.com" in url:
+        raise LLMError("no OpenAI key: enter it in Settings on the review page (Klíče API), or set OPENAI_API_KEY")
+    body = {"model": settings.model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "max_completion_tokens": 16000}
+    try:
+        r = requests.post(f"{url}/chat/completions", json=body, timeout=settings.ollama_timeout_s,
+                          headers={"Authorization": f"Bearer {key}"} if key else {})
+    except requests.RequestException as e:
+        raise LLMError(f"cannot reach {url}: {e}") from e
+    if r.status_code in (401, 403):
+        raise LLMError(f"the key was refused by {url} (HTTP {r.status_code}) – check it in Settings")
+    if r.status_code == 404:
+        raise LLMError(f"model {settings.model!r} not found at {url}")
+    if r.status_code == 429:
+        raise LLMError(f"rate limit or no credit at {url}, try again later")
+    if not r.ok:
+        raise LLMError(f"{url}: HTTP {r.status_code}: {r.text[:300]}")
+    data = r.json()
+    choice = (data.get("choices") or [{}])[0]
+    text = ((choice.get("message") or {}).get("content") or "").strip()
+    if not text:
+        raise LLMError(f"{url}: empty response ({choice.get('finish_reason')})")
+    usage = data.get("usage") or {}
+    return LLMResult(text=text, model=data.get("model", settings.model), input_tokens=usage.get("prompt_tokens"),
+                     output_tokens=usage.get("completion_tokens"), truncated=choice.get("finish_reason") == "length")
+
+
+def openai_models(url: str, key: str) -> list[str]:
+    """Chat models the key can use at that address (listing costs nothing and sends no text)."""
+    import requests
+    r = requests.get(f"{url.rstrip('/')}/models", headers={"Authorization": f"Bearer {key}"} if key else {}, timeout=5)
+    r.raise_for_status()
+    ids = [m.get("id", "") for m in r.json().get("data", [])]
+    if "api.openai.com" in url:  # the list holds every OpenAI model: keep the ones that write text
+        skip = ("audio", "realtime", "transcribe", "tts", "search", "image", "embedding", "moderation", "instruct")
+        ids = [i for i in ids if i.startswith(("gpt-", "o1", "o3", "o4", "chatgpt-")) and not any(s in i for s in skip)]
+    return sorted(ids, reverse=True)
 
 
 # ---------------------------------------------------------------- Ollama (local)

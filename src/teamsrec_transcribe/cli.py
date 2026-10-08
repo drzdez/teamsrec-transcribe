@@ -54,6 +54,8 @@ def main(ctx: typer.Context,
          out_dir: Optional[Path] = typer.Option(None, "--out-dir", "-o", help="recordings folder"),
          verbose: bool = typer.Option(False, "--verbose", "-v")):
     _setup_logging(verbose)
+    from .settings import export_hf_token
+    export_hf_token()  # the token from the settings page, for pyannote / the model downloads
     cfg = load_config(config)
     ctx.obj = with_overrides(cfg, out_dir=out_dir.expanduser() if out_dir else None)
 

@@ -33,6 +33,9 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
   GET    /api/settings / PUT /api/settings             fields of the shared teamsrec.toml / {"values": {key: value}}
   PUT    /api/secrets/{name} / DELETE                  {"value"} an API key into / out of the Credential Manager
+  GET    /api/setup                                    the setup wizard: needed?, GPU, recommendations, Ollama, keys
+  POST   /api/setup/hf-check                           {"token"?} store the Hugging Face token, check model access
+  POST   /api/setup/done                               the wizard ran (it is not shown again)
   POST   /api/jobs/pause                               stop the running job for a recording (it resumes after it)
   POST   /api/jobs/continue                            let it run during the recording
   POST   /api/jobs/{id}/next                           a waiting job runs right after the current one
@@ -79,7 +82,7 @@ from .. import settings
 from ..config import Config, default_config_path
 from ..people import DISPLAY_MODES, People, Person
 from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
-                        summarize_as,
+                        summarize_as, SUMMARY_PROVIDERS,
                         summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
                         same_person_groups, set_meeting_link, unmerge_speakers)
@@ -509,7 +512,9 @@ def read_doc(rec: Recording, name: str) -> str:
 
 
 HELP_DOCS = {"user-guide": "user-guide.md", "install": "install.md", "privacy": "privacy.md"}
-DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"  # the source checkout; an installed wheel has no docs
+DOCS_DIR = Path(__file__).resolve().parents[3] / "docs"  # the source checkout
+if not DOCS_DIR.is_dir():
+    DOCS_DIR = Path(__file__).resolve().parents[1] / "docs"  # the installed package (force-include in pyproject)
 DOCS_URL = "https://github.com/drzdez/teamsrec-transcribe/blob/main/docs/"
 
 
@@ -1188,6 +1193,9 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", r"/api/people/merge", "merge_people"),
     ("GET", r"/api/people/(?P<pid>[^/]+)", "person"),
     ("DELETE", r"/api/people/(?P<pid>[^/]+)/voiceprints", "forget_prints"),
+    ("GET", r"/api/setup", "setup"),
+    ("POST", r"/api/setup/hf-check", "setup_hf_check"),
+    ("POST", r"/api/setup/done", "setup_done"),
     ("GET", r"/api/settings", "settings"),
     ("PUT", r"/api/settings", "save_settings"),
     ("GET", r"/api/settings/models", "settings_models"),
@@ -1366,8 +1374,8 @@ def _handler(state: ReviewState, server_ref: dict):
         def r_summarize_as(self, q, body, stem):
             rec = self._recording(stem)
             provider, model = str(body.get("provider") or "").strip(), str(body.get("model") or "").strip()
-            if provider not in ("ollama", "anthropic") or not model:
-                raise ValueError("provider (ollama | anthropic) and model are needed")
+            if provider not in SUMMARY_PROVIDERS or not model:
+                raise ValueError("provider (ollama | anthropic | openai) and model are needed")
             job, position = state.run_job("summary", ["run-job", "summarize-as", rec.stem, "--provider", provider,
                                                       "--model", model],
                                           f"zápis {model} hotový", rec.stem, start=f"{rec.stem}: zápis {model} se generuje")
@@ -1452,6 +1460,28 @@ def _handler(state: ReviewState, server_ref: dict):
 
         # ---- server
         # ---- settings (shared teamsrec.toml) and API keys; key values never come back
+        def r_setup(self, q, body):
+            from .. import setup
+            if (q.get("needed") or [""])[0] in ("1", "true"):  # the page's start: no probing of GPU or Ollama
+                self._json({"needed": setup.needed(state.settings_path)})
+                return
+            self._json(setup.status(settings.read_values(state.settings_path), state.settings_path))
+
+        def r_setup_hf_check(self, q, body):
+            """Store the token (if given) and check that it can download the diarization model."""
+            from .. import setup
+            token = str(body.get("token") or "").strip()
+            if token:
+                settings.set_secret("huggingface", token)
+            repo = str(settings.read_values(state.settings_path).get("transcribe.diarize_model") or "")
+            self._json(setup.hf_access(repo, token or settings.get_secret("huggingface") or settings.hf_login_token()))
+
+        def r_setup_done(self, q, body):
+            from .. import setup
+            setup.mark_done(state.settings_path)
+            state.event("průvodce nastavením dokončen", "ok")
+            self._json({"ok": True})
+
         def r_settings(self, q, body):
             self._json(settings.describe(state.settings_path))
 

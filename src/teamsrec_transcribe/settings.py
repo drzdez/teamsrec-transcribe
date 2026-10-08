@@ -152,8 +152,8 @@ SECTIONS: tuple[Section, ...] = (
         Field("summarize.enabled", "Dělat zápis", "bool", _d(S, "enabled"), "Součást zpracování nahrávky."),
         Field("summarize.provider", "Služba", "enum", _d(S, "provider"),
               "Claude potřebuje klíč (Klíče API nahoře).",
-              choices=("ollama", "anthropic"),
-              labels=("Ollama – v tomto počítači (grafická karta)", "Claude – cloud")),
+              choices=("ollama", "anthropic", "openai"),
+              labels=("Ollama – v tomto počítači (grafická karta)", "Claude – cloud", "OpenAI – cloud")),
         Field("summarize.model", "Model", "str", _d(S, "model"),
               "Nabídka podle zvolené služby: modely Ollamy v tomto počítači, nebo modely Claude dostupné pro váš klíč.",
               suggest="summary"),
@@ -163,6 +163,8 @@ SECTIONS: tuple[Section, ...] = (
         Field("summarize.compare", "Porovnávací zápisy", "list", _d(S, "compare"),
               "Další zápisy pro porovnání, např. anthropic:claude-opus-5-5 (jeden na řádek). Vzniknou při zpracování i při přegenerování zápisu; na stránce se přepínají nad zápisem.",
               suggest="compare"),
+        Field("summarize.openai_url", "Adresa API (OpenAI)", "str", _d(S, "openai_url"),
+              "Pro službu OpenAI. Jiné služby se stejným API (Gemini, Mistral, OpenRouter, LM Studio) zatím nejsou ověřené."),
         Field("summarize.ollama_url", "Adresa Ollamy", "str", _d(S, "ollama_url")),
         Field("summarize.ollama_think", "Ollama: přemýšlení", "bool", _d(S, "ollama_think"),
               "Pomalejší, někdy lepší."),
@@ -198,9 +200,29 @@ class Secret:
 
 SECRETS: dict[str, Secret] = {s.name: s for s in (
     Secret("anthropic", "Claude (Anthropic)", ("TEAMSREC_ANTHROPIC_API_KEY",), "zápis přes Claude"),
-    Secret("openai", "OpenAI", ("TEAMSREC_OPENAI_API_KEY", "OPENAI_API_KEY"), "přepis přes OpenAI"),
+    Secret("openai", "OpenAI", ("TEAMSREC_OPENAI_API_KEY", "OPENAI_API_KEY"), "přepis nebo zápis přes OpenAI"),
     Secret("elevenlabs", "ElevenLabs", ("TEAMSREC_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY"), "přepis přes ElevenLabs"),
+    Secret("huggingface", "Hugging Face (token)", ("HF_TOKEN", "HUGGING_FACE_HUB_TOKEN"),
+           "lokální rozlišení mluvčích (pyannote) – stažení modelu po přijetí licence"),
 )}
+
+
+def hf_login_token() -> str:
+    """The token `hf auth login` saved (HF_HOME/token, default ~/.cache/huggingface/token), or ""."""
+    home = Path(os.environ.get("HF_HOME") or Path.home() / ".cache" / "huggingface")
+    try:
+        return (home / "token").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def export_hf_token() -> None:
+    """The Hugging Face token stored on the settings page, for the libraries that read HF_TOKEN (pyannote,
+    huggingface_hub). A token from `hf auth login` (its own file) keeps working without it."""
+    if not os.environ.get("HF_TOKEN") and not os.environ.get("HUGGING_FACE_HUB_TOKEN"):
+        token = _vault_get("huggingface")
+        if token:
+            os.environ["HF_TOKEN"] = token
 
 
 class SettingsError(ValueError):
@@ -590,6 +612,15 @@ def claude_models(live: bool = False) -> list[str] | None:
     return _cached("claude:" + key[-6:], fetch, live)
 
 
+def openai_chat_models(url: str, live: bool = False) -> list[str] | None:
+    """Chat models of the OpenAI (compatible) API for its key; [] without a key."""
+    from .llm import openai_key, openai_models
+    key = openai_key(url)
+    if not key and "api.openai.com" in url:
+        return []
+    return _cached("openai:" + url + ":" + key[-6:], lambda: openai_models(url, key), live)
+
+
 def hf_cached() -> set[str]:
     """Hugging Face repos in the local cache, as "org/name" (models--Systran--faster-whisper-large-v3 ->
     Systran/faster-whisper-large-v3)."""
@@ -628,14 +659,23 @@ def suggestions(values: dict[str, Any], live: bool = False) -> dict[str, Any]:
         if m and m not in claude_ids:  # the configured Claude models, also before the list is loaded
             claude_ids.append(m)
     claude = [_opt(m, "cloud (Claude API)") for m in claude_ids]
+    openai_url = str(values.get("summarize.openai_url") or _d(S, "openai_url"))
+    openai_known = openai_chat_models(openai_url, live)
+    openai_ids = list(openai_known or [])
+    for m in [c.partition(":")[2] for c in compare if c.startswith("openai:")] + (
+            [str(values.get("summarize.model") or "")] if values.get("summarize.provider") == "openai" else []):
+        if m and m not in openai_ids:
+            openai_ids.append(m)
+    openai_chat = [_opt(m, "cloud (OpenAI)") for m in openai_ids]
     return {
         "language": [_opt(v, n) for v, n in LANGUAGES],
         "whisper": whisper,
         "diarize": diarize,
         "openai": [_opt(v, "cloud (OpenAI)") for v in OPENAI],
         "elevenlabs": [_opt(v, "cloud (ElevenLabs)") for v in ELEVENLABS],
-        "summary": {"ollama": ollama_opts, "anthropic": claude},
+        "summary": {"ollama": ollama_opts, "anthropic": claude, "openai": openai_chat},
         "compare": [_opt("anthropic:" + o["value"], o["note"]) for o in claude]
+                   + [_opt("openai:" + o["value"], o["note"]) for o in openai_chat]
                    + [_opt("ollama:" + o["value"], o["note"], o["local"]) for o in ollama_opts],
         "ollama_ready": bool(ollama),
         "models_loaded": ollama_known is not None and claude_known is not None,

@@ -76,6 +76,15 @@ def test_review_page(script, tmp_path, monkeypatch):
     # the settings page edits a throw-away config and a fake key vault, never the real ones
     cfg_file = tmp_path / "teamsrec.toml"
     cfg_file.write_text(TOML, encoding="utf-8")
+    if script != "wizard.test.mjs":  # the setup wizard would cover the page; its own test sees it
+        (tmp_path / "setup-done").write_text("", encoding="utf-8")
+    else:  # a fresh install: no name yet (an existing configuration does not get the wizard by itself)
+        cfg_file.write_text(TOML.replace('name = "Jan Novák"  # your name', 'name = ""  # your name'), encoding="utf-8")
+    from teamsrec_transcribe import setup
+    monkeypatch.setattr(setup, "gpu", lambda: {"name": "NVIDIA GeForce RTX 4070 Laptop GPU", "vram_gb": 8})
+    monkeypatch.setattr(setup, "ollama_running", lambda url: False)
+    monkeypatch.setattr(settings, "hf_login_token", lambda: "")
+    monkeypatch.setattr(setup, "hf_access", lambda repo, token: {"ok": token == "hf_good", "message": "ok" if token == "hf_good" else "Token neplatí"})
     monkeypatch.setenv("TEAMSREC_CONFIG", str(cfg_file))
     vault = FakeVault()
     monkeypatch.setattr(settings, "_keyring", lambda: vault)

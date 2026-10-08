@@ -9,11 +9,17 @@
 //!   4. stops the server it started when the window closes (the server refuses while a job still runs; it then
 //!      ends by itself once the job is done and no page is left).
 //!
+//! In the installed suite (`transcribe\` and `uv.exe` next to this exe) the server runs from the suite's own Python
+//! environment, which the first start creates and an update refreshes (env.rs), with uv's progress in the window.
+//!
 //! `teamsrec-review.exe --browser` opens the page in the default browser instead and exits (the tray icon of
 //! teamsrec-capture uses it when `[capture] tray_open = "web"`). A second start of the window only brings the open
-//! window to the front. `--settings` opens the page's Nastavení (the tray's Settings…), in either case.
+//! window to the front. `--settings` opens the page's Nastavení (the tray's Settings…), `--wizard` its setup wizard
+//! (the tray's Setup wizard…), in either case.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+mod env;
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -22,14 +28,25 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use tauri::{Manager, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
+use tauri::{Manager, State, Url, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 
 /// desktop/src-tauri of the checkout this was built from: the server command is found next to it
 const MANIFEST_DIR: &str = env!("CARGO_MANIFEST_DIR");
 const START_TIMEOUT: Duration = Duration::from_secs(90); // the first start imports torch & co.
 
 #[cfg(windows)]
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+pub(crate) const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn exe_dir() -> PathBuf {
+    std::env::current_exe().ok().and_then(|p| p.parent().map(PathBuf::from)).unwrap_or_default()
+}
+
+/// The installed suite: (its uv, its project, the environment) – None in a source checkout.
+fn suite() -> Option<(PathBuf, PathBuf, PathBuf)> {
+    let dir = exe_dir();
+    let project = env::bundled_project(&dir)?;
+    Some((dir.join(if cfg!(windows) { "uv.exe" } else { "uv" }), project, env::env_dir(&env::home())))
+}
 
 fn lock_path() -> PathBuf {
     std::env::temp_dir().join("teamsrec-review.json")
@@ -67,13 +84,16 @@ fn alive(base: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// How to start the server: $TEAMSREC_TRANSCRIBE_CMD, else bin\teamsrec-transcribe.cmd of the checkout this was
-/// built from (it runs the checkout's venv), else `teamsrec-transcribe` on PATH.
+/// How to start the server: $TEAMSREC_TRANSCRIBE_CMD (a developer's checkout), else the installed suite's
+/// environment, else bin\teamsrec-transcribe.cmd of the checkout this was built from (it runs the checkout's
+/// venv), else `teamsrec-transcribe` on PATH.
 fn server_command() -> Command {
-    let exe = std::env::var("TEAMSREC_TRANSCRIBE_CMD").ok().map(PathBuf::from).or_else(|| {
-        let cmd = PathBuf::from(MANIFEST_DIR).join("..").join("..").join("bin").join("teamsrec-transcribe.cmd");
-        cmd.exists().then_some(cmd)
-    });
+    let exe = std::env::var("TEAMSREC_TRANSCRIBE_CMD").ok().map(PathBuf::from)
+        .or_else(|| suite().map(|(_, _, env)| env::server_exe(&env)))
+        .or_else(|| {
+            let cmd = PathBuf::from(MANIFEST_DIR).join("..").join("..").join("bin").join("teamsrec-transcribe.cmd");
+            cmd.exists().then_some(cmd)
+        });
     let mut c = match exe {
         Some(p) if p.extension().is_some_and(|e| e.eq_ignore_ascii_case("cmd") || e.eq_ignore_ascii_case("bat")) => {
             let mut c = Command::new("cmd");
@@ -88,6 +108,11 @@ fn server_command() -> Command {
         }
     };
     c.args(["review", "--no-browser"]);
+    // the suite's own ffmpeg for the server and its jobs (a developer's TEAMSREC_FFMPEG_DIR or PATH wins)
+    let ff = exe_dir().join("ffmpeg");
+    if std::env::var_os("TEAMSREC_FFMPEG_DIR").is_none() && ff.join("ffmpeg.exe").exists() {
+        c.env("TEAMSREC_FFMPEG_DIR", ff);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -147,16 +172,86 @@ fn open_external(url: &Url) {
     }
 }
 
-fn show_error(window: &WebviewWindow, text: &str) {
-    let js = format!(
-        "var m = document.getElementById('msg'); if (m) {{ m.className = 'err'; m.textContent = {}; }}",
-        serde_json::Value::String(text.to_string())
-    );
-    let _ = window.eval(&js);
+fn js_str(text: &str) -> String {
+    serde_json::Value::String(text.to_string()).to_string()
 }
 
-fn wants_settings(args: &[String]) -> bool {
-    args.iter().skip(1).any(|a| a == "--settings")
+fn show_error(window: &WebviewWindow, text: &str) {
+    let _ = window.eval(&format!("typeof showError === 'function' && showError({})", js_str(text)));
+}
+
+/// What the start screen shows while the environment is being prepared.
+fn show_progress(window: &WebviewWindow, headline: &str, line: Option<&str>) {
+    let line = line.map(js_str).unwrap_or_else(|| "null".into());
+    let _ = window.eval(&format!("typeof showProgress === 'function' && showProgress({}, {line})", js_str(headline)));
+}
+
+/// What the window needs to (re)start: the server it shows, whether it started it, what to open.
+struct Shared {
+    server: Arc<Mutex<Option<String>>>,
+    started_here: Arc<Mutex<bool>>,
+    open: Option<&'static str>,
+    stem: Option<String>,
+}
+
+const FIRST_START: &str = "První spuštění: připravuji prostředí pro zpracování hlasu (Python, PyTorch, WhisperX, \
+    pyannote – asi 4–6 GB). Podle připojení 5–20 minut; okno nechte otevřené.";
+const AFTER_UPDATE: &str = "Po aktualizaci: doplňuji prostředí pro zpracování hlasu (stahuje se jen to, co se změnilo).";
+
+/// The suite's environment when it is missing or from an older build, then the server, then the page.
+fn start(window: WebviewWindow, shared: &Shared) {
+    if std::env::var_os("TEAMSREC_TRANSCRIBE_CMD").is_none() {
+        if let Some((uv, project, envdir)) = suite() {
+            if !env::is_current(&project, &envdir) {
+                let headline = if env::server_exe(&envdir).exists() { AFTER_UPDATE } else { FIRST_START };
+                show_progress(&window, headline, None);
+                if let Err(e) = env::sync(&uv, &project, &envdir, |l| show_progress(&window, headline, Some(l))) {
+                    show_error(&window, &format!("Prostředí se nepodařilo připravit:\n{e}"));
+                    return;
+                }
+                show_progress(&window, "Prostředí je připravené, spouštím stránku…", None);
+            }
+        }
+    }
+    match ensure_server() {
+        Ok((url, started)) => {
+            if let Ok(mut s) = shared.server.lock() {
+                *s = Some(url.clone());
+            }
+            if let Ok(mut s) = shared.started_here.lock() {
+                *s = started;
+            }
+            let extra = shared.open.map(|o| format!("&open={o}")).unwrap_or_default();
+            let hash = shared.stem.as_ref().map(|s| format!("#{s}")).unwrap_or_default();
+            match Url::parse(&format!("{url}/?app=desktop{extra}{hash}")) {
+                Ok(page) => {
+                    if let Err(e) = window.navigate(page) {
+                        show_error(&window, &format!("Stránku se nepodařilo otevřít: {e}"));
+                    }
+                }
+                Err(e) => show_error(&window, &format!("Neplatná adresa serveru {url}: {e}")),
+            }
+        }
+        Err(msg) => show_error(&window, &msg),
+    }
+}
+
+/// "Zkusit znovu" on the start screen after a failed preparation (no internet, a full disk).
+#[tauri::command]
+fn retry(window: WebviewWindow, shared: State<'_, Arc<Shared>>) {
+    let shared = shared.inner().clone();
+    std::thread::spawn(move || start(window, &shared));
+}
+
+/// What the page opens over the recordings: Nastavení (--settings) or the setup wizard (--wizard).
+fn open_target(args: &[String]) -> Option<&'static str> {
+    if args.iter().skip(1).any(|a| a == "--wizard") {
+        Some("wizard")
+    } else if args.iter().skip(1).any(|a| a == "--settings") {
+        Some("settings")
+    } else {
+        None
+    }
 }
 
 /// `--open <stem>`: the recording to show (a click on the "Saved …" balloon of the capture app). Only characters a
@@ -168,8 +263,8 @@ fn open_stem(args: &[String]) -> Option<String> {
 }
 
 /// `--browser`: the page in the default browser, no window. The server stays until the browser tab closes.
-fn open_in_browser(settings: bool, stem: Option<String>) {
-    let query = if settings { "?open=settings" } else { "" };
+fn open_in_browser(open: Option<&str>, stem: Option<String>) {
+    let query = open.map(|o| format!("?open={o}")).unwrap_or_default();
     let hash = stem.map(|s| format!("#{s}")).unwrap_or_default();
     match ensure_server().and_then(|(url, _)| Url::parse(&format!("{url}/{query}{hash}")).map_err(|e| e.to_string())) {
         Ok(page) => open_external(&page),
@@ -179,25 +274,35 @@ fn open_in_browser(settings: bool, stem: Option<String>) {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let settings = wants_settings(&args);
+    let open = open_target(&args);
     let stem = open_stem(&args);
-    if args.iter().skip(1).any(|a| a == "--browser") {
-        open_in_browser(settings, stem);
+    // --browser needs a ready environment; a first start or an update prepares it in the window instead
+    let env_ready = std::env::var_os("TEAMSREC_TRANSCRIBE_CMD").is_some()
+        || suite().is_none_or(|(_, project, envdir)| env::is_current(&project, &envdir));
+    if args.iter().skip(1).any(|a| a == "--browser") && env_ready {
+        open_in_browser(open, stem);
         return;
     }
     // the server this window shows (for the navigation filter) and whether this program started it
     let server: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
     let started_here = Arc::new(Mutex::new(false));
 
+    let shared = Arc::new(Shared { server: server.clone(), started_here: started_here.clone(), open,
+                                   stem: stem.clone() });
+
     tauri::Builder::default()
+        .manage(shared.clone())
+        .invoke_handler(tauri::generate_handler![retry])
         // a second start (the tray icon, the Start menu) brings the open window to the front
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.show();
                 let _ = w.set_focus();
-                if wants_settings(&args) {
-                    let _ = w.eval("typeof openSettings === 'function' && openSettings()");
+                match open_target(&args) {
+                    Some("settings") => { let _ = w.eval("typeof openSettings === 'function' && openSettings()"); }
+                    Some("wizard") => { let _ = w.eval("typeof openWizard === 'function' && openWizard()"); }
+                    _ => {}
                 }
                 if let Some(stem) = open_stem(&args) {
                     let _ = w.eval(&format!("location.hash = '{stem}'")); // the page switches on hashchange
@@ -236,27 +341,8 @@ fn main() {
                     }
                 });
 
-                std::thread::spawn(move || match ensure_server() {
-                    Ok((url, started)) => {
-                        if let Ok(mut s) = server.lock() {
-                            *s = Some(url.clone());
-                        }
-                        if let Ok(mut s) = started_here.lock() {
-                            *s = started;
-                        }
-                        let extra = if settings { "&open=settings" } else { "" };
-                        let hash = stem.as_ref().map(|s| format!("#{s}")).unwrap_or_default();
-                        match Url::parse(&format!("{url}/?app=desktop{extra}{hash}")) {
-                            Ok(page) => {
-                                if let Err(e) = window.navigate(page) {
-                                    show_error(&window, &format!("Stránku se nepodařilo otevřít: {e}"));
-                                }
-                            }
-                            Err(e) => show_error(&window, &format!("Neplatná adresa serveru {url}: {e}")),
-                        }
-                    }
-                    Err(msg) => show_error(&window, &msg),
-                });
+                let shared = shared.clone();
+                std::thread::spawn(move || start(window, &shared));
                 Ok(())
             }
         })
@@ -279,6 +365,9 @@ mod tests {
         assert_eq!(open_stem(&a(&["x.exe", "--open", "a'; alert(1); '"])), None);
         assert_eq!(open_stem(&a(&["x.exe", "--open"])), None);
         assert_eq!(open_stem(&a(&["x.exe", "--settings"])), None);
+        assert_eq!(open_target(&a(&["x.exe", "--settings"])), Some("settings"));
+        assert_eq!(open_target(&a(&["x.exe", "--wizard"])), Some("wizard"));
+        assert_eq!(open_target(&a(&["x.exe", "--open", "x"])), None);
     }
 
     #[test]

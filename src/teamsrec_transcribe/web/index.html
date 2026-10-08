@@ -65,6 +65,23 @@
                       padding: 10px 0; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #settings .setBar .meta { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
   #settingsMain { max-width: 1000px; margin: 0 auto; }
+  #wizard { position: fixed; inset: 0; background: var(--bg); overflow-y: auto; z-index: 40; padding: 16px 20px 40px; }
+  #wizard .setBar { display: flex; gap: 12px; align-items: center; max-width: 900px; margin: 0 auto 10px; }
+  #wizard .wizStepList { flex: 1 1 auto; display: flex; gap: 10px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+  #wizard .wizStepList .on { color: var(--fg); font-weight: 600; }
+  #wizard .wizStepList .done { color: var(--ok); }
+  #wizardMain { max-width: 900px; margin: 0 auto; }
+  #wizard .help { display: block; color: var(--muted); font-size: 13px; margin-top: 2px; }
+  #wizard .ok { color: var(--ok); } #wizard .err { color: var(--err); }
+  .wizNav { max-width: 900px; margin: 16px auto 0; display: flex; justify-content: space-between; }
+  .wizChoice { display: flex; flex-direction: column; gap: 6px; }
+  .wizOpt { display: block; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+  .wizOpt.on { border-color: var(--accent); }
+  .wizInline { display: flex; gap: 8px; align-items: center; }
+  .wizInline input { flex: 1 1 auto; }
+  .wizLangs { display: flex; gap: 6px 14px; flex-wrap: wrap; padding-top: 7px; }
+  .wizSteps { margin: 0 0 8px; padding-left: 20px; } .wizSummary li { margin: 4px 0; }
+  .wizCheck { font-weight: 600; cursor: pointer; }
   .card.setSec { display: block; padding: 16px 20px; }  /* not the two-column grid of a speaker card */
   .setSec h2 { font-size: 16px; margin: 0 0 4px; }
   .setSec .note { color: var(--muted); font-size: 13px; margin: 0 0 8px; max-width: 80ch; }
@@ -387,10 +404,23 @@
   <div class="setBar">
     <strong>Nastavení</strong>
     <span class="meta" id="settingsPath"></span>
+    <button id="wizardOpen" type="button" class="play" title="krok za krokem: složka, přepis, mluvčí, zápisy">Průvodce…</button>
     <button id="settingsSave" type="button" class="primary">Uložit nastavení</button>
     <button id="settingsClose" type="button" class="play">✕ Zavřít (Esc)</button>
   </div>
   <main id="settingsMain"></main>
+</div>
+<div id="wizard" hidden>
+  <div class="setBar">
+    <strong>Průvodce nastavením</strong>
+    <span class="meta wizStepList" id="wizardSteps"></span>
+    <button id="wizardSkip" type="button" class="play" title="nastavení zůstane, jak je; průvodce jde otevřít v Nastavení">Přeskočit</button>
+  </div>
+  <main id="wizardMain" class="setSec"></main>
+  <div class="wizNav">
+    <button id="wizardBack" type="button" class="play">← Zpět</button>
+    <button id="wizardNext" type="button" class="primary-btn">Další →</button>
+  </div>
 </div>
 <div id="help" hidden>
   <div class="helpBar">
@@ -2498,7 +2528,7 @@ let settingsCloseArmed = false;
 const KEY_STATE = { env: "✓ proměnná prostředí", vault: "✓ uložen ve Správci", missing: "chybí" };
 /** which setting needs which key: [field key, value, secret] */
 const NEEDS_KEY = [["transcribe.provider", "openai", "openai"], ["transcribe.provider", "elevenlabs", "elevenlabs"],
-                   ["summarize.provider", "anthropic", "anthropic"]];
+                   ["summarize.provider", "anthropic", "anthropic"], ["summarize.provider", "openai", "openai"]];
 
 async function openSettings() {
   settingsBox.hidden = false;
@@ -2595,7 +2625,7 @@ function loadLiveModels(/** @type {boolean} */ quiet = false) {
     refreshSummaryModels();
     refreshCompareAdder();
     const s = r.suggestions.summary;
-    setStatus(`modely načteny: Ollama ${s.ollama.filter((/** @type {SetOption} */ o) => o.local).length}, Claude ${s.anthropic.length}`, "ok");
+    setStatus(`modely načteny: Ollama ${s.ollama.filter((/** @type {SetOption} */ o) => o.local).length}, Claude ${s.anthropic.length}, OpenAI ${(s.openai || []).length}`, "ok");
   }).catch(e => setStatus(String(e), "err")).finally(() => { modelsLoading = null; });
   return modelsLoading;
 }
@@ -2861,7 +2891,9 @@ window.addEventListener("beforeunload", ev => { if (settingsDirty().length) { ev
 // click confirms), generate another one with any model. The order is remembered per recording in this browser.
 /** @typedef {{file:string,label:string,provider:string,model:string,created:string,main:boolean}} SummaryDoc */
 /** @type {string} */ let activeSum = "";
-/** @type {{ollama:any[],anthropic:any[],default:{provider:string,model:string}}|null} */ let summaryModels = null;
+/** @type {{ollama:any[],anthropic:any[],openai?:any[],default:{provider:string,model:string}}|null} */ let summaryModels = null;
+/** @type {Record<string, string>} */
+const PROVIDER_LABEL = { ollama: "Ollama (v tomto počítači)", anthropic: "Claude (cloud)", openai: "OpenAI (cloud)" };
 
 function sumPrefs(/** @type {string} */ stem) {
   try { return JSON.parse(localStorage.getItem("teamsrec.sumtabs." + stem) || "") || { order: [] }; }
@@ -2955,7 +2987,7 @@ function renderSumBar() {
     again.textContent = `Přegenerovat „${active.label}“`;
     again.onclick = () => generateSummary(active.provider, active.model);
     confirmFirst(again, `Potvrdit přegenerování „${active.label}“`,
-                 `zápis „${active.label}“ se přepíše novým (${active.provider === "anthropic" ? "Claude, cloud" : "lokálně, 1–3 min"}) – potvrďte, nebo Zrušit`);
+                 `zápis „${active.label}“ se přepíše novým (${active.provider === "ollama" ? "lokálně, 1–3 min" : PROVIDER_LABEL[active.provider]}) – potvrďte, nebo Zrušit`);
     tools.appendChild(again);
   }
   if (active) {
@@ -2976,7 +3008,8 @@ function renderSumBar() {
   setCombo(model, other, [], "");
   const fill = (/** @type {any} */ m) => {
     const groups = [{ label: "Ollama – v tomto počítači", items: m.ollama.map((/** @type {SetOption} */ o) => ({ ...o, value: "ollama:" + o.value })) },
-                    { label: "Claude – cloud (text přepisu jde ven)", items: m.anthropic.map((/** @type {SetOption} */ o) => ({ ...o, value: "anthropic:" + o.value, note: "" })) }];
+                    { label: "Claude – cloud (text přepisu jde ven)", items: m.anthropic.map((/** @type {SetOption} */ o) => ({ ...o, value: "anthropic:" + o.value, note: "" })) },
+                    { label: "OpenAI – cloud (text přepisu jde ven)", items: (m.openai || []).map((/** @type {SetOption} */ o) => ({ ...o, value: "openai:" + o.value, note: "" })) }];
     const current = model.options.length > 1 ? comboValue(model) : "";
     setCombo(model, other, groups, current || (m.default && m.default.model ? `${m.default.provider}:${m.default.model}` : ""));
   };
@@ -2988,7 +3021,7 @@ function renderSumBar() {
   for (const d of shown) {
     const t = document.createElement("div"); t.className = "sumTab" + (d.file === activeSum ? " active" : "");
     t.draggable = true; t.dataset.file = d.file; t.tabIndex = 0;
-    t.title = [d.provider === "anthropic" ? "Claude (cloud)" : d.provider === "ollama" ? "Ollama (v tomto počítači)" : "",
+    t.title = [PROVIDER_LABEL[d.provider] || "",
                d.created ? "vytvořeno " + d.created.replace("T", " ") : "", "přetažením změníte pořadí"].filter(Boolean).join(" · ");
     const label = document.createElement("span"); label.textContent = d.label;
     t.appendChild(label);
@@ -3040,14 +3073,14 @@ async function deleteSummary(/** @type {SummaryDoc} */ d) {
 
 async function generateSummary(/** @type {string} */ provider, /** @type {string} */ model) {
   if (!review) return;
-  if (!["ollama", "anthropic"].includes(provider) || !model) { setStatus("zadejte službu a model, např. ollama:gemma4:31b nebo anthropic:claude-opus-5-5", "err"); return; }
+  if (!["ollama", "anthropic", "openai"].includes(provider) || !model) { setStatus("zadejte službu a model, např. ollama:gemma4:31b, anthropic:claude-opus-5-5 nebo openai:gpt-5", "err"); return; }
   const stem = review.stem;
   /** @type {any} */ let r;
   try { r = await api(recUrl(stem, "summaries"), send("POST", { provider, model })); }
   catch (e) { setStatus(String(e), "err"); return; }
   const file = r.file;
   setBusy(true);
-  setStatus(`zápis ${model} se generuje${provider === "anthropic" ? " (Claude, text přepisu jde do cloudu)" : " (lokálně, 1–3 min)"}`, "busy");
+  setStatus(`zápis ${model} se generuje${provider === "ollama" ? " (lokálně, 1–3 min)" : ` (${PROVIDER_LABEL[provider]}, text přepisu jde do cloudu)`}`, "busy");
   queuedNote(r, `zápis ${model}`);
   let error = "";
   try { error = await waitForJob(r.job); } catch (e) { error = String(e); } finally { setBusy(false); }
@@ -3216,8 +3249,289 @@ window.addEventListener("hashchange", async () => {
   await loadRecording(stem);
 });
 
+// ---------------------------------------------------------------- setup wizard (first start of the installed suite)
+
+/** The wizard writes the same settings as Nastavení (PUT /api/settings, keys via /api/secrets); the server
+ * recommends by the GPU (setup.py). Shown once (POST /api/setup/done), again from Nastavení → Průvodce. */
+const wizardBox = /** @type {HTMLElement} */ ($("wizard"));
+const wizardMain = /** @type {HTMLElement} */ ($("wizardMain"));
+const WIZ_LANGS = [["cs", "čeština"], ["sk", "slovenština"], ["en", "angličtina"], ["de", "němčina"], ["pl", "polština"],
+                   ["hu", "maďarština"], ["uk", "ukrajinština"]];
+/** @type {any} */ let wiz = null;
+
+async function openWizard() {
+  /** @type {any} */ let st;
+  try { st = await api("/api/setup"); } catch (e) { setStatus(String(e), "err"); return; }
+  const v = st.values;
+  const rec = st.recommend || {};
+  const langs = /** @type {string[]} */ (v["transcribe.languages"] || []);
+  wiz = {
+    st, step: 0, hfOk: st.secrets.huggingface !== "missing" ? null : false,
+    v: {
+      "recordings.out_dir": v["recordings.out_dir"], "user.name": v["user.name"],
+      "transcribe.languages": langs.length ? langs : ["cs"], "summarize.language": v["summarize.language"] || "cs",
+      "transcribe.provider": rec.local === false && v["transcribe.provider"] === "whisperx" ? "elevenlabs" : v["transcribe.provider"],
+      "transcribe.diarize": v["transcribe.diarize"],
+      "summarize.enabled": v["summarize.enabled"], "summarize.provider": v["summarize.provider"],
+      "summarize.model": v["summarize.model"],
+      "voiceprints.enabled": v["voiceprints.enabled"], "calendar.outlook": v["calendar.outlook"],
+    },
+  };
+  wizardBox.hidden = false;
+  renderWizard();
+}
+
+function closeWizard() { wizardBox.hidden = true; wiz = null; }
+
+const WIZ_STEPS = ["Vítejte", "Přepis a mluvčí", "Zápisy", "Soukromí", "Hotovo"];
+
+function renderWizard() {
+  if (!wiz) return;
+  const s = wiz.step;
+  $("wizardSteps").innerHTML = WIZ_STEPS.map((t, i) =>
+    `<span class="${i === s ? "on" : i < s ? "done" : ""}">${i + 1}. ${escapeHtml(t)}</span>`).join("");
+  wizardMain.innerHTML = "";
+  [wizWelcome, wizTranscribe, wizMinutes, wizPrivacy, wizDone][s]();
+  /** @type {HTMLButtonElement} */ ($("wizardBack")).disabled = s === 0;
+  $("wizardNext").textContent = s === WIZ_STEPS.length - 1 ? "Uložit a začít" : "Další →";
+}
+
+/** a labelled row in the wizard */
+function wizRow(/** @type {string} */ label, /** @type {Node|string} */ ctl, /** @type {string=} */ help) {
+  const row = document.createElement("div"); row.className = "setRow";
+  const l = document.createElement("label"); l.textContent = label; row.appendChild(l);
+  const c = document.createElement("div"); c.className = "setCtl";
+  if (typeof ctl === "string") c.innerHTML = ctl; else c.appendChild(ctl);
+  if (help) { const h = document.createElement("div"); h.className = "help"; h.textContent = help; c.appendChild(h); }
+  row.appendChild(c);
+  wizardMain.appendChild(row);
+  return c;
+}
+
+function wizText(/** @type {string} */ key, /** @type {string=} */ placeholder) {
+  const i = document.createElement("input"); i.type = "text"; i.value = String(wiz.v[key] ?? ""); i.placeholder = placeholder || "";
+  i.oninput = () => { wiz.v[key] = i.value; };
+  return i;
+}
+
+/** radio choices; the selected one may show more below it (detail) */
+function wizChoice(/** @type {string} */ name, /** @type {[string, string, string?][]} */ opts, /** @type {string} */ value,
+                   /** @type {(v: string) => void} */ onPick) {
+  const box = document.createElement("div"); box.className = "wizChoice";
+  for (const [val, label, note] of opts) {
+    const l = document.createElement("label"); l.className = "wizOpt" + (val === value ? " on" : "");
+    l.innerHTML = `<input type="radio" name="${escapeHtml(name)}" value="${escapeHtml(val)}"${val === value ? " checked" : ""}> ` +
+      `<b>${escapeHtml(label)}</b>${note ? `<span class="help">${escapeHtml(note)}</span>` : ""}`;
+    /** @type {HTMLInputElement} */ (l.querySelector("input")).onchange = () => { onPick(val); renderWizard(); };
+    box.appendChild(l);
+  }
+  return box;
+}
+
+/** a key field for a cloud service: stored right away in the vault (never sent back) */
+function wizKey(/** @type {string} */ name, /** @type {string} */ label) {
+  const state = wiz.st.secrets[name];
+  const c = document.createElement("div");
+  if (state && state !== "missing") {
+    c.innerHTML = `<span class="ok">✓ klíč ${escapeHtml(label)} je nastavený</span>`;
+    return c;
+  }
+  const i = document.createElement("input"); i.type = "password"; i.placeholder = `klíč ${label}`; i.autocomplete = "off";
+  const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = "Uložit klíč";
+  const msg = document.createElement("span"); msg.className = "help";
+  b.onclick = async () => {
+    try {
+      await api(`/api/secrets/${name}`, send("PUT", { value: i.value }));
+      wiz.st.secrets[name] = "vault"; renderWizard();
+    } catch (e) { msg.textContent = String(e); }
+  };
+  c.append(i, " ", b, " ", msg);
+  return c;
+}
+
+function wizWelcome() {
+  wizardMain.insertAdjacentHTML("beforeend", `<p class="note">teamsrec nahrává hovory v Teams a z nahrávek dělá přepis, rozlišení
+    mluvčích a zápis. Pár otázek a je hotovo – všechno jde později změnit v Nastavení.</p>`);
+  const folder = wizText("recordings.out_dir");
+  const pickBtn = document.createElement("button"); pickBtn.type = "button"; pickBtn.className = "play"; pickBtn.textContent = "Vybrat…";
+  pickBtn.onclick = async () => {
+    try {
+      const r = await api("/api/system/pick-folder", send("POST", { initial: folder.value }));
+      if (r.folder) { folder.value = r.folder; wiz.v["recordings.out_dir"] = r.folder; }
+    } catch (e) { setStatus(String(e), "err"); }
+  };
+  const fc = document.createElement("div"); fc.className = "wizInline"; fc.append(folder, pickBtn);
+  wizRow("Složka nahrávek", fc, "Sem se ukládají nahrávky, přepisy a zápisy.");
+  wizRow("Vaše jméno", wizText("user.name", "Jan Novák"), "Vaše repliky (z mikrofonu) dostanou toto jméno.");
+  const lc = document.createElement("div"); lc.className = "wizLangs";
+  for (const [code, name] of WIZ_LANGS) {
+    const l = document.createElement("label");
+    l.innerHTML = `<input type="checkbox" value="${code}"${wiz.v["transcribe.languages"].includes(code) ? " checked" : ""}> ${escapeHtml(name)}`;
+    /** @type {HTMLInputElement} */ (l.querySelector("input")).onchange = e => {
+      const on = /** @type {HTMLInputElement} */ (e.target).checked;
+      const cur = /** @type {string[]} */ (wiz.v["transcribe.languages"]).filter(c => c !== code);
+      wiz.v["transcribe.languages"] = on ? [...cur, code] : cur;
+    };
+    lc.appendChild(l);
+  }
+  wizRow("Jazyky schůzek", lc, "Přepis pozná jazyk sám, ale jen z těchto (smíšené schůzky cs/sk zvládne po mluvčích).");
+  const sl = document.createElement("select");
+  sl.innerHTML = WIZ_LANGS.map(([c, n]) => `<option value="${c}"${wiz.v["summarize.language"] === c ? " selected" : ""}>${escapeHtml(n)}</option>`).join("");
+  sl.onchange = () => { wiz.v["summarize.language"] = sl.value; };
+  wizRow("Jazyk zápisu", sl);
+}
+
+function wizTranscribe() {
+  const rec = wiz.st.recommend || {};
+  wizardMain.insertAdjacentHTML("beforeend", `<p class="note">${escapeHtml(rec.why || "")}</p>`);
+  const prov = wiz.v["transcribe.provider"];
+  wizRow("Přepis", wizChoice("tprov", [
+    ["whisperx", "V tomto počítači (WhisperX)" + (rec.local ? " – doporučeno" : ""),
+     "Zvuk neopouští počítač. Model (asi 3 GB) se stáhne při prvním přepisu."],
+    ["elevenlabs", "ElevenLabs – cloud" + (rec.local === false ? " – doporučeno" : ""),
+     "Přesný přepis i rozlišení mluvčích; zvuk schůzky jde do ElevenLabs. Potřebuje klíč."],
+    ["openai", "OpenAI – cloud", "Přepis i rozlišení mluvčích; zvuk jde do OpenAI. Potřebuje klíč."],
+  ], prov, v => { wiz.v["transcribe.provider"] = v; }));
+  if (prov !== "whisperx") {
+    wizRow(`Klíč ${prov === "openai" ? "OpenAI" : "ElevenLabs"}`, wizKey(prov, prov === "openai" ? "OpenAI" : "ElevenLabs"));
+    return;
+  }
+  const repo = String(wiz.st.values["transcribe.diarize_model"] || "");
+  wizRow("Rozlišení mluvčích", wizChoice("diar", [
+    ["on", "Lokálně (pyannote)", "Kdo kdy mluví, v tomto počítači. Potřebuje účet Hugging Face (zdarma) a přijetí licence modelu."],
+    ["off", "Bez rozlišení", "Odliší jen vás (mikrofon) od ostatních; jména se pak doplňují jen z videa oken Teams."],
+  ], wiz.v["transcribe.diarize"] ? "on" : "off", v => { wiz.v["transcribe.diarize"] = v === "on"; }));
+  if (!wiz.v["transcribe.diarize"]) return;
+  const c = document.createElement("div");
+  const have = wiz.st.secrets.huggingface !== "missing";
+  c.innerHTML = `<ol class="wizSteps">
+      <li>Účet na <a href="https://huggingface.co/join" target="_blank">huggingface.co</a> (zdarma).</li>
+      <li>Na stránce modelu <a href="https://huggingface.co/${escapeHtml(repo)}" target="_blank">${escapeHtml(repo)}</a> přijměte podmínky.</li>
+      <li>Vytvořte token typu Read na <a href="https://huggingface.co/settings/tokens" target="_blank">huggingface.co/settings/tokens</a> a vložte ho sem.</li>
+    </ol>`;
+  const i = document.createElement("input"); i.type = "password"; i.autocomplete = "off";
+  i.placeholder = have ? "token už je nastavený – nový jen při změně" : "hf_…";
+  const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = "Ověřit";
+  const msg = document.createElement("div"); msg.className = "help wizHf";
+  if (wiz.hfMsg) { msg.textContent = wiz.hfMsg; msg.classList.add(wiz.hfOk ? "ok" : "err"); }
+  b.onclick = async () => {
+    b.disabled = true; msg.textContent = "ověřuji…"; msg.className = "help wizHf";
+    try {
+      const r = await api("/api/setup/hf-check", send("POST", { token: i.value.trim() }));
+      wiz.hfOk = r.ok; wiz.hfMsg = r.message;
+      if (i.value.trim()) wiz.st.secrets.huggingface = "vault";
+    } catch (e) { wiz.hfOk = false; wiz.hfMsg = String(e); }
+    renderWizard();
+  };
+  const line = document.createElement("div"); line.className = "wizInline"; line.append(i, b);
+  c.append(line, msg);
+  wizRow("Hugging Face", c);
+}
+
+function wizMinutes() {
+  const st = wiz.st;
+  const prov = wiz.v["summarize.enabled"] ? wiz.v["summarize.provider"] : "none";
+  wizardMain.insertAdjacentHTML("beforeend", `<p class="note">Zápis (shrnutí, rozhodnutí, úkoly) píše jazykový model.
+    Lokálně přes Ollamu nic neodchází z počítače; v cloudu jde ven text přepisu, ne zvuk.</p>`);
+  wizRow("Zápis", wizChoice("sprov", [
+    ["ollama", "V tomto počítači (Ollama)", st.ollama.running
+      ? `Ollama běží, modely: ${st.ollama.models.join(", ") || "žádný zatím"}.` : "Ollama tu zatím není – nainstalujte ji z ollama.com, pak vyberte model."],
+    ["anthropic", "Claude – cloud", "Nejúplnější zápisy (srovnáno na vašich schůzkách). Potřebuje klíč Anthropic."],
+    ["openai", "OpenAI – cloud", "Potřebuje klíč OpenAI."],
+    ["none", "Bez zápisů", "Jen přepis; zápis jde vygenerovat později ručně."],
+  ], prov, v => {
+    wiz.v["summarize.enabled"] = v !== "none";
+    if (v !== "none") {
+      if (v !== wiz.v["summarize.provider"])
+        wiz.v["summarize.model"] = v === "anthropic" ? String(st.values["summarize.cloud_model"] || "")
+          : v === "ollama" ? (st.recommend.ollama_model || st.ollama.models[0] || "") : "";
+      wiz.v["summarize.provider"] = v;
+    }
+  }));
+  if (prov === "none") return;
+  if (prov === "anthropic") wizRow("Klíč Anthropic", wizKey("anthropic", "Claude"));
+  if (prov === "openai") wizRow("Klíč OpenAI", wizKey("openai", "OpenAI"));
+  const model = wizText("summarize.model", prov === "ollama" ? "gemma4:31b" : prov === "anthropic" ? "claude-opus-5-5" : "název modelu OpenAI");
+  const mc = document.createElement("div"); mc.className = "wizInline"; mc.appendChild(model);
+  if (prov === "ollama" && st.ollama.running && model.value && !st.ollama.models.includes(model.value)) {
+    const pull = document.createElement("button"); pull.type = "button"; pull.className = "play"; pull.textContent = `Stáhnout ${model.value}`;
+    pull.title = "Ollama model stáhne ve frontě zpracování (desítky GB); průvodce můžete dokončit hned";
+    pull.onclick = async () => {
+      try { await api("/api/ollama/pull", send("POST", { model: model.value })); pull.disabled = true; pull.textContent = "stahuje se (průběh dole)"; }
+      catch (e) { setStatus(String(e), "err"); }
+    };
+    mc.appendChild(pull);
+  }
+  wizRow("Model", mc, prov === "ollama"
+    ? (st.recommend.ollama_model ? `Pro vaši kartu změřeno: ${st.recommend.ollama_model}.` : "Pro kartu pod 24 GB nemám změřený model – zvolte některý stažený, nebo cloud.")
+    : prov === "anthropic" ? "Např. claude-opus-5-5." : "Seznam modelů je v Nastavení, až bude klíč uložený.");
+}
+
+function wizPrivacy() {
+  const box = (/** @type {string} */ key, /** @type {string} */ label, /** @type {string} */ help) => {
+    const l = document.createElement("label"); l.className = "wizCheck";
+    l.innerHTML = `<input type="checkbox"${wiz.v[key] ? " checked" : ""}> ${escapeHtml(label)}`;
+    /** @type {HTMLInputElement} */ (l.querySelector("input")).onchange = e => { wiz.v[key] = /** @type {HTMLInputElement} */ (e.target).checked; };
+    wizRow("", l, help);
+  };
+  box("voiceprints.enabled", "Poznávat lidi po hlase",
+      "Hlasové otisky kolegů (biometrické údaje) zůstávají jen v tomto počítači; ukládají se, až jméno potvrdíte. Kolegové by o tom měli vědět.");
+  if (wiz.st.outlook) box("calendar.outlook", "Brát schůzky z kalendáře Outlooku",
+      "Klasický Outlook v tomto počítači: název schůzky a účastníci k nahrávce. Nic neodchází ven.");
+}
+
+function wizDone() {
+  const v = wiz.v;
+  const tName = { whisperx: "v tomto počítači (WhisperX)", elevenlabs: "ElevenLabs (cloud)", openai: "OpenAI (cloud)" }[String(v["transcribe.provider"])];
+  const sName = !v["summarize.enabled"] ? "bez zápisů" : `${PROVIDER_LABEL[v["summarize.provider"]] || v["summarize.provider"]}, ${v["summarize.model"] || "model nevybrán"}`;
+  const warn = [];
+  if (v["transcribe.provider"] === "whisperx" && v["transcribe.diarize"] && wiz.hfOk === false)
+    warn.push("Rozlišení mluvčích: token Hugging Face zatím není ověřený – bez něj přepis proběhne, jen bez rozlišení mluvčích.");
+  for (const [p, name] of [["elevenlabs", "elevenlabs"], ["openai", "openai"]])
+    if (v["transcribe.provider"] === p && wiz.st.secrets[name] === "missing") warn.push(`Přepis: chybí klíč ${p}.`);
+  if (v["summarize.enabled"] && v["summarize.provider"] !== "ollama" && wiz.st.secrets[v["summarize.provider"]] === "missing")
+    warn.push("Zápis: chybí klíč služby.");
+  wizardMain.innerHTML = `<ul class="wizSummary">
+      <li>Nahrávky: <b>${escapeHtml(String(v["recordings.out_dir"]))}</b></li>
+      <li>Vaše jméno: <b>${escapeHtml(String(v["user.name"] || "–"))}</b>, jazyky: ${escapeHtml(v["transcribe.languages"].map(langName).join(", "))}</li>
+      <li>Přepis: <b>${escapeHtml(tName || "")}</b>${v["transcribe.provider"] === "whisperx" ? `, rozlišení mluvčích ${v["transcribe.diarize"] ? "lokálně" : "vypnuté"}` : ""}</li>
+      <li>Zápis: <b>${escapeHtml(sName)}</b>, jazyk ${escapeHtml(langName(String(v["summarize.language"])))}</li>
+      <li>Hlasové otisky: ${v["voiceprints.enabled"] ? "ano" : "ne"}${wiz.st.outlook ? `, kalendář Outlooku: ${v["calendar.outlook"] ? "ano" : "ne"}` : ""}</li>
+    </ul>` + warn.map(w => `<p class="setWarn">⚠ ${escapeHtml(w)}</p>`).join("") +
+    `<p class="note">Modely pro přepis se stáhnou při prvním zpracování (pár GB, jednou).</p>`;
+}
+
+async function finishWizard() {
+  const v = { ...wiz.v };
+  const langs = /** @type {string[]} */ (v["transcribe.languages"]);
+  /** @type {Record<string, any>} */ const values = { ...v, "transcribe.language": langs.length === 1 ? langs[0] : "auto" };
+  if (v["transcribe.provider"] === "whisperx") Object.assign(values, (wiz.st.recommend || {}).values || {});
+  try {
+    await api("/api/settings", send("PUT", { values }));
+    await api("/api/setup/done", send("POST"));
+  } catch (e) { setStatus(String(e), "err"); return; }
+  closeWizard();
+  setStatus("nastavení uloženo – průvodce jde kdykoli znovu otevřít v Nastavení", "ok");
+  await loadList();
+}
+
+$("wizardNext").onclick = () => {
+  if (!wiz) return;
+  if (wiz.step === WIZ_STEPS.length - 1) { finishWizard(); return; }
+  wiz.step++; renderWizard();
+};
+$("wizardBack").onclick = () => { if (wiz && wiz.step > 0) { wiz.step--; renderWizard(); } };
+$("wizardSkip").onclick = async () => {
+  try { await api("/api/setup/done", send("POST")); } catch { /* shown again next time */ }
+  closeWizard();
+};
+$("wizardOpen").onclick = () => { closeSettings(); openWizard(); };
+
 (async () => {
-  if (new URLSearchParams(location.search).get("open") === "settings") openSettings();  // the tray's Settings…
+  const opening = new URLSearchParams(location.search).get("open");
+  if (opening === "settings") openSettings();  // the tray's Settings…
+  else if (opening === "wizard") openWizard();  // the tray's Setup wizard…
+  else api("/api/setup?needed=1").then(st => { if (st.needed) openWizard(); }).catch(() => { /* an older server */ });
   try {
     await loadList();
     if (pick.value) await loadRecording(pick.value);

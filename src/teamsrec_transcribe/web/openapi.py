@@ -60,7 +60,7 @@ def spec(version: str) -> dict:
             "/api/recordings/{stem}/summaries": {"post": _op(
                 "Write a summary with this provider/model in the background (the configured one = the main "
                 "summary, any other = <stem>.summary.<model>.md); the end is an event with job_end",
-                params=[STEM], body=_obj(provider={"enum": ["ollama", "anthropic"]}, model=s))},
+                params=[STEM], body=_obj(provider={"enum": ["ollama", "anthropic", "openai"]}, model=s))},
             "/api/recordings/{stem}/summaries/{file}": {"delete": _op(
                 "Delete one summary of the recording (<stem>.summary*.md only)",
                 params=[STEM, {"name": "file", "in": "path", "required": True, "schema": s}])},
@@ -92,6 +92,13 @@ def spec(version: str) -> dict:
                 "Delete one print (stem + label) or all prints of the person", tags=("people",), params=[
                     {"name": "id", "in": "path", "required": True, "schema": s},
                     {"name": "stem", "in": "query", "schema": s}, {"name": "label", "in": "query", "schema": s}])},
+            "/api/setup": {"get": _op("The setup wizard: whether it is needed, the NVIDIA GPU, recommended settings, "
+                                      "Ollama and its models, the state of the keys, the current values",
+                                      tags=("settings",))},
+            "/api/setup/hf-check": {"post": _op("Store the Hugging Face token (if given) and check that it can "
+                                                "download the diarization model (licence accepted)",
+                                                tags=("settings",), body=_obj(token=s))},
+            "/api/setup/done": {"post": _op("The wizard ran: it is not shown again", tags=("settings",))},
             "/api/settings": {
                 "get": _op("Settings of both apps: sections with fields (type, choices, value, default), the state "
                            "of the API keys (env | vault | missing, never the value), the audio inputs of this PC",
@@ -102,10 +109,10 @@ def spec(version: str) -> dict:
             "/api/secrets/{name}": {
                 "put": _op("Store an API key in the Windows Credential Manager", tags=("settings",),
                            params=[{"name": "name", "in": "path", "required": True,
-                                    "schema": {"enum": ["anthropic", "openai", "elevenlabs"]}}], body=_obj(value=s)),
+                                    "schema": {"enum": ["anthropic", "openai", "elevenlabs", "huggingface"]}}], body=_obj(value=s)),
                 "delete": _op("Remove a stored API key (a key in the environment stays)", tags=("settings",),
                               params=[{"name": "name", "in": "path", "required": True,
-                                       "schema": {"enum": ["anthropic", "openai", "elevenlabs"]}}])},
+                                       "schema": {"enum": ["anthropic", "openai", "elevenlabs", "huggingface"]}}])},
             "/api/settings/models": {"get": _op(
                 "The model lists asked live - Ollama on this PC, the Claude models of the key (takes seconds; "
                 "GET /api/settings sends the last known ones)", tags=("settings",))},

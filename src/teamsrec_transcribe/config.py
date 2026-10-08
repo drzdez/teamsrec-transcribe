@@ -59,7 +59,7 @@ class RetentionSettings:
 @dataclass(frozen=True)
 class SummarizeSettings:
     enabled: bool = True  # part of `process`; failures (no model / no API key) are logged, not fatal
-    provider: str = "ollama"  # ollama (local GPU) | anthropic (Claude API)
+    provider: str = "ollama"  # ollama (local GPU) | anthropic (Claude API) | openai (OpenAI API)
     model: str = "gemma4:31b"  # ollama tag, or a Claude model id such as claude-opus-5
     language: str = "cs"  # language of the minutes, independent of the meeting language
     ollama_url: str = "http://localhost:11434"
@@ -69,6 +69,7 @@ class SummarizeSettings:
     ollama_timeout_s: int = 1800
     compare: tuple[str, ...] = ()  # extra "provider:model" runs written to <stem>.summary.<model>.md (POC comparison)
     cloud_model: str = "claude-opus-5-5"  # emergency fast track (fasttrack.py): the Claude model of the minutes
+    openai_url: str = "https://api.openai.com/v1"  # provider = "openai": OpenAI, or another Chat Completions API
 
 
 @dataclass(frozen=True)

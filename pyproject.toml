@@ -41,6 +41,12 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/teamsrec_transcribe"]
 
+[tool.hatch.build.targets.wheel.force-include]
+# the page's Nápověda reads these; the installed suite has no source checkout next to it
+"docs/user-guide.md" = "teamsrec_transcribe/docs/user-guide.md"
+"docs/install.md" = "teamsrec_transcribe/docs/install.md"
+"docs/privacy.md" = "teamsrec_transcribe/docs/privacy.md"
+
 [dependency-groups]
 dev = ["pytest>=8"]
 

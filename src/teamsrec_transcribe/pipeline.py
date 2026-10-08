@@ -866,7 +866,7 @@ def do_summarize(cfg: Config, rec: Recording, *, force: bool = False) -> Path:
     return rec.summary_path
 
 
-SUMMARY_PROVIDERS = ("ollama", "anthropic")
+SUMMARY_PROVIDERS = ("ollama", "anthropic", "openai")
 
 
 def summary_path_for(cfg: Config, rec: Recording, provider: str, model: str) -> Path:

@@ -2273,3 +2273,48 @@ def test_jobs_status_file_tells_the_tray_what_runs_and_what_ended(tmp_path, monk
     assert d["finished"][-1]["text"] == "přepis hotový; zápis počká, až pojmenujete mluvčí"
     st.write_jobs_file(running=False)
     assert json.loads(st.jobs_file.read_text(encoding="utf-8"))["running"] is False
+
+
+def test_openai_minutes_speak_the_chat_completions_api(monkeypatch):
+    """provider = "openai": the Chat Completions API with the OpenAI key; errors say what to fix."""
+    import requests
+    from dataclasses import replace
+    from teamsrec_transcribe import llm, settings
+    from teamsrec_transcribe.config import SummarizeSettings
+    monkeypatch.setattr(settings, "get_secret", lambda name: "sk-test" if name == "openai" else "")
+    sent = {}
+
+    class Resp:
+        def __init__(self, code, data):
+            self.status_code, self._data, self.ok, self.text = code, data, code < 400, str(data)
+
+        def json(self):
+            return self._data
+
+    def post(url, json, timeout, headers):
+        sent.update(url=url, body=json, headers=headers)
+        return Resp(200, {"model": "gpt-5", "choices": [{"message": {"content": " # Zápis "}, "finish_reason": "stop"}],
+                          "usage": {"prompt_tokens": 10, "completion_tokens": 3}})
+    monkeypatch.setattr(requests, "post", post)
+    s = replace(SummarizeSettings(), provider="openai", model="gpt-5")
+    r = llm.complete("system", "přepis", s)
+    assert (r.text, r.model, r.input_tokens, r.truncated) == ("# Zápis", "gpt-5", 10, False)
+    assert sent["url"] == "https://api.openai.com/v1/chat/completions" and sent["headers"]["Authorization"] == "Bearer sk-test"
+    assert [m["role"] for m in sent["body"]["messages"]] == ["system", "user"]
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp(401, {"error": "expired"}))
+    with pytest.raises(llm.LLMError, match="refused"):
+        llm.complete("system", "přepis", s)
+
+
+def test_the_setup_wizard_is_for_a_fresh_install_only(tmp_path):
+    """Shown by itself only when nobody configured teamsrec (no name) and it never ran; an existing user who gets
+    the update is left alone."""
+    from teamsrec_transcribe import setup
+    cfg = tmp_path / "teamsrec.toml"
+    assert setup.needed(cfg), "nothing configured yet"
+    cfg.write_text('[user]\nname = "Jana"\n', encoding="utf-8")
+    assert not setup.needed(cfg), "an existing configuration"
+    cfg.write_text('[user]\nname = ""\n', encoding="utf-8")
+    assert setup.needed(cfg)
+    setup.mark_done(cfg)
+    assert not setup.needed(cfg)

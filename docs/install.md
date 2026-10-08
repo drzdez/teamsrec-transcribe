@@ -7,7 +7,46 @@ teamsrec is two applications that share one recordings folder and one configurat
 - **teamsrec-transcribe** – transcript, speaker names, minutes and the review page (in a browser or as a desktop
   window).
 
-The steps below are for one PC with Windows 11 and an NVIDIA graphics card.
+## The suite installer (Windows) – the usual way
+
+One per-user MSI installs everything, without admin rights: download `teamsrec-capture-<version>-x64.msi` from
+[the releases](https://github.com/drzdez/teamsrec-capture/releases/latest) and run it. It is not code-signed yet, so
+Windows SmartScreen may warn the first time ("More info" → "Run anyway").
+
+What it installs into `%LOCALAPPDATA%\Programs\teamsrec-capture`:
+
+| part | what it is |
+|---|---|
+| `teamsrec-capture.exe` | the recording app in the tray, started at login (Startup shortcut) |
+| `teamsrec-review.exe` | the window with the transcripts (Start menu: *teamsrec - prepisy*; the tray icon opens it too) |
+| `uv.exe`, `transcribe\` | teamsrec-transcribe with its exact package lock, from which the window builds the Python environment |
+| `ffmpeg\` | ffmpeg and ffprobe (GPL, a separate program; `SOURCE.txt` says where its sources are) |
+
+**First start of the window** (Start menu or the tray icon): it prepares the Python environment for the voice
+processing – Python 3.12, PyTorch with CUDA, WhisperX, pyannote, about 4–6 GB to download, 7–8 GB on disk – into
+`%LOCALAPPDATA%\teamsrec\env`, with the progress on its start screen; 5–20 minutes by the connection. Then the
+**setup wizard** asks, step by step:
+
+1. the recordings folder, your name (your microphone track gets it), the meeting languages and the minutes language;
+2. the transcription – on this PC (WhisperX; the wizard recommends by the graphics card it finds) or in the cloud
+   (ElevenLabs, OpenAI, with a key) – and, locally, the speaker diarization: pyannote needs a free Hugging Face
+   account, the model's terms accepted once, and a Read token; the wizard checks the token;
+3. the minutes – Ollama on this PC (the model it recommends is the one measured for the card), Claude or OpenAI (with
+   a key), or none;
+4. voice prints and the Outlook calendar (both opt-in).
+
+Keys go into the Windows Credential Manager, never into files. The wizard opens by itself only on a fresh install
+(no name in the configuration yet); any time later from Nastavení → *Průvodce…* or the tray menu → *Setup wizard…*; everything it sets is also in Nastavení. The transcription models download on the first processing
+(about 3 GB, once). Ollama itself is a separate program from [ollama.com](https://ollama.com) (the wizard says when
+it is missing).
+
+**Updates:** the tray app looks for a new release once a day and offers it (*Install version …*). The update replaces
+the programs; the next start of the window brings the environment up to date (only what changed is downloaded).
+Uninstalling (Settings → Apps) removes the programs; the environment, the downloaded models and your recordings stay
+(delete `%LOCALAPPDATA%\teamsrec` by hand to remove the environment).
+
+The rest of this page is the manual setup from the sources, for development. The steps below are for one PC with
+Windows 11 and an NVIDIA graphics card.
 
 ## Requirements
 

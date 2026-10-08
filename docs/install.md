@@ -91,6 +91,13 @@ icon of teamsrec-capture looks for it) and make a Start menu shortcut to it. Det
   the environment variable `TEAMSREC_ANTHROPIC_API_KEY` – the tool's own name on purpose, a plain `ANTHROPIC_API_KEY`
   would be taken by other tools). Then choose Claude as the summary service, or add `anthropic:claude-opus-5-5` to the
   comparison summaries.
+- **OpenAI:** the key under **Klíče API**, then OpenAI as the summary service and a model from its list.
+- **Ollama on another computer** (a stronger machine on the network, e.g. an NVIDIA DGX Spark or a workstation with a
+  big GPU): set **Nastavení → Zápis → Adresa Ollamy** to `http://<computer>:11434`; the minutes and the *Stáhnout*
+  button for models then work there. On that computer Ollama must listen on the network (`OLLAMA_HOST=0.0.0.0`); it
+  has no sign-in and no encryption, so only on a trusted network or a VPN – the transcript text travels there. The
+  transcription itself stays on this PC (or in the cloud). Not tested by us yet, but nothing in teamsrec ties Ollama
+  to this machine.
 
 ## 3. Recording (teamsrec-capture)
 

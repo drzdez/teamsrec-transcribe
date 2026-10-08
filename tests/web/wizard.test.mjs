@@ -26,6 +26,10 @@ test("setup wizard: once by itself, recommends by the GPU, checks the HF token, 
 
   next(p);
   assert.match(main(p).textContent, /RTX 4070 Laptop GPU, 8 GB: lokální přepis zvládne/, "the recommendation");
+  const times = [...main(p).querySelectorAll(".wizTimes tr")].map(tr => tr.textContent);
+  assert.equal(times.length, 3, "a header, 15 min and 1 h");
+  assert.match(times[2], /^1 h~\d+ min~\d+ min$/, "this PC and the fast track for an hour");
+  assert.match(main(p).textContent, /odhad podle grafické karty/, "no runs measured in the test folder yet");
   assert.ok(option(p, "tprov", "whisperx").checked, "local transcription for this card");
   if (!option(p, "diar", "on").checked) pickOption(p, "diar", "on");
   const token = main(p).querySelector('input[type="password"]');

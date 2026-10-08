@@ -2318,3 +2318,31 @@ def test_the_setup_wizard_is_for_a_fresh_install_only(tmp_path):
     assert setup.needed(cfg)
     setup.mark_done(cfg)
     assert not setup.needed(cfg)
+
+
+def test_processing_estimates_come_from_this_pcs_runs_when_there_are_enough(tmp_path):
+    """15 min / 1 h locally and by the fast track: the card's defaults, then this PC's own <stem>.timings.json
+    (a robust line through them: one odd run does not tilt it)."""
+    import json
+    from teamsrec_transcribe import setup
+    card = {"name": "RTX", "vram_gb": 24}
+    e = setup.estimates(card, tmp_path)
+    assert "odhad podle grafické karty" in e["source"] and e["minutes_local"]
+    assert e["rows"][1]["cloud"] < e["rows"][1]["local_cloud_minutes"] < e["rows"][1]["local"]
+    for i, (minutes, transcript, ollama) in enumerate([(10, 100, 300), (20, 150, 500), (30, 200, 700), (40, 250, 4000), (50, 300, 1100),
+                                                   (60, 350, 1300)]):
+        d = tmp_path / "2026" / "10" / f"r{i}"
+        d.mkdir(parents=True)
+        (d / f"r{i}.json").write_text(json.dumps({"duration_s": minutes * 60}), encoding="utf-8")
+        (d / f"r{i}.timings.json").write_text(json.dumps({"runs": [{"job": "process", "ok": True, "steps": [
+            {"step": "přepis (whisperx)", "s": transcript}, {"step": "zápis (ollama gemma4:31b)", "s": ollama},
+            {"step": "zápis (ollama x)", "s": 2.0}]}]}), encoding="utf-8")
+    costs = setup.measured_costs(tmp_path)
+    assert costs["transcribe_local"] == (50.0, 5.0, 6)
+    assert costs["minutes_local"][1] == 20.0, "the 4000 s run does not tilt it; the 2 s failure is ignored"
+    e = setup.estimates(card, tmp_path)
+    assert "podle měření na tomto počítači" in e["source"]
+    assert e["rows"][1]["minutes_local"] == 1300 and "Nejpomalejší je lokální zápis" in e["advice"]
+    assert not setup.estimates({"name": "x", "vram_gb": 8}, tmp_path / "none")["minutes_local"], \
+        "no measured local minutes model below 24 GB"
+    assert "jako běžnou cestu ⚡ rychle přes cloud" in setup.estimates(None, tmp_path / "none")["advice"]

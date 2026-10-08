@@ -82,6 +82,7 @@
   .wizLangs { display: flex; gap: 6px 14px; flex-wrap: wrap; padding-top: 7px; }
   .wizSteps { margin: 0 0 8px; padding-left: 20px; } .wizSummary li { margin: 4px 0; }
   .wizCheck { font-weight: 600; cursor: pointer; }
+  .wizTimes { width: auto; margin-top: 4px; } .wizTimes th, .wizTimes td { padding: 4px 12px; }
   .card.setSec { display: block; padding: 16px 20px; }  /* not the two-column grid of a speaker card */
   .setSec h2 { font-size: 16px; margin: 0 0 4px; }
   .setSec .note { color: var(--muted); font-size: 13px; margin: 0 0 8px; max-width: 80ch; }
@@ -3381,9 +3382,27 @@ function wizWelcome() {
   wizRow("Jazyk zápisu", sl);
 }
 
+/** "~8 min" for seconds of processing */
+function wizMins(/** @type {number} */ s) {
+  return s < 90 ? "~1 min" : `~${Math.round(s / 60)} min`;
+}
+
+/** How long processing takes here, locally and by the fast track, and what to prefer (setup.estimates). */
+function wizEstimates() {
+  const e = wiz.st.estimates;
+  if (!e) return;
+  const t = document.createElement("table"); t.className = "wizTimes";
+  t.innerHTML = `<tr><th>schůzka</th><th>v tomto počítači</th>${e.minutes_local ? "<th>… se zápisem přes Claude</th>" : ""}<th>⚡ rychle přes cloud</th></tr>` +
+    e.rows.map((/** @type {any} */ r) => `<tr><td>${escapeHtml(r.label)}</td><td>${wizMins(r.local)}</td>` +
+      (e.minutes_local ? `<td>${wizMins(r.local_cloud_minutes)}</td>` : "") + `<td>${wizMins(r.cloud)}</td></tr>`).join("");
+  const c = wizRow("Jak dlouho to trvá", t, `${e.source}. ${e.advice}`);
+  c.classList.add("wizTimesCell");
+}
+
 function wizTranscribe() {
   const rec = wiz.st.recommend || {};
   wizardMain.insertAdjacentHTML("beforeend", `<p class="note">${escapeHtml(rec.why || "")}</p>`);
+  wizEstimates();
   const prov = wiz.v["transcribe.provider"];
   wizRow("Přepis", wizChoice("tprov", [
     ["whisperx", "V tomto počítači (WhisperX)" + (rec.local ? " – doporučeno" : ""),
@@ -3496,6 +3515,9 @@ function wizDone() {
       <li>Vaše jméno: <b>${escapeHtml(String(v["user.name"] || "–"))}</b>, jazyky: ${escapeHtml(v["transcribe.languages"].map(langName).join(", "))}</li>
       <li>Přepis: <b>${escapeHtml(tName || "")}</b>${v["transcribe.provider"] === "whisperx" ? `, rozlišení mluvčích ${v["transcribe.diarize"] ? "lokálně" : "vypnuté"}` : ""}</li>
       <li>Zápis: <b>${escapeHtml(sName)}</b>, jazyk ${escapeHtml(langName(String(v["summarize.language"])))}</li>
+      ${wiz.st.estimates ? `<li>Hodinová schůzka: ${v["transcribe.provider"] === "whisperx"
+          ? `${wizMins(v["summarize.enabled"] && v["summarize.provider"] === "ollama" && wiz.st.estimates.minutes_local ? wiz.st.estimates.rows[1].local : wiz.st.estimates.rows[1].local_cloud_minutes)} v tomto počítači`
+          : `${wizMins(wiz.st.estimates.rows[1].cloud)} v cloudu`}, ⚡ rychle přes cloud ${wizMins(wiz.st.estimates.rows[1].cloud)}</li>` : ""}
       <li>Hlasové otisky: ${v["voiceprints.enabled"] ? "ano" : "ne"}${wiz.st.outlook ? `, kalendář Outlooku: ${v["calendar.outlook"] ? "ano" : "ne"}` : ""}</li>
     </ul>` + warn.map(w => `<p class="setWarn">⚠ ${escapeHtml(w)}</p>`).join("") +
     `<p class="note">Modely pro přepis se stáhnou při prvním zpracování (pár GB, jednou).</p>`;

@@ -110,6 +110,107 @@ def ollama_running(url: str) -> bool:
         return False
 
 
+# ---------------------------------------------------------------- how long processing takes
+
+# What each part costs: seconds = fixed + per_min × minutes of recording. The defaults are this project's own
+# measurements on an RTX 5090 Laptop (24 GB), 2026-09/10 (<stem>.timings.json of ~25 runs): local transcription with
+# alignment and diarization 60 s + 4.4 s/min, the Teams window video 10 s + 1.4 s/min (CPU), the minutes by Ollama
+# gemma4:31b 300 s + 15 s/min (the slowest part!), ElevenLabs 80 s + 1 s/min, Claude 45 s + 0.6 s/min.
+DEFAULT_COST = {
+    "transcribe_local": (60.0, 4.4),
+    "video": (10.0, 1.4),
+    "minutes_local": (300.0, 15.0),
+    "transcribe_cloud": (80.0, 1.0),
+    "minutes_cloud": (45.0, 0.6),
+}
+# a slower card transcribes slower (docs/hardware-portability.md: ASR of 70 min 1 min on 24 GB … 8–15 min on 4–6 GB)
+GPU_FACTOR = ((16, 1.0), (8, 2.5), (6, 3.5), (4, 10.0))
+CPU_FACTOR = 12.0  # rough: an hour on the CPU ≈ an hour (int8, medium); not measured here
+STEP_KIND = (("přepis (whisperx", "transcribe_local"), ("analýza oken", "video"), ("zápis (ollama", "minutes_local"),
+             ("přepis (elevenlabs", "transcribe_cloud"), ("přepis (openai", "transcribe_cloud"),
+             ("zápis (anthropic", "minutes_cloud"), ("zápis (openai", "minutes_cloud"))
+MIN_RUNS = 3  # this PC's own measurements replace the defaults from this many
+
+
+def measured_costs(out_dir: Path, limit: int = 200) -> dict:
+    """Fit seconds = fixed + per_min × minutes per kind of step from this PC's <stem>.timings.json (the newest
+    recordings first, at most `limit`). Kinds with fewer than MIN_RUNS points are left out. {kind: (fixed, per_min, n)}"""
+    import json
+    files = sorted(Path(out_dir).glob("*/*/*/*.timings.json"), reverse=True)[:limit]
+    pts: dict[str, list[tuple[float, float]]] = {}
+    for f in files:
+        try:
+            minutes = json.loads(f.with_name(f.name.replace(".timings.json", ".json")).read_text(encoding="utf-8"))["duration_s"] / 60
+            runs = json.loads(f.read_text(encoding="utf-8")).get("runs") or []
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        for run in runs:
+            if not run.get("ok"):
+                continue
+            for st in run.get("steps") or []:
+                kind = next((k for prefix, k in STEP_KIND if str(st.get("step", "")).startswith(prefix)), None)
+                if kind and float(st.get("s") or 0) >= 5:  # a step that failed at once (no model) says nothing
+                    pts.setdefault(kind, []).append((minutes, float(st["s"])))
+    out = {}
+    for kind, xy in pts.items():
+        if len(xy) < MIN_RUNS:
+            continue
+        # Theil–Sen: the median of the pairwise slopes – one odd run (a busy GPU, a retry) does not tilt the line
+        from statistics import median
+        slopes = [(y2 - y1) / (x2 - x1) for i, (x1, y1) in enumerate(xy) for x2, y2 in xy[i + 1:] if abs(x2 - x1) >= 1]
+        per_min = max(0.0, median(slopes)) if slopes else 0.0
+        fixed = max(0.0, median(y - per_min * x for x, y in xy))
+        out[kind] = (round(fixed, 1), round(per_min, 2), len(xy))
+    return out
+
+
+def estimates(card: dict | None, out_dir: Path, minutes_local: bool = True) -> dict:
+    """Processing time of a 15-minute and a 1-hour meeting: locally on this PC and by the fast track (cloud), with
+    advice. This PC's own measurements where there are enough, else the defaults scaled by the card."""
+    factor = CPU_FACTOR if not card else next((f for vram, f in GPU_FACTOR if card["vram_gb"] >= vram), CPU_FACTOR)
+    measured = measured_costs(out_dir)
+    cost = {}
+    for kind, (fixed, per_min) in DEFAULT_COST.items():
+        if kind in measured:
+            cost[kind] = measured[kind][:2]
+        elif kind == "transcribe_local":
+            cost[kind] = (fixed, per_min * factor)
+        else:
+            cost[kind] = (fixed, per_min)
+    if not card or card["vram_gb"] < 24:
+        if "minutes_local" not in measured:
+            minutes_local = False  # no measured local minutes model below 24 GB: the cloud's minutes in the estimate
+
+    def t(kind: str, m: float) -> float:
+        fixed, per_min = cost[kind]
+        return fixed + per_min * m
+
+    rows = []
+    for label, m in (("15 min", 15.0), ("1 h", 60.0)):
+        local = t("transcribe_local", m) + t("video", m) + t("minutes_local" if minutes_local else "minutes_cloud", m)
+        rows.append({"label": label, "local": round(local), "local_cloud_minutes": round(
+            t("transcribe_local", m) + t("video", m) + t("minutes_cloud", m)), "cloud": round(
+            t("transcribe_cloud", m) + t("minutes_cloud", m)),
+            "minutes_local": round(t("minutes_local", m)) if minutes_local else None})
+    hour = rows[1]
+    if not card or card["vram_gb"] < 4:
+        advice = ("Na tomto počítači doporučuji jako běžnou cestu ⚡ rychle přes cloud; lokálně jen tehdy, když zvuk "
+                  "nesmí opustit počítač (hodina schůzky může trvat i přes hodinu).")
+    elif hour["local"] <= 20 * 60:
+        advice = ("Běžně zpracovávejte lokálně – zvuk i text zůstanou v počítači. ⚡ Rychle přes cloud jen ve spěchu.")
+    else:
+        advice = ("Lokálně to jde, jen hodina schůzky trvá déle – nechte zpracování běžet na pozadí (frontu najdete "
+                  "dole). Ve spěchu ⚡ rychle přes cloud.")
+    if minutes_local and hour["minutes_local"] and hour["minutes_local"] > 5 * 60:
+        advice += (f" Nejpomalejší je lokální zápis (Ollama, ~{round(hour['minutes_local'] / 60)} min na hodinu); "
+                   f"se zápisem přes Claude by lokální zpracování trvalo ~{round(hour['local_cloud_minutes'] / 60)} min.")
+    src = [k for k in ("transcribe_local", "minutes_local", "transcribe_cloud", "minutes_cloud") if k in measured]
+    runs = max((measured[k][2] for k in src), default=0)
+    return {"rows": rows, "advice": advice, "minutes_local": minutes_local,
+            "source": (f"podle měření na tomto počítači (až {runs} běhů)" if src
+                       else "odhad podle grafické karty; zpřesní se po prvních zpracováních")}
+
+
 def status(values: dict, config_path: Path | None = None) -> dict:
     """Everything the wizard shows before the user chooses."""
     from . import settings
@@ -121,6 +222,7 @@ def status(values: dict, config_path: Path | None = None) -> dict:
         "platform": sys.platform,
         "gpu": card,
         "recommend": recommend(card),
+        "estimates": estimates(card, Path(str(values.get("recordings.out_dir") or "~/meetings")).expanduser()),
         "ollama": {"running": ollama_running(url), "models": models or []},
         "secrets": {s["name"]: ("login" if s["name"] == "huggingface" and s["state"] == "missing"
                                 and settings.hf_login_token() else s["state"])

@@ -31,6 +31,10 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/people/merge                             {"keep", "drop", "stem"?}
   GET    /api/people/{id}                              one person with their voice prints
   DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
+  GET    /api/people/{id}/replies                      every reply of the person with its own voice compared
+  POST   /api/people/{id}/replies                      compute the replies' voices (a GPU job the user confirmed)
+  POST   /api/people/{id}/samples                      {"action": exclude|include|add, "stem", "label", "replace"?}
+                                                        the voice prints used for recognition
   POST   /api/people/{id}/candidates                   {"stem", "label", "confirm"} a guessed name confirmed (the
                                                         voice print is stored) or rejected (the name goes)
   GET    /api/settings / PUT /api/settings             fields of the shared teamsrec.toml / {"values": {key: value}}
@@ -83,7 +87,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from .. import settings
 from ..config import Config, default_config_path
 from ..people import DISPLAY_MODES, People, Person
-from ..pipeline import (NEW_SPEAKER, assign_segments, speaker_replies, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
+from ..pipeline import (NEW_SPEAKER, mark_edited, minutes_stale, assign_segments, speaker_replies, do_export, do_process, do_summarize, do_summarize_compare, enroll_names,
                         summarize_as, SUMMARY_PROVIDERS,
                         summary_path_for, load_segments, meeting_info,
                         merge_same_person, recognize_voices, remove_speaker, rename_recording,
@@ -206,7 +210,8 @@ def pick_samples(segs: list[Segment], n: int = SAMPLES_PER_SPEAKER) -> list[Segm
     picks = [longest]
     if len(good) > 1 and n > 1:
         span = good[-1].start - good[0].start or 1.0
-        for frac in (0.15, 0.85)[: n - 1]:
+        fracs = (0.15, 0.85) if n <= 3 else tuple(0.1 + 0.8 * i / (n - 2) for i in range(n - 1))  # spread evenly
+        for frac in fracs[: n - 1]:
             target = good[0].start + frac * span
             cand = min((s for s in good if s not in picks), key=lambda s: abs(s.start - target), default=None)
             if cand is not None:
@@ -403,6 +408,7 @@ def build_review(cfg: Config, rec: Recording) -> dict:
                              "languages": data.get("languages") or [],
                              # no word alignment: replies stay ~30 s long and can mix voices (2026-10-05)
                              "unaligned": is_unaligned(data)},
+        "edited": minutes_stale(rec, data),
         "has_summary": has_minutes(rec), "has_mix": bool(rec.mix_path and rec.mix_path.exists()),
         "cloud": cloud_ready(cfg),
         "timings": timings.latest(rec),  # how long each part of the last jobs took
@@ -537,6 +543,7 @@ def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
     for r in recs:
         unresolved = None
         unaligned = False
+        edited = None
         if r.transcript_path.exists():
             try:
                 names = r.read_json(r.speakers_path) if r.speakers_path.exists() else {}
@@ -544,11 +551,13 @@ def list_recordings(cfg: Config, limit: int = RECENT_RECORDINGS) -> list[dict]:
                 labels = data.get("speakers", [])
                 unresolved = sum(1 for l in labels if unnamed_speaker(l) and not names.get(l))
                 unaligned = is_unaligned(data)
+                edited = minutes_stale(r, data)
             except Exception:
                 unresolved = None
         out.append({"stem": r.stem, "title": r.title, "start": r.sidecar.get("start"),
                     "transcribed": r.transcript_path.exists(), "unresolved": unresolved,
-                    "summary": has_minutes(r), "unaligned": unaligned})
+                    "summary": has_minutes(r), "unaligned": unaligned,
+                    "edited": edited})  # names or replies changed after the minutes: regenerate them
     return out
 
 
@@ -631,6 +640,7 @@ def save_names(cfg: Config, rec: Recording, names: dict) -> dict[str, str]:
                 data.pop("direct_call")  # decided by the user
             rec.write_json(rec.transcript_path, data)
     enroll_names(cfg, rec, clean)  # only now does the print go into the shared registry
+    mark_edited(rec)
     return clean
 
 
@@ -643,6 +653,7 @@ def merge_people(cfg: Config, keep: str, drop: str, stem: str | None = None) -> 
     vp.save()
     for r in changed:
         if r.transcript_path.exists():
+            mark_edited(r)
             do_export(cfg, r)
     if stem and stem not in {r.stem for r in changed}:
         r = resolve_recording(stem, cfg.out_dir)
@@ -679,6 +690,28 @@ def person_detail(cfg: Config, pid: str) -> dict:
     from .. import assignments
     rows = assignments.for_people(cfg).get(pid, [])
     assigned = [r.public() for r in rows]
+    samples_view = assignments.sample_view(cfg, pid, rows, vp)
+    excerpts: dict[tuple[str, str], list[dict]] = {}
+
+    def five(stem: str, label: str) -> list[dict]:
+        """Up to 5 replies of the group to listen to (the samples view)."""
+        if (stem, label) not in excerpts:
+            excerpts[(stem, label)] = []
+            rec = recs.get(stem)
+            if rec is not None and rec.transcript_path.exists():
+                try:
+                    _, segs = load_segments(rec)
+                    mine = [s for s in segs if s.speaker == label]
+                    excerpts[(stem, label)] = [
+                        {"start": round(s.start, 2), "end": round(min(s.end, s.start + CLIP_MAX_S), 2),
+                         "at": _fmt_hms(s.start), "text": s.text[:140]} for s in pick_samples(mine, 5)]
+                except Exception:
+                    pass
+        return excerpts[(stem, label)]
+    for row in samples_view["used"] + samples_view["addable"]:
+        rec = recs.get(row["stem"])
+        row["has_mix"] = bool(rec and rec.mix_path and rec.mix_path.exists())
+        row["samples"] = five(row["stem"], row["label"])
     for c in assigned:
         rec = recs.get(c["stem"])
         c["has_mix"] = bool(rec and rec.mix_path and rec.mix_path.exists())
@@ -707,6 +740,7 @@ def person_detail(cfg: Config, pid: str) -> dict:
     d = {"id": p.id, "first": p.first, "last": p.last, "nick": p.nick, "display": p.display, "aliases": p.aliases,
          "shown": p.name(people.default_mode), "model": vp.model, "limit": vp.limit, "prints": prints,
          "candidates": candidates, "assignments": assigned, "summary": assignments.summary(rows),
+         "samples_view": samples_view,
          "recordings": sorted({r.stem for r in recs.values() if r.speakers_path.exists()
                                and pid in r.read_json(r.speakers_path).values()}, reverse=True)}
     return d
@@ -774,19 +808,43 @@ def confirm_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
         data.pop("direct_call")
     rec.write_json(rec.transcript_path, data)
     added = enroll_names(cfg, rec, {label: pid})
+    mark_edited(rec)
     do_export(cfg, rec)
     return {"prints_added": added}
 
 
-def reject_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
-    """"Not them": the name goes from this group (it is unnamed again), the same guess is not made for it again,
-    and a voice print the group gave this person is deleted (a confirmed group was wrong after all)."""
-    rec = resolve_recording(stem, cfg.out_dir)
+def _unname_group(rec: Recording, data: dict, label: str) -> str:
+    """A group named by its label itself – a name tag of the Teams video or the microphone ("Pavol Orosz") – becomes
+    an unnamed SPEAKER_NN: its replies, the speaker list, its voice embedding and a manual name move to the new
+    label. Returns it. (Changes `data` and speakers.json; the caller writes the transcript.)"""
+    taken = {s.get("speaker") for s in data.get("segments") or []} | set(data.get("speakers") or [])
+    new = next(f"SPEAKER_{i:02d}" for i in range(100) if f"SPEAKER_{i:02d}" not in taken)
+    for s in data.get("segments") or []:
+        if s.get("speaker") == label:
+            s["speaker"] = new
+    data["speakers"] = [new if lab == label else lab for lab in data.get("speakers") or []]
+    emb = data.get("speaker_embeddings") or {}
+    if label in emb:
+        emb[new] = emb.pop(label)
     manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
-    if manual.get(label) == pid:
-        manual.pop(label)
+    if label in manual:
+        manual[new] = manual.pop(label)
         rec.write_json(rec.speakers_path, manual)
+    log.info("%s: group %r renamed to %s (its name was wrong)", rec.stem, label, new)
+    return new
+
+
+def reassign_candidate(cfg: Config, stem: str, label: str, pid: str, to_pid: str) -> dict:
+    """"It is somebody else": the group gets `to_pid` for good (as if saved on the page), the voice print it gave
+    `pid` goes, the new person gets its print, and `pid` is not guessed for it again."""
+    people = People.load(cfg.out_dir, cfg.people_display)
+    if people.get(to_pid) is None:
+        raise RecordingError(f"unknown person {to_pid!r}")
+    rec = resolve_recording(stem, cfg.out_dir)
     data = rec.read_json(rec.transcript_path)
+    removed = forget_print(cfg, pid, stem, label)
+    if not is_label(label):  # a name-tag group: an unnamed label first, so the old name does not stay as the label
+        label = _unname_group(rec, data, label)
     (data.get("voice_matches") or {}).pop(label, None)
     if (data.get("direct_call") or {}).get("label") == label:
         data.pop("direct_call")
@@ -794,8 +852,81 @@ def reject_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
     if pid not in rejected.setdefault(label, []):
         rejected[label].append(pid)
     rec.write_json(rec.transcript_path, data)
+    manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    manual[label] = to_pid
+    rec.write_json(rec.speakers_path, manual)
+    added = enroll_names(cfg, rec, {label: to_pid})
+    mark_edited(rec)
     do_export(cfg, rec)
-    return {"ok": True, "prints_removed": forget_print(cfg, pid, stem, label)}
+    return {"ok": True, "label": label, "prints_removed": removed, "prints_added": added}
+
+
+def reject_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
+    """"Not them": the name goes from this group (it is unnamed again), the same guess is not made for it again,
+    and a voice print the group gave this person is deleted (a confirmed group was wrong after all). A name-tag
+    group (the video, the microphone) becomes an unnamed SPEAKER_NN."""
+    rec = resolve_recording(stem, cfg.out_dir)
+    removed = forget_print(cfg, pid, stem, label)
+    data = rec.read_json(rec.transcript_path)
+    if not is_label(label):
+        label = _unname_group(rec, data, label)
+    manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    if manual.get(label) == pid:
+        manual.pop(label)
+        rec.write_json(rec.speakers_path, manual)
+    (data.get("voice_matches") or {}).pop(label, None)
+    if (data.get("direct_call") or {}).get("label") == label:
+        data.pop("direct_call")
+    rejected = data.setdefault("voice_rejected", {})
+    if pid not in rejected.setdefault(label, []):
+        rejected[label].append(pid)
+    rec.write_json(rec.transcript_path, data)
+    mark_edited(rec)
+    do_export(cfg, rec)
+    return {"ok": True, "label": label, "prints_removed": removed}
+
+
+def sample_action(cfg: Config, pid: str, action: str, stem: str, label: str, replace: dict | None = None) -> dict:
+    """Lidé → Vzorky pro rozpoznávání. exclude: the print leaves recognition (the name in the meeting stays, the
+    print does not come back); include: undo that; add: the group becomes a print – a guessed one is confirmed
+    first; with `replace` that print goes first, else over the limit the weakest goes (prune). Says why not."""
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
+    if action == "exclude":
+        removed = vp.exclude(pid, stem, label)
+        vp.save()
+        return {"ok": True, "removed": removed}
+    if action == "include":
+        vp.include(pid, stem, label)
+        vp.save()
+        return {"ok": True}
+    if action != "add":
+        raise ValueError("action: exclude | include | add")
+    rec = resolve_recording(stem, cfg.out_dir)
+    data = rec.read_json(rec.transcript_path)
+    secs = speech_seconds(data.get("segments") or []).get(label, 0.0)
+    if secs < cfg.voiceprints.min_seconds:
+        return {"ok": False, "reason": f"mluví jen {secs:.0f} s – otisk potřebuje aspoň "
+                                       f"{cfg.voiceprints.min_seconds:.0f} s řeči"}
+    vp.include(pid, stem, label)  # added by hand: an earlier exclusion no longer holds
+    before = {(p.get("stem"), p.get("label")) for p in vp.people.get(pid, [])}
+    gone = set()
+    if replace:
+        gone = {(replace.get("stem"), replace.get("label"))}
+        vp.people[pid] = [p for p in vp.people.get(pid, []) if (p.get("stem"), p.get("label")) not in gone]
+    vp.save()
+    manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    guessed = (label in (data.get("voice_matches") or {}) or (data.get("direct_call") or {}).get("label") == label
+               or not manual.get(label))
+    if guessed:
+        confirm_candidate(cfg, stem, label, pid)  # the name for good, and the print
+    else:
+        enroll_names(cfg, rec, {label: pid})
+    after = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
+    now = {(p.get("stem"), p.get("label")) for p in after.people.get(pid, [])}
+    if (stem, label) not in now:
+        return {"ok": False, "reason": "skoro stejný jako už uložený vzorek – nový by nic nepřidal"}
+    dropped = sorted(before - now - gone)
+    return {"ok": True, "dropped": [{"stem": a, "label": b} for a, b in dropped]}
 
 
 def forget_print(cfg: Config, pid: str, stem: str | None, label: str | None) -> int:
@@ -1246,6 +1377,13 @@ class ReviewState:
                             start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
+    def run_replies(self, pid: str) -> tuple[int, int]:
+        """Every reply's own voice for the person's recordings (replies.py): GPU work the user asked for."""
+        if not re.fullmatch(r"[a-z0-9-]{1,80}", pid):
+            raise ValueError(f"not a person id: {pid!r}")
+        return self.run_job("replies", ["run-job", "replies", pid], f"repliky vyhodnoceny ({pid})", "",
+                            start=f"vyhodnocují se repliky ({pid})")
+
     def run_pull(self, model: str) -> tuple[int, int]:
         """Download the local minutes model into Ollama (a queued job: it can be cancelled, its progress shows)."""
         if not re.fullmatch(r"[A-Za-z0-9._:/-]{1,120}", model):
@@ -1316,6 +1454,9 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("GET", r"/api/people/(?P<pid>[^/]+)", "person"),
     ("DELETE", r"/api/people/(?P<pid>[^/]+)/voiceprints", "forget_prints"),
     ("POST", r"/api/people/(?P<pid>[^/]+)/candidates", "candidate"),
+    ("POST", r"/api/people/(?P<pid>[^/]+)/samples", "sample"),
+    ("GET", r"/api/people/(?P<pid>[^/]+)/replies", "replies"),
+    ("POST", r"/api/people/(?P<pid>[^/]+)/replies", "evaluate_replies"),
     ("GET", r"/api/setup", "setup"),
     ("POST", r"/api/setup/hf-check", "setup_hf_check"),
     ("POST", r"/api/setup/done", "setup_done"),
@@ -1577,11 +1718,16 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json(person_detail(state.cfg, pid))
 
         def r_candidate(self, q, body, pid):
-            """{"stem", "label", "confirm": true|false}: a guess of the application confirmed or rejected."""
+            """{"stem", "label", "confirm": true|false} or {"stem", "label", "to": person id}: an assignment confirmed,
+            rejected, or given to somebody else."""
             stem, label = str(body.get("stem") or ""), str(body.get("label") or "")
             if not stem or not label:
                 raise ValueError("stem and label are needed")
-            if body.get("confirm"):
+            if body.get("to"):
+                res = reassign_candidate(state.cfg, stem, label, pid, str(body["to"]))
+                state.event(f"{stem}: {label} přiřazeno jiné osobě" + (" a otisk uložen" if res["prints_added"] else ""),
+                            "ok", stem, reload=True)
+            elif body.get("confirm"):
                 res = confirm_candidate(state.cfg, stem, label, pid)
                 state.event(f"{stem}: {label} potvrzeno" + (" a hlasový otisk uložen" if res["prints_added"] else ""),
                             "ok", stem, reload=True)
@@ -1589,6 +1735,22 @@ def _handler(state: ReviewState, server_ref: dict):
                 res = reject_candidate(state.cfg, stem, label, pid)
                 state.event(f"{stem}: {label} – jméno odebráno (není to ta osoba)", "ok", stem, reload=True)
             self._json({"ok": True, **res})
+
+        def r_replies(self, q, body, pid):
+            from .. import replies
+            self._json(replies.evaluate(state.cfg, pid))
+
+        def r_evaluate_replies(self, q, body, pid):
+            job, position = state.run_replies(pid)
+            self._json({"ok": True, "job": job, "position": position, "status": state.status()})
+
+        def r_sample(self, q, body, pid):
+            """{"action": exclude | include | add, "stem", "label", "replace"?: {stem, label}}"""
+            stem, label = str(body.get("stem") or ""), str(body.get("label") or "")
+            if not stem or not label:
+                raise ValueError("stem and label are needed")
+            self._json(sample_action(state.cfg, pid, str(body.get("action") or ""), stem, label,
+                                     body.get("replace") or None))
 
         def r_forget_prints(self, q, body, pid):
             n = forget_print(state.cfg, pid, (q.get("stem") or [None])[0], (q.get("label") or [None])[0])

@@ -102,7 +102,7 @@ def collect(cfg: Config, people: People | None = None, vp: Voiceprints | None = 
             out.setdefault(pid, []).append(Row(
                 stem=rec.stem, title=rec.title, start=rec.sidecar.get("start"), label=label, status=status,
                 source=source, score=score, seconds=seconds, has_print=(pid, rec.stem, label) in prints,
-                can_reject=_is_label(label), short=seconds < cfg.voiceprints.min_seconds,
+                can_reject=True, short=seconds < cfg.voiceprints.min_seconds,
                 vec=list(vec) if vec else None))
             seen.add((pid, rec.stem, label))
     recs = {r.stem: r for r in iter_recordings(cfg.out_dir)}
@@ -194,3 +194,50 @@ def summary(rows: list[Row]) -> dict:
             "review": sum(r.status == "review" for r in rows),
             "print_only": sum(r.status == "print_only" for r in rows),
             "attention": sum(bool(r.match and r.match.get("level") is not None and r.match["level"] >= 2) for r in rows)}
+
+
+def _level(score: float) -> tuple[int, str]:
+    return next((lv, w) for th, lv, w in LEVELS if score >= th)
+
+
+def sample_view(cfg: Config, pid: str, rows: list[Row], vp: Voiceprints) -> dict:
+    """Lidé → osoba → Vzorky pro rozpoznávání: the prints used for recognition (at most the limit), each compared
+    with the person's other prints only (left out itself, mean of the 3 closest); the groups that could become a
+    print, best first (similarity to the prints, then speech); the excluded ones."""
+    prints = vp.people.get(pid, [])
+    by_key = {(r.stem, r.label): r for r in rows}
+    P = np.asarray([p["v"] for p in prints], dtype=np.float32) if prints else np.zeros((0, 1), dtype=np.float32)
+    if len(P):
+        P /= np.linalg.norm(P, axis=1, keepdims=True) + 1e-9
+    used = []
+    for i, p in enumerate(prints):
+        r = by_key.get((p.get("stem"), p.get("label")))
+        match = None
+        if len(P) > 1:
+            sims = np.delete(P @ P[i], i)
+            own = float(np.sort(sims)[::-1][:TOP_K].mean())
+            level, why = _level(own)
+            match = {"own": round(own, 2), "n": len(P) - 1, "level": level, "why": why}
+        used.append({"stem": p.get("stem"), "label": p.get("label"), "added": p.get("added"),
+                     "title": r.title if r else p.get("stem"), "start": r.start if r else None,
+                     "seconds": round(r.seconds, 1) if r else p.get("seconds"),
+                     "status": r.status if r else "print_only", "match": match})
+    addable = []
+    for r in rows:
+        if r.has_print or r.status == "print_only" or not r.vec or vp.is_excluded(pid, r.stem, r.label):
+            continue
+        q = None
+        if len(P):
+            v = np.asarray(r.vec, dtype=np.float32)
+            v /= np.linalg.norm(v) + 1e-9
+            q = float(np.sort(P @ v)[::-1][:TOP_K].mean())
+        addable.append({"stem": r.stem, "label": r.label, "title": r.title, "start": r.start,
+                        "seconds": round(r.seconds, 1), "status": r.status, "source": r.source,
+                        "short": r.seconds < cfg.voiceprints.min_seconds,
+                        "match": ({"own": round(q, 2), "level": _level(q)[0], "why": _level(q)[1]}
+                                  if q is not None else None)})
+    addable.sort(key=lambda a: (a["short"], -(a["match"]["own"] if a["match"] else 0), -a["seconds"]))
+    titles = {(r.stem, r.label): r.title for r in rows}
+    excluded = [{**e, "title": titles.get((e.get("stem"), e.get("label")), e.get("stem"))}
+                for e in vp.excluded.get(pid, [])]
+    return {"used": used, "limit": vp.limit, "addable": addable, "excluded": excluded}

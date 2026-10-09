@@ -428,7 +428,7 @@ def _require_ffmpeg() -> None:
 
 @app.command("run-job", hidden=True)
 @_errors
-def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices | pull"),
+def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices | pull | replies"),
             target: str = typer.Argument(...), force: bool = typer.Option(False),
             cloud: bool = typer.Option(False, help="emergency fast track: cloud services only (fasttrack.py)"),
             minutes_anyway: bool = typer.Option(True, "--minutes-anyway/--minutes-when-named",
@@ -441,6 +441,11 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
     cfg = _cfg(ctx)
     if kind == "pull":  # download the local minutes model into Ollama (no recording)
         _pull(cfg, target)
+        return
+    if kind == "replies":  # every reply's own voice for a person's recordings (Lidé → Všechny repliky; GPU)
+        from .replies import compute, recordings_of
+        n = compute(cfg, recordings_of(cfg, target), progress=lambda text: print(f"PROGRESS {text}", flush=True))
+        print(f"PROGRESS vyhodnoceno {n} replik", flush=True)
         return
     if cloud:  # the emergency fast track (fasttrack.py): cloud services only, for this job
         from .fasttrack import cloud_only

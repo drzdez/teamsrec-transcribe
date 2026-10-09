@@ -232,7 +232,13 @@
   #backToPerson { position: fixed; left: 16px; bottom: 74px; z-index: 6; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
   .card.flash { outline: 2px solid var(--accent); outline-offset: 2px; transition: outline-color 2s; }
   .candAct { white-space: nowrap; } .candAct button { margin-right: 4px; } .candFix { font-size: 13px; }
+  .candAct .ta.reassign { display: inline-block; width: 220px; vertical-align: middle; margin-right: 4px; }
   .assignBar { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .personTabs { display: flex; gap: 4px; margin: 12px 0 6px; border-bottom: 1px solid var(--line); }
+  .personTabs .subtab { border: 1px solid var(--line); border-bottom: 0; border-radius: 8px 8px 0 0; padding: 6px 12px;
+                        background: var(--bg); color: var(--muted); cursor: pointer; font: inherit; }
+  .personTabs .subtab.active { background: var(--card); color: var(--fg); font-weight: 600; }
+  .excludedBox { margin: 10px 0; color: var(--muted); font-size: 14px; }
   .assignBar .chip { cursor: pointer; border: 1px solid var(--line); }
   .assignBar .chip.active { border-color: var(--accent); color: var(--fg); }
   .matchChip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
@@ -252,6 +258,7 @@
   button.primary-btn:disabled { opacity: .5; cursor: default; }
   .processActs { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
   .minutesAnyway { font-size: 13px; color: var(--muted); cursor: pointer; margin-left: 8px; }
+  .editedBar { color: var(--warn); align-items: center; }
   .processOpts { display: flex; gap: 6px 14px; justify-content: center; flex-wrap: wrap; }
   button.cloud-btn { padding: 10px 18px; border-radius: 8px; border: 1px solid var(--accent); background: transparent;
                      color: var(--accent); font: inherit; font-weight: 600; cursor: pointer; margin-top: 8px; }
@@ -468,8 +475,8 @@
  * @typedef {{source:string,subject:string,organizer:string,start:string,end:string,match:string,status:string,candidates:Candidate[]}} Calendar
  * @typedef {{title:string,title_source:string,calendar:Calendar|null,participants:{name:string,source:string}[],outlook_enabled:boolean,start:string}} Meeting
  * @typedef {{person:string,labels:string[],name:string}} SamePerson
- * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,export_folder?:string,minutes_problem?:string,minutes_pull?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
- * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean,unaligned?:boolean}} RecordingRow
+ * @typedef {{stem:string,title:string,start:string,duration_s:number,source:string,transcribed:boolean,language:string|null,speaker_sources:string[],has_summary:boolean,has_mix:boolean,speakers:Speaker[],known_names:string[],people:Person[],display_default:string,meeting?:Meeting,same_person?:SamePerson[],can_unmerge?:boolean,edited?:string|null,export_folder?:string,minutes_problem?:string,minutes_pull?:string,timings?:any[],voices_missing?:boolean,voices_mixed?:string[],cloud?:{ok:boolean,missing:string,provider:string,model:string},transcribed_with?:{provider:string,model:string,languages:string[],unaligned?:boolean}}} Review
+ * @typedef {{stem:string,title:string,start:string,transcribed:boolean,unresolved:number|null,summary?:boolean,unaligned?:boolean,edited?:string|null}} RecordingRow
  */
 
 const $ = (/** @type {string} */ id) => /** @type {HTMLElement} */ (document.getElementById(id));
@@ -693,8 +700,10 @@ function rowState(/** @type {RecordingRow} */ r) {
   const missing = [];
   if (r.summary === false) missing.push("bez zápisu");  // undefined = an older server that does not say
   if (r.unresolved) missing.push(`${r.unresolved} nepojmenovaných`);
-  if (!missing.length) return { key: "done", text: "✓ hotovo" };
-  return { key: r.summary === false ? "no-summary" : "unresolved", text: `◐ ${missing.join(", ")}` };
+  // names or replies changed after the minutes were written: they need writing again
+  if (!missing.length) return r.edited ? { key: "edited", text: "✎ upraveno" } : { key: "done", text: "✓ hotovo" };
+  return { key: r.summary === false ? "no-summary" : "unresolved",
+           text: `◐ ${missing.join(", ")}${r.edited ? " · ✎ upraveno" : ""}` };
 }
 
 /** @type {string} */
@@ -702,13 +711,15 @@ let stateFilter = "";
 /** the processing-state filters (second row); one at a time, a second click clears it */
 const STATE_FILTERS = [
   { key: "todo", label: "◐ nezpracované", title: "nahrávky bez přepisu, bez zápisu nebo s nepojmenovanými mluvčími",
-    test: (/** @type {RecordingRow} */ r) => rowState(r).key !== "done" || !!r.unaligned },
+    test: (/** @type {RecordingRow} */ r) => rowState(r).key !== "done" || !!r.unaligned || !!r.edited },
   { key: "no-transcript", label: "○ bez přepisu", title: "nahrávky, které ještě nemají přepis",
     test: (/** @type {RecordingRow} */ r) => !r.transcribed },
   { key: "unresolved", label: "? nepojmenované", title: "přepsané nahrávky, kde zůstal někdo nepojmenovaný",
     test: (/** @type {RecordingRow} */ r) => !!r.transcribed && !!r.unresolved },
   { key: "unaligned", label: "⚠ bez zarovnání", title: "přepisy bez zarovnání slov – dlouhé repliky mohou míchat hlasy; vyplatí se je přepsat znovu",
     test: (/** @type {RecordingRow} */ r) => !!r.unaligned },
+  { key: "edited", label: "✎ upraveno", title: "jména nebo repliky se změnily po vzniku zápisu – zápis je potřeba přegenerovat",
+    test: (/** @type {RecordingRow} */ r) => !!r.edited },
   { key: "queued", label: "⏳ zpracovává se nebo ve frontě", title: "nahrávky, které se právě zpracovávají nebo čekají ve frontě",
     test: (/** @type {RecordingRow} */ r) => !!queuePlace(r.stem) },
 ];
@@ -1137,6 +1148,18 @@ function renderNotTranscribedOffer(/** @type {Review} */ r, /** @type {HTMLEleme
   main.appendChild(box);
 }
 
+/** "✎ upraveno": names or replies changed after the minutes were written – the minutes may say the old names.
+ * One click writes them again (the same as "Uložit a přegenerovat zápis"); the mark goes with it. */
+function editedBar(/** @type {Review} */ r) {
+  const bar = document.createElement("div"); bar.className = "toolbar editedBar";
+  const when = String(r.edited || "").replace("T", " ").slice(0, 16);
+  bar.innerHTML = `<span>✎ <b>Upraveno</b> ${escapeHtml(when)} – zápis vznikl dřív a může uvádět stará jména.</span> `;
+  const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = "Přegenerovat zápis";
+  armedButton(b, "Potvrdit: přegenerovat zápis", () => save(true));
+  bar.appendChild(b);
+  return bar;
+}
+
 /** The emergency fast track (fasttrack.py), next to the local action: the same job on cloud services only –
  * transcription with diarization and the minutes – fast and quiet; the audio and the transcript leave the PC, no voice
  * recognition by prints. Off with a reason when a key is missing. The local way stays the default. */
@@ -1299,6 +1322,7 @@ function renderSpeakers() {
   if (!review.speakers.length) { main.appendChild(emptyBox("V přepisu nejsou žádní mluvčí.")); return; }
   if (review.meeting) main.appendChild(meetingPanel(review.meeting));
   main.appendChild(languageLine(review));
+  if (review.edited) main.appendChild(editedBar(review));
   if (review.voices_missing) main.appendChild(voicesBar(review));
   if ((review.timings || []).length) main.appendChild(timingsBox(review.timings || []));
   if (review.speakers.some(sp => sp.unresolved && !sp.person)) {
@@ -2117,7 +2141,7 @@ async function savePeople() {
 /**
  * @typedef {{stem:string,label:string,added:string,dims:number,title:string|null,start:string|null,seconds:number|null,samples:Sample[],has_mix:boolean}} PrintRow
  * @typedef {{stem:string,title:string,start:string|null,label:string,source:string,score:number|null,seconds:number,short:boolean,can_reject:boolean,samples:Sample[],has_mix:boolean}} CandidateRow
- * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],candidates?:CandidateRow[],assignments?:any[],summary?:any,recordings:string[]}} PersonDetail
+ * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],candidates?:CandidateRow[],assignments?:any[],summary?:any,samples_view?:any,recordings:string[]}} PersonDetail
  */
 async function openPerson(/** @type {string} */ id) {
   stopAudio(); setStatus("");
@@ -2138,15 +2162,250 @@ async function openPerson(/** @type {string} */ id) {
     `<br>${summaryText(d.summary)}. Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš ${d.limit || 20} – nad limit odpadne nejslabší: smíchaný či vybočující hlas, krátká řeč, jinak ten, který se nejvíc podobá jinému; model ${escapeHtml(d.model || "?")}). ` +
     "";
   peopleMain.appendChild(info);
-  assignmentsTable(d);
-  if (d.prints.length) {
-    const all = document.createElement("button"); all.type = "button"; all.className = "link danger"; all.textContent = "smazat všechny otisky této osoby";
-    armedButton(all, "opravdu smazat všechny otisky? (klikněte znovu)", async () => {
+  // three views: the prints recognition uses (managed here), the person in all meetings (evaluation), every reply
+  const sv = d.samples_view || { used: [], limit: 20, addable: [], excluded: [] };
+  const view = personTab[d.id] || "samples";
+  const tabs = document.createElement("div"); tabs.className = "personTabs";
+  for (const [k, label] of [["samples", `Vzorky pro rozpoznávání (${sv.used.length}/${sv.limit})`],
+                            ["meetings", `Ve schůzkách (${(d.assignments || []).length})`],
+                            ["replies", "Všechny repliky"]]) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "subtab" + (view === k ? " active" : "");
+    b.textContent = label;
+    b.onclick = () => { personTab[d.id] = k; openPerson(d.id); };
+    tabs.appendChild(b);
+  }
+  peopleMain.appendChild(tabs);
+  if (view === "meetings") assignmentsTable(d);
+  else if (view === "replies") repliesView(d);
+  else samplesTable(d, sv);
+}
+
+/** @type {Record<string, string>} */ const personTab = {};  // person id -> "samples" | "meetings" | "replies"
+
+/** The voice prints recognition uses (at most the limit): each compared with the person's other prints only.
+ * Nepoužívat = out of recognition (the name in the meeting stays, the print does not come back); → jinému = it is
+ * somebody else's voice (the meeting changes, it gets "✎ upraveno"). Below: the person's other groups to add, best
+ * first, and the excluded ones. */
+function samplesTable(/** @type {any} */ d, /** @type {any} */ sv) {
+  const who = { id: d.id, name: `${d.first} ${d.last}`.trim() || d.nick };
+  const help = document.createElement("p"); help.className = "people-help";
+  help.innerHTML = `Tyto vzorky (nejvýš ${sv.limit}) se používají k poznávání po hlase. <b>Podobnost</b> porovnává vzorek `
+    + "s ostatními vzorky této osoby: <span class='lvl0'>■ odpovídá</span> <span class='lvl1'>■ trochu jiný</span> "
+    + "<span class='lvl2'>■ jiný – poslechněte</span> <span class='lvl3'>■ velmi jiný</span>. <b>Nepoužívat</b> = vzorek "
+    + "z poznávání vypadne (jméno ve schůzce zůstane); <b>→ jinému</b> = je to hlas někoho jiného (schůzka se upraví).";
+  peopleMain.appendChild(help);
+  if (!sv.used.length) peopleMain.appendChild(emptyBox("Zatím žádný vzorek – přidejte některý z jeho schůzek níže."));
+  else {
+    const t = document.createElement("table"); t.className = "candidates samplesUsed";
+    t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Mluvil</th><th>Podobnost</th><th>Ukázky</th><th></th></tr></thead>";
+    const tb = document.createElement("tbody");
+    for (const c of sv.used) {
+      const tr = document.createElement("tr");
+      if (c.match && c.match.level >= 2) tr.className = "attention";
+      const gone = c.status === "print_only";
+      const open = gone ? `${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)} <small class="muted">(skupina už neexistuje)</small>`
+        : `<a href="#" class="openRec" title="otevřít nahrávku u tohoto mluvčího">${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}</a>`;
+      for (const html of [open, escapeHtml(c.label), c.seconds != null ? fmtMin(c.seconds) : "?", matchCell(c)]) {
+        const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
+      }
+      tr.appendChild(samplesCell(c));
+      const tdA = document.createElement("td"); tdA.className = "act candAct";
+      const off = document.createElement("button"); off.type = "button"; off.className = "play candNo"; off.textContent = "Nepoužívat";
+      off.title = "vzorek vypadne z poznávání a už se nevrátí; jméno ve schůzce zůstane";
+      armedButton(off, "Potvrdit: nepoužívat pro rozpoznávání", () => sampleAction(d.id, "exclude", c));
+      tdA.appendChild(off);
+      if (!gone) {
+        const other = document.createElement("button"); other.type = "button"; other.className = "play candOther";
+        other.textContent = "→ jinému…"; other.title = "je to hlas jiné osoby: skupina ve schůzce i vzorek přejdou k ní";
+        other.onclick = () => reassignPicker(d.id, c, other);
+        tdA.appendChild(other);
+      }
+      tr.appendChild(tdA);
+      const link = /** @type {HTMLElement|null} */ (tr.querySelector("a.openRec"));
+      if (link) link.onclick = e => { e.preventDefault(); openRecordingAt(c.stem, c.label, who); };
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb); peopleMain.appendChild(t);
+  }
+
+  // adding: the person's other groups, the most representative first
+  const h = document.createElement("h3"); h.className = "person-h3";
+  h.textContent = `Přidat vzorek z jeho schůzek (${sv.addable.length})`;
+  peopleMain.appendChild(h);
+  const full = sv.used.length >= sv.limit;
+  const weakest = full ? sv.used.filter((/** @type {any} */ u) => u.match).sort((/** @type {any} */ a, /** @type {any} */ b) => a.match.own - b.match.own)[0] : null;
+  const help2 = document.createElement("p"); help2.className = "people-help";
+  help2.textContent = "Seřazeno od nejpodobnějších vzorkům výše a podle délky řeči. Poslechněte si a ＋ přidejte – skupina "
+    + "ke kontrole se tím zároveň potvrdí." + (full && weakest ? ` Vzorků je ${sv.limit}: přidání nahradí nejslabší (${weakest.title}, ${weakest.match.own.toFixed(2)}).` : "");
+  peopleMain.appendChild(help2);
+  if (!sv.addable.length) peopleMain.appendChild(emptyBox("Další skupiny s hlasem této osoby nejsou."));
+  else {
+    const t = document.createElement("table"); t.className = "candidates samplesAdd";
+    t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Stav</th><th>Mluvil</th><th>Podobnost</th><th>Ukázky</th><th></th></tr></thead>";
+    const tb = document.createElement("tbody");
+    for (const c of sv.addable) {
+      const tr = document.createElement("tr");
+      const state = (c.status === "confirmed" ? "potvrzeno" : "ke kontrole") + `<br><small>${escapeHtml(SOURCE_NAME[c.source] || c.source)}</small>`;
+      for (const html of [`<a href="#" class="openRec">${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}</a> <small class="muted">${escapeHtml(c.label)}</small>`,
+                          state, fmtMin(c.seconds) + (c.short ? " · krátké" : ""), matchCell(c)]) {
+        const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
+      }
+      tr.appendChild(samplesCell(c));
+      const tdA = document.createElement("td"); tdA.className = "act candAct";
+      const add = document.createElement("button"); add.type = "button"; add.className = "play candYes";
+      add.textContent = full ? "＋ místo nejslabšího" : "＋ přidat";
+      add.disabled = !!c.short;
+      add.title = c.short ? "mluví méně než 30 s – na vzorek je to málo" : full && weakest ? `nahradí ${weakest.title} (${weakest.match.own.toFixed(2)})` : "přidá se mezi vzorky pro poznávání";
+      add.onclick = () => sampleAction(d.id, "add", c, full && weakest ? { stem: weakest.stem, label: weakest.label } : null);
+      tdA.appendChild(add);
+      tr.appendChild(tdA);
+      /** @type {HTMLElement} */ (tr.querySelector("a.openRec")).onclick = e => { e.preventDefault(); openRecordingAt(c.stem, c.label, who); };
+      tb.appendChild(tr);
+    }
+    t.appendChild(tb); peopleMain.appendChild(t);
+  }
+
+  if (sv.excluded.length) {
+    const det = document.createElement("details"); det.className = "excludedBox";
+    det.innerHTML = `<summary>Nepoužité vzorky (${sv.excluded.length}) – vyřazené z poznávání</summary>`;
+    const ul = document.createElement("ul");
+    for (const e of sv.excluded) {
+      const li = document.createElement("li");
+      li.textContent = `${e.title} · ${e.label} · vyřazeno ${String(e.at || "").replace("T", " ").slice(0, 16)} `;
+      const back = document.createElement("button"); back.type = "button"; back.className = "link"; back.textContent = "vrátit";
+      back.title = "vyřazení se zruší; skupina se objeví mezi těmi, které jde přidat";
+      back.onclick = () => sampleAction(d.id, "include", e);
+      li.appendChild(back); ul.appendChild(li);
+    }
+    det.appendChild(ul); peopleMain.appendChild(det);
+  }
+  if (sv.used.length) {
+    const all = document.createElement("button"); all.type = "button"; all.className = "link danger"; all.textContent = "smazat všechny vzorky této osoby";
+    armedButton(all, "opravdu smazat všechny vzorky? (klikněte znovu)", async () => {
       try { await api(`/api/people/${encodeURIComponent(d.id)}/voiceprints`, send("DELETE")); openPerson(d.id); }
       catch (e) { setStatus(String(e), "err"); }
     });
     peopleMain.appendChild(all);
   }
+}
+
+/** the ▶ buttons of a group's replies */
+function samplesCell(/** @type {any} */ c) {
+  const tdS = document.createElement("td"); tdS.className = "samples";
+  if (c.samples && c.samples.length && c.has_mix) {
+    for (const smp of c.samples) {
+      const b = document.createElement("button"); b.type = "button"; b.className = "play";
+      b.textContent = `▶ ${smp.at}`; b.title = smp.text;
+      b.onclick = () => play(b, smp, c.stem);
+      tdS.appendChild(b);
+    }
+  } else tdS.textContent = c.status === "print_only" ? "–" : "zvuk chybí";
+  return tdS;
+}
+
+async function sampleAction(/** @type {string} */ pid, /** @type {string} */ action, /** @type {any} */ c, /** @type {any} */ replace = null) {
+  try {
+    const r = await api(`/api/people/${encodeURIComponent(pid)}/samples`, send("POST", { action, stem: c.stem, label: c.label, replace }));
+    await openPerson(pid);
+    if (!r.ok) { setStatus(`${c.title}: ${r.reason}`, "err"); return; }
+    setStatus(action === "exclude" ? `${c.title}: vzorek se už pro poznávání nepoužívá`
+      : action === "include" ? `${c.title}: vyřazení zrušeno – skupinu jde znovu přidat`
+      : `${c.title}: přidáno mezi vzorky` + (replace ? " (nahradilo nejslabší)" : "")
+        + ((r.dropped || []).length ? `; nad limit vypadl nejslabší vzorek` : ""), "ok");
+  } catch (e) { setStatus(String(e), "err"); }
+}
+
+/** @type {Record<string, {sort:string, odd:boolean, shown:number}>} */ const replyView = {};
+
+/** Všechny repliky: every reply of the person, its own voice compared with their prints. The voices are GPU work:
+ * computed only when the user asks (a queued job), then kept per recording. */
+async function repliesView(/** @type {any} */ d) {
+  const box = document.createElement("div"); box.className = "repliesBox";
+  box.innerHTML = '<div class="empty">Načítám repliky…</div>';
+  peopleMain.appendChild(box);
+  /** @type {any} */ let r;
+  try { r = await api(`/api/people/${encodeURIComponent(d.id)}/replies`); }
+  catch (e) { box.innerHTML = ""; setStatus(String(e), "err"); return; }
+  box.innerHTML = "";
+  const who = { id: d.id, name: `${d.first} ${d.last}`.trim() || d.nick };
+  const st = replyView[d.id] || (replyView[d.id] = { sort: "own-asc", odd: false, shown: 200 });
+  const help = document.createElement("p"); help.className = "people-help";
+  help.innerHTML = `Každá replika této osoby (aspoň 1,5 s) má vlastní otisk hlasu a ten se porovná se vzorky osoby. `
+    + `Tak se najdou místa, kde ve skupině mluví někdo jiný. Vyhodnoceno <b>${r.evaluated_recordings}</b> z ${r.recordings} schůzek.`;
+  box.appendChild(help);
+  if (r.todo.length) {
+    const p = document.createElement("p");
+    const b = document.createElement("button"); b.type = "button"; b.className = "primary-btn";
+    const mins = Math.max(1, Math.round(r.estimate_s / 60));
+    b.textContent = `Vyhodnotit repliky (${r.todo.length} schůzek, ${r.todo_replies} replik)`;
+    b.title = `poběží na grafické kartě ve frontě zpracování, zhruba ${mins} min; během nahrávání počká`;
+    b.onclick = async () => {
+      b.disabled = true;
+      /** @type {any} */ let j;
+      try { j = await api(`/api/people/${encodeURIComponent(d.id)}/replies`, send("POST")); }
+      catch (e) { setStatus(String(e), "err"); b.disabled = false; return; }
+      setStatus("repliky se vyhodnocují – průběh je dole u zpracování; stránku můžete používat", "busy");
+      const error = await waitForJob(j.job).catch(e => String(e));
+      if (error) { setStatus(`vyhodnocení se nepodařilo: ${error}`, "err"); return; }
+      setStatus("repliky vyhodnoceny", "ok");
+      if (!peopleMain.hidden && personTab[d.id] === "replies") openPerson(d.id);
+    };
+    confirmFirst(b, `Potvrdit: vytížit grafickou kartu ~${mins} min`,
+                 `vyhodnocení ${r.todo_replies} replik poběží ve frontě na grafické kartě zhruba ${mins} min – potvrďte druhým kliknutím, nebo Zrušit`);
+    p.appendChild(b); box.appendChild(p);
+  }
+  if (!r.replies.length) { if (!r.todo.length) box.appendChild(emptyBox("Osoba nemá žádné repliky delší než 1,5 s.")); return; }
+
+  const bar = document.createElement("div"); bar.className = "assignBar";
+  const odd = r.replies.filter((/** @type {any} */ x) => x.level >= 2).length;
+  for (const [k, label] of [["own-asc", "od nejméně podobných"], ["own-desc", "od nejpodobnějších"], ["long", "nejdelší"], ["date", "podle data"]]) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip" + (st.sort === k ? " active" : "");
+    b.textContent = label; b.onclick = () => { st.sort = k; st.shown = 200; openPerson(d.id); };
+    bar.appendChild(b);
+  }
+  const oddBtn = document.createElement("button"); oddBtn.type = "button"; oddBtn.className = "chip" + (st.odd ? " active" : "");
+  oddBtn.textContent = `⚠ jen k pozornosti (${odd})`; oddBtn.onclick = () => { st.odd = !st.odd; st.shown = 200; openPerson(d.id); };
+  bar.appendChild(oddBtn);
+  box.appendChild(bar);
+
+  let rows = r.replies.slice();
+  if (st.odd) rows = rows.filter((/** @type {any} */ x) => x.level >= 2);
+  const own = (/** @type {any} */ x) => x.own == null ? 2 : x.own;
+  rows.sort(st.sort === "own-asc" ? (a, b) => own(a) - own(b) : st.sort === "own-desc" ? (a, b) => own(b) - own(a)
+    : st.sort === "long" ? (a, b) => (b.end - b.start) - (a.end - a.start)
+    : (a, b) => (String(b.date) + String(b.start).padStart(8, "0")).localeCompare(String(a.date) + String(a.start).padStart(8, "0")));
+  const t = document.createElement("table"); t.className = "candidates repliesTable";
+  t.innerHTML = "<thead><tr><th>Schůzka</th><th>Čas</th><th>Délka</th><th>Podobnost</th><th>Text</th><th></th></tr></thead>";
+  const tb = document.createElement("tbody");
+  for (const x of rows.slice(0, st.shown)) {
+    const tr = document.createElement("tr");
+    if (x.level >= 2) tr.className = "attention";
+    const at = fmtClock(x.start);
+    const m = x.own == null ? null : { own: x.own, level: x.level, why: x.why, n: 0, other: x.other };
+    for (const html of [`<a href="#" class="openRec">${fmtDate(x.date || "")} ${escapeHtml(x.title)}</a> <small class="muted">${escapeHtml(x.label)}</small>`,
+                        at, `${(x.end - x.start).toFixed(1)} s`, m ? matchCell({ match: m }) : "–", escapeHtml(x.text)]) {
+      const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
+    }
+    const tdP = document.createElement("td");
+    const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = "▶";
+    b.title = "přehrát repliku"; b.onclick = () => play(b, { start: x.start, end: Math.min(x.end, x.start + 30), at, text: x.text }, x.stem);
+    tdP.appendChild(b); tr.appendChild(tdP);
+    /** @type {HTMLElement} */ (tr.querySelector("a.openRec")).onclick = e => { e.preventDefault(); openRecordingAt(x.stem, x.label, who); };
+    tb.appendChild(tr);
+  }
+  t.appendChild(tb); box.appendChild(t);
+  if (rows.length > st.shown) {
+    const more = document.createElement("button"); more.type = "button"; more.className = "link";
+    more.textContent = `zobrazit dalších ${Math.min(200, rows.length - st.shown)} (z ${rows.length})`;
+    more.onclick = () => { st.shown += 200; openPerson(d.id); };
+    box.appendChild(more);
+  }
+}
+
+/** seconds -> "01:02:03" */
+function fmtClock(/** @type {number} */ sec) {
+  const s = Math.floor(sec);
+  return `${String(Math.floor(s / 3600)).padStart(2, "0")}:${String(Math.floor(s / 60) % 60).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
 }
 
 const SOURCE_NAME = /** @type {Record<string, string>} */ ({ "ručně": "uloženo vámi", hlas: "podle hlasu",
@@ -2233,6 +2492,12 @@ function assignmentsTable(/** @type {any} */ d) {
       yes.onclick = () => decideCandidate(d.id, c, true, yes);
       tdA.appendChild(yes);
     }
+    if (c.status !== "print_only") {  // somebody else's voice: give the group to that person (and their print)
+      const other = document.createElement("button"); other.type = "button"; other.className = "play candOther";
+      other.textContent = "→ jinému…"; other.title = "patří jiné osobě: vyberte ji – skupina dostane její jméno a hlasový otisk se přesune k ní";
+      other.onclick = () => reassignPicker(d.id, c, other);
+      tdA.appendChild(other);
+    }
     if (c.can_reject) {
       const no = document.createElement("button"); no.type = "button"; no.className = "play candNo"; no.textContent = "✗ Není to";
       no.title = "jméno se z této skupiny odebere" + (c.has_print ? " a smaže se její hlasový otisk" : "") + "; stejný odhad se u ní už neobjeví";
@@ -2270,6 +2535,26 @@ function matchCell(/** @type {any} */ c) {
   const tip = `${m.why}. Podobnost ${m.own.toFixed(2)} se ${m.n} otisky této osoby (průměr tří nejbližších)${other}.`;
   return `<span class="matchChip ${LEVEL_CLASS[m.level] || ""}" title="${escapeHtml(tip)}">${m.own.toFixed(2)}${m.level >= 2 ? " ⚠" : ""}</span>`
     + (m.level === 3 && m.other && m.other.score > m.own ? `<br><small class="lvl3">→ ${escapeHtml(m.other.name)}?</small>` : "");
+}
+
+/** "→ jinému…": a person picker in place of the button; the pick gives the group to that person. */
+function reassignPicker(/** @type {string} */ pid, /** @type {any} */ c, /** @type {HTMLButtonElement} */ btn) {
+  const others = people.filter(p => p.id && p.id !== pid);
+  const ta = typeahead("komu patří? (pište jméno)",
+    others.map(p => ({ value: p.id, text: `${`${p.first} ${p.last}`.trim() || p.nick}${p.nick ? ` (${p.nick})` : ""}`,
+                       also: [p.display, ...(p.aliases || [])].join(" ") })),
+    async to => {
+      const p = others.find(x => x.id === to);
+      try {
+        const r = await api(`/api/people/${encodeURIComponent(pid)}/candidates`, send("POST", { stem: c.stem, label: c.label, to }));
+        await openPerson(pid);
+        setStatus(`${c.label} v ${c.title}: přiřazeno ${p ? `${p.first} ${p.last}`.trim() : to}` +
+                  (r.prints_added ? ", hlasový otisk uložen u ní" : "") + (r.prints_removed ? ", otisk odebrán odsud" : ""), "ok");
+      } catch (e) { setStatus(String(e), "err"); }
+    });
+  ta.classList.add("reassign");
+  btn.replaceWith(ta);
+  /** @type {HTMLInputElement} */ (ta.querySelector("input")).focus();
 }
 
 async function decideCandidate(/** @type {string} */ pid, /** @type {CandidateRow} */ c, /** @type {boolean} */ confirm,

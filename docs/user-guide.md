@@ -201,6 +201,28 @@ and the card asks "⚠ přímý hovor s Karel Horák, ale hlas připomíná Jan 
 for each; a caller who is not in the people list yet is offered with "použít toto jméno". Saving the name stores the
 voice print, so the next call with that person is recognised.
 
+**Lidé (společné) → the person** has three views:
+
+- **Vzorky pro rozpoznávání** – the prints recognition really uses (at most `max_prints`), each with ▶ replies and its
+  similarity to the person's *other* prints (green = matches, yellow = a bit different – another headset, orange ⚠ =
+  listen, red ⚠ = very different; the reason in the tooltip). *Nepoužívat* takes a print out of recognition: the
+  name in the meeting stays, and the print does not come back when the meeting is saved again (*Nepoužité vzorky*
+  lists them, *vrátit* undoes it). *→ jinému…* says it is somebody else's voice: the group in the meeting gets that
+  person, the print moves to them, and the meeting gets "✎ upraveno". Below, *Přidat vzorek z jeho schůzek* lists the
+  person's other groups, the most similar first; *＋ přidat* (a guessed group is confirmed by it), with all slots
+  taken *＋ místo nejslabšího*.
+- **Ve schůzkách** – every group named after the person in every meeting, confirmed or guessed by the application
+  (voice, Teams video, microphone, direct call), with the same colours against all their prints and the closest other
+  person; ✓ Potvrdit, ✗ Není to (the name and the group's print go, the guess does not come back), → jinému…
+- **Všechny repliky** – every reply of the person (1.5 s and more) with its *own* voice compared with their prints:
+  it finds the places where somebody else speaks inside the person's group. The replies' voices are computed on the
+  graphics card only when you ask (*Vyhodnotit repliky*, with an estimate and a second click; about half a minute for
+  an hour's meeting, kept in `<stem>.reply_voices.json`), then sortable by similarity, length or date, each playable.
+
+A meeting whose names or replies changed after its minutes were written is marked **✎ upraveno** in the list (also a
+filter) and above its speaker cards, with *Přegenerovat zápis*; writing the minutes again clears the mark. The
+transcript itself is always current – every change is saved to it and the texts are exported again at once.
+
 An older recording with unknown speakers can be compared with the prints collected since, without a new transcript:
 on the page the button "Zkusit poznat neznámé po hlase" above the cards, in a terminal
 `teamsrec-transcribe recognize <stem>` (without a stem it goes through all recordings; `--summary` regenerates the
@@ -397,8 +419,8 @@ Jobs run one at a time, in order. The recordings list starts their rows with `�
 it is until its turn – a slim line pinned above the tabs says where it is in the queue, the page can be read and
 edited, and cancelling loses nothing; the manual names, the window analysis and the voice prints this recording gave
 (only these – the people's prints from other meetings stay) are dropped only when the job starts. The prints come back
-from the new transcript when you save the names. A single print you do not trust is deleted without any new transcript
-in **Lidé (společné)** → the person → the print's ✕.
+from the new transcript when you save the names. A single print you do not trust is taken out without any new transcript
+in **Lidé (společné)** → the person → *Nepoužívat*.
 Once it runs, the page empties to the same "being processed" view as a new recording (Uložit is off), and the new
 transcript appears by itself when it is done. A recording without a transcript that waits in the queue shows its
 place ("Je ve frontě – 2. v pořadí") instead of the offer to transcribe it, with **Zpracovat jako další** (it moves right behind the running job) and

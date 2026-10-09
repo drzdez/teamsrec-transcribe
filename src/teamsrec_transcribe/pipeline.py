@@ -244,6 +244,42 @@ def same_person_groups(rec: Recording, people: People) -> dict[str, list[str]]:
     return {pid: ls for pid, ls in groups.items() if len(ls) > 1}
 
 
+def mark_edited(rec: Recording) -> None:
+    """Names or replies of this recording changed (by the user, or by voice recognition run later): its minutes,
+    written from the transcript and speakers.json, may say the old names. The review page marks the recording
+    "upraveno" until the minutes are written again (minutes_stale)."""
+    if not rec.transcript_path.exists():
+        return
+    data = rec.read_json(rec.transcript_path)
+    data["edited_at"] = datetime.now().isoformat(timespec="seconds")
+    rec.write_json(rec.transcript_path, data)
+
+
+def minutes_time(rec: Recording) -> float | None:
+    """When the minutes were written: the main one, else the newest one by another model; None = none."""
+    if rec.summary_path.exists():
+        return rec.summary_path.stat().st_mtime
+    others = [p.stat().st_mtime for p in rec.dir.glob(f"{rec.stem}.summary.*.md")]
+    return max(others) if others else None
+
+
+def minutes_stale(rec: Recording, data: dict | None = None) -> str | None:
+    """The time of the last edit when it came after the minutes (they may say the old names), else None. A
+    recording without minutes is never stale: its transcript texts are regenerated on every save."""
+    if data is None:
+        if not rec.transcript_path.exists():
+            return None
+        data = rec.read_json(rec.transcript_path)
+    edited = data.get("edited_at")
+    written = minutes_time(rec)
+    if not edited or written is None:
+        return None
+    try:
+        return edited if datetime.fromisoformat(edited).timestamp() > written else None
+    except ValueError:
+        return None
+
+
 def merge_same_person(cfg: Config, rec: Recording) -> dict:
     """Fold every group of labels that belongs to one person into a single speaker. Their embeddings are kept
     as voice prints first - the same voice recorded under different conditions is what makes later recognition
@@ -291,6 +327,7 @@ def merge_same_person(cfg: Config, rec: Recording) -> dict:
                      "seconds": round(sum(secs.get(l, 0.0) for l in [keep, *gone]), 1)})
         log.info("%s: %s merged into %s (%s)", rec.stem, ", ".join(gone), keep, pid)
     data.setdefault("merged_speakers", []).extend([dict(g, at=utc_now_iso()) for g in done])
+    data["edited_at"] = datetime.now().isoformat(timespec="seconds")  # the minutes may say the old names
     rec.write_json(rec.transcript_path, data)
     rec.write_json(rec.speakers_path, names)
     if vp is not None and prints:
@@ -327,6 +364,7 @@ def unmerge_speakers(cfg: Config, rec: Recording) -> int:
                 names[label] = group["person"]
     data["speakers"] = sorted({s.get("speaker") for s in data["segments"] if s.get("speaker")})
     data["merged_speakers"] = [g for g in merged if not set(g.get("merged", [])) & restored]
+    data["edited_at"] = datetime.now().isoformat(timespec="seconds")  # the minutes may say the old names
     rec.write_json(rec.transcript_path, data)
     rec.write_json(rec.speakers_path, names)
     do_export(cfg, rec)
@@ -387,6 +425,7 @@ def remove_speaker(cfg: Config, rec: Recording, label: str) -> int:
         if isinstance(data.get(key), dict):
             data[key].pop(label, None)
     data.setdefault("removed_speakers", []).append({"label": label, "segments": n, "at": utc_now_iso()})
+    data["edited_at"] = datetime.now().isoformat(timespec="seconds")  # the minutes may say the old names
     rec.write_json(rec.transcript_path, data)
     if rec.speakers_path.exists():
         names = rec.read_json(rec.speakers_path)
@@ -449,6 +488,7 @@ def assign_segments(cfg: Config, rec: Recording, moves: list[dict]) -> int:
         rec.write_json(rec.transcript_path, data)
         do_export(cfg, rec)
         log.info("%s: %d replies moved to another speaker", rec.stem, n)
+        mark_edited(rec)
     return n
 
 
@@ -783,6 +823,8 @@ def recognize_voices(cfg: Config, rec: Recording) -> dict:
     data["voice_matches"] = known
     if matches and "voiceprint" not in data.get("speaker_sources", []):
         data["speaker_sources"] = [s for s in data.get("speaker_sources", []) if s != "diarization"] + ["voiceprint", "diarization"]
+    if matches:
+        data["edited_at"] = datetime.now().isoformat(timespec="seconds")  # new names: the minutes may be stale
     rec.write_json(rec.transcript_path, data)
     do_export(cfg, rec)
     return matches

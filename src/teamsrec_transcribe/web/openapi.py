@@ -99,12 +99,23 @@ def spec(version: str) -> dict:
                                                 "download the diarization model (licence accepted)",
                                                 tags=("settings",), body=_obj(token=s))},
             "/api/setup/done": {"post": _op("The wizard ran: it is not shown again", tags=("settings",))},
+            "/api/people/{id}/replies": {
+                "get": _op("Every reply of the person (its own voice embedding, when computed) compared with their voice "
+                           "prints and the closest other person; which recordings are not evaluated yet and the estimate",
+                           tags=("people",), params=[{"name": "id", "in": "path", "required": True, "schema": s}]),
+                "post": _op("Compute the replies' voice embeddings for the person's recordings: a queued GPU job",
+                            tags=("people",), params=[{"name": "id", "in": "path", "required": True, "schema": s}])},
+            "/api/people/{id}/samples": {"post": _op(
+                "The person's voice prints used for recognition: exclude one (the name in the meeting stays), "
+                "include it again, or add a group as a print (a guessed one is confirmed; replace = which print goes)",
+                tags=("people",), params=[{"name": "id", "in": "path", "required": True, "schema": s}],
+                body=_obj(action={"enum": ["exclude", "include", "add"]}, stem=s, label=s, replace={"type": "object"}))},
             "/api/people/{id}/candidates": {"post": _op(
                 "A speaker group the application named after this person without confirmation (voice, direct call, "
                 "video, microphone): confirm (the name stays for good, the voice print is stored) or reject (the "
                 "name goes and is not guessed again)", tags=("people",), params=[
                     {"name": "id", "in": "path", "required": True, "schema": s}],
-                body=_obj(stem=s, label=s, confirm={"type": "boolean"}))},
+                body=_obj(stem=s, label=s, confirm={"type": "boolean"}, to=s))},
             "/api/settings": {
                 "get": _op("Settings of both apps: sections with fields (type, choices, value, default), the state "
                            "of the API keys (env | vault | missing, never the value), the audio inputs of this PC",

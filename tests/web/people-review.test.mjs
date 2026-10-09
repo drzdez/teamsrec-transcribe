@@ -10,7 +10,9 @@ async function openJana(p) {
   const row = [...p.doc.querySelectorAll("#peopleMain tr")].find(tr => [...tr.querySelectorAll("input")].some(i => i.value === "Nováková"));
   [...row.querySelectorAll("button.link")].find(b => b.textContent === "detail").click();
   await waitFor(() => p.doc.querySelector("#peopleMain .person-h3"), "Jana's page");
-  await waitFor(() => p.doc.querySelector("#peopleMain table.candidates"), "Jana's guessed groups");
+  await waitFor(() => p.doc.querySelector("#peopleMain .personTabs"), "Jana's page");
+  [...p.doc.querySelectorAll("#peopleMain .personTabs button")].find(b => b.textContent.startsWith("Ve schůzkách")).click();
+  await waitFor(() => p.doc.querySelector("#peopleMain table.assignments"), "Jana's guessed groups");
 }
 
 test("person page: to the meeting at the speaker's card and back; a confirmation keeps the Lidé view", async t => {
@@ -21,13 +23,13 @@ test("person page: to the meeting at the speaker's card and back; a confirmation
 
   // the meeting that is already open: a plain #stem link did nothing here
   const row = [...p.doc.querySelectorAll("table.candidates tr")].find(tr => tr.textContent.includes("Týdenní"));
-  row.querySelector("button.candFix").click();
+  row.querySelector("a.openRec").click();
   await waitFor(() => !p.$("pick").hidden && p.$("tabSpeakers").classList.contains("active"), "the Schůzka tab");
   assert.ok(p.$("peopleMain").hidden && !p.$("main").hidden, "the meeting, not the people");
   assert.ok(p.doc.querySelector('.card.flash .side[data-label="Jana Nováková"]'), "Jana's card is pointed at");
   assert.match(p.$("backToPerson").textContent, /zpět na Jana Nováková/);
   p.$("backToPerson").click();
-  await waitFor(() => p.doc.querySelector("#peopleMain table.candidates"), "back on Jana's page");
+  await waitFor(() => p.doc.querySelector("#peopleMain table.assignments"), "back on Jana's page (the same view)");
   assert.ok(p.$("backToPerson").hidden && p.$("main").hidden);
 
   // ✓ Potvrdit on the meeting that is open under Schůzka: the server announces it changed; the page stays here

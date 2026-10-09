@@ -473,8 +473,8 @@ def test_untranscribed_recording_is_offered_for_processing(tmp_path, monkeypatch
     st = rv.ReviewState(cfg)
     assert st.run_process(rec)
     import time
-    for _ in range(50):
-        if not st.status()["busy"]:
+    for _ in range(100):  # idle first, the job's last event right after it
+        if not st.status()["busy"] and st.status()["events"][-1]["text"].startswith("zpracováno"):
             break
         time.sleep(0.02)
     assert calls and calls[0][-4:] == ["run-job", "process", rec.stem, "--minutes-when-named"], "processing runs as a child process"
@@ -2020,8 +2020,8 @@ def test_missing_local_minutes_model_is_said_and_the_job_ends_as_an_error(tmp_pa
     monkeypatch.setattr(rv, "run_cli", cli)
     state = rv.ReviewState(cfg)
     state.run_job("process", ["run-job", "process", "s1"], "zpracováno", "s1")
-    for _ in range(200):
-        if not state.busy:
+    for _ in range(200):  # idle first, the job's end event right after it
+        if not state.busy and any(e["job_end"] for e in state.events):
             break
         _time.sleep(0.02)
     end = [e for e in state.events if e["job_end"]][-1]
@@ -2430,3 +2430,132 @@ def test_assignments_compare_each_group_with_the_persons_other_prints(tmp_path):
 
     assert reject_candidate(cfg, rec.stem, "SPEAKER_00", petr)["prints_removed"] == 1, "a confirmed group was wrong"
     assert Voiceprints.load(tmp_path).count(petr) == 3 and "SPEAKER_00" not in rec.read_json(rec.speakers_path)
+
+
+def test_a_group_goes_to_somebody_else_or_loses_a_wrong_name_tag(tmp_path):
+    """"→ jinému…": the group gets the other person for good and its print moves to them; "✗ Není to" on a name-tag
+    group (the Teams video named it "Jana Nováková") makes it an unnamed SPEAKER_NN, voice included."""
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import reassign_candidate, reject_candidate
+    cfg = Config(out_dir=tmp_path, voiceprints=type(Config().voiceprints)(enabled=True))
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    petr, jana = ppl.ensure("Petr Svoboda").id, ppl.ensure("Jana Nováková").id
+    ppl.save()
+    data = rec.read_json(rec.transcript_path)
+    data["segments"] += [{"start": 30 + i * 10, "end": 40 + i * 10, "text": "řeč", "speaker": lab}
+                         for i, lab in enumerate(["SPEAKER_00"] * 3 + ["Jana Nováková"] * 3)]
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0], "Jana Nováková": [0.0, 1.0]}
+    rec.write_json(rec.transcript_path, data)
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": petr})
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll(petr, [1.0, 0.0], rec.stem, "SPEAKER_00")
+    vp.save()
+
+    r = reassign_candidate(cfg, rec.stem, "SPEAKER_00", petr, jana)
+    assert (r["prints_removed"], r["prints_added"]) == (1, 1)
+    vp = Voiceprints.load(tmp_path)
+    assert vp.count(petr) == 0 and vp.count(jana) == 1
+    assert rec.read_json(rec.speakers_path)["SPEAKER_00"] == jana
+    assert petr in rec.read_json(rec.transcript_path)["voice_rejected"]["SPEAKER_00"]
+
+    r = reject_candidate(cfg, rec.stem, "Jana Nováková", jana)
+    new = r["label"]
+    assert new.startswith("SPEAKER_") and new != "SPEAKER_00"
+    data = rec.read_json(rec.transcript_path)
+    assert "Jana Nováková" not in data["speakers"] and new in data["speakers"]
+    assert not any(s.get("speaker") == "Jana Nováková" for s in data["segments"])
+    assert data["speaker_embeddings"][new] == [0.0, 1.0] and data["voice_rejected"][new] == [jana]
+
+
+def test_a_recording_edited_after_its_minutes_is_marked_until_they_are_written_again(tmp_path):
+    """"✎ upraveno": names or replies changed after the minutes (the transcript is the source of truth, the minutes
+    may say the old names); writing the minutes again clears it; without minutes there is nothing stale."""
+    import os
+    import time
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.web.review import build_review, list_recordings, save_names
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)  # with minutes
+    old = time.time() - 600
+    os.utime(rec.summary_path, (old, old))
+    assert pl.minutes_stale(rec) is None, "never edited"
+    save_names(cfg, rec, {"SPEAKER_00": "Petr Svoboda"})
+    assert pl.minutes_stale(rec), "edited after the minutes"
+    row = [r for r in list_recordings(cfg) if r["stem"] == rec.stem][0]
+    assert row["edited"] and build_review(cfg, rec)["edited"]
+    rec.summary_path.write_text("# nový zápis\n", encoding="utf-8")  # the minutes written again
+    assert pl.minutes_stale(rec) is None
+    pl.assign_segments(cfg, rec, [{"start": 20.0, "speaker": "SPEAKER_01", "from": "SPEAKER_00"}])
+    os.utime(rec.summary_path, (old, old))
+    assert pl.minutes_stale(rec), "a moved reply counts too"
+    rec.summary_path.unlink()
+    assert pl.minutes_stale(rec) is None, "no minutes: the transcript texts are already current"
+
+
+def test_recognition_samples_excluded_added_and_replaced(tmp_path):
+    """Lidé → Vzorky pro rozpoznávání: Nepoužívat keeps the name but the print never comes back (not even when the
+    meeting is saved again); ＋ přidat makes a group a print (a guess is confirmed), replacing a chosen one; a short
+    group is refused with the reason."""
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import sample_action, save_names
+    cfg = Config(out_dir=tmp_path, voiceprints=type(Config().voiceprints)(enabled=True))
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    petr = ppl.ensure("Petr Svoboda").id
+    ppl.save()
+    data = rec.read_json(rec.transcript_path)
+    data["segments"] += [{"start": 30 + i * 10, "end": 40 + i * 10, "text": "řeč", "speaker": lab}
+                         for i, lab in enumerate(["SPEAKER_00"] * 3 + ["SPEAKER_01"] * 3)]
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]}
+    data["voice_matches"] = {"SPEAKER_01": {"person": petr, "score": 0.7}}
+    rec.write_json(rec.transcript_path, data)
+    save_names(cfg, rec, {"SPEAKER_00": "Petr Svoboda"})
+    assert Voiceprints.load(tmp_path).count(petr) == 1
+
+    assert sample_action(cfg, petr, "exclude", rec.stem, "SPEAKER_00")["removed"]
+    assert rec.read_json(rec.speakers_path)["SPEAKER_00"] == petr, "the name stays"
+    save_names(cfg, rec, {"SPEAKER_00": "Petr Svoboda"})
+    assert Voiceprints.load(tmp_path).count(petr) == 0, "an excluded print does not come back"
+
+    r = sample_action(cfg, petr, "add", rec.stem, "SPEAKER_01", replace={"stem": "x", "label": "y"})
+    assert r["ok"] and rec.read_json(rec.speakers_path)["SPEAKER_01"] == petr, "the guess is confirmed"
+    assert sample_action(cfg, petr, "add", rec.stem, "SPEAKER_00",
+                         replace={"stem": rec.stem, "label": "SPEAKER_01"})["ok"], "added by hand: no longer excluded"
+    vp = Voiceprints.load(tmp_path)
+    assert [(p["label"]) for p in vp.people[petr]] == ["SPEAKER_00"] and not vp.is_excluded(petr, rec.stem, "SPEAKER_00")
+    short = sample_action(cfg, petr, "add", rec.stem, "Jana Nováková")
+    assert not short["ok"] and "aspoň 30 s" in short["reason"]
+
+
+
+def test_every_reply_is_compared_with_the_persons_prints_once_its_voice_is_computed(tmp_path):
+    """Lidé → Všechny repliky: replies without a computed voice are counted (and estimated) for the confirmed job;
+    computed ones get their similarity to the person's prints, and a reply that sounds like somebody else is flagged."""
+    import json
+    from teamsrec_transcribe import replies
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    cfg = Config(out_dir=tmp_path)
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    petr, jana = ppl.ensure("Petr Svoboda").id, ppl.ensure("Jana Nováková").id
+    ppl.save()
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": petr})
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll(petr, [1.0, 0.0], "old1", "S", near_duplicate=2)
+    vp.enroll(jana, [0.0, 1.0], "old2", "S")
+    vp.save()
+
+    e = replies.evaluate(cfg, petr)
+    assert e["replies"] == [] and e["todo"] == [rec.stem] and e["todo_replies"] == 2 and e["estimate_s"] > 0
+    model = Voiceprints.load(tmp_path).model or cfg.transcribe.diarize_model
+    replies.cache_path(rec).write_text(json.dumps({"model": model, "replies": {"0.00": [1.0, 0.0], "20.00": [0.05, 1.0]}}),
+                                       encoding="utf-8")
+    e = replies.evaluate(cfg, petr)
+    got = {r["start"]: r for r in e["replies"]}
+    assert e["todo"] == [] and set(got) == {0.0, 20.0}
+    assert got[0.0]["level"] == 0 and got[0.0]["own"] > 0.99
+    assert got[20.0]["level"] == 3 and got[20.0]["other"]["person"] == jana, "somebody else's voice in Petr's group"

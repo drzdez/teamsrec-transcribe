@@ -69,10 +69,12 @@ class Voiceprints:
         self.limit = max(1, int(limit)) if limit else MAX_PER_PERSON  # [voiceprints] max_prints
         self.model = ""
         self.people: dict[str, list[dict]] = {}
+        self.excluded: dict[str, list[dict]] = {}  # {person: [{stem, label, at}]} – not used for recognition
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             self.model = data.get("model", "")
             self.people = {pid: list(prints) for pid, prints in data.get("people", {}).items()}
+            self.excluded = {pid: list(rows) for pid, rows in data.get("excluded", {}).items()}
 
     @classmethod
     def load(cls, out_dir: Path, limit: int | None = None) -> "Voiceprints":
@@ -81,16 +83,19 @@ class Voiceprints:
     def save(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         data = {"format": 1, "model": self.model, "people": self.people}
+        if any(self.excluded.values()):
+            data["excluded"] = {pid: rows for pid, rows in self.excluded.items() if rows}
         self.path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
 
     # ---- enrolment
     def enroll(self, pid: str, vector: list[float], stem: str, label: str, model: str = "",
                near_duplicate: float = NEAR_DUPLICATE, seconds: float | None = None, mixed: bool = False) -> bool:
         """Store one print for a person; the same recording+label is never stored twice, and neither is a print
-        that is nearly identical to one already there (the ten slots are worth more when they cover different
-        microphones and rooms). Returns True if added."""
+        that is nearly identical to one already there (the slots are worth more when they cover different
+        microphones and rooms), nor one the user excluded from recognition (Lidé → Nepoužívat). Returns True if
+        added."""
         u = _unit(vector)
-        if not u:
+        if not u or self.is_excluded(pid, stem, label):
             return False
         if model:
             self.model = model
@@ -111,10 +116,39 @@ class Voiceprints:
 
     def forget(self, pid: str) -> None:
         self.people.pop(pid, None)
+        self.excluded.pop(pid, None)
+
+    # ---- excluded from recognition (the group stays the person's, its voice is not a sample)
+    def is_excluded(self, pid: str, stem: str, label: str) -> bool:
+        return any(e.get("stem") == stem and e.get("label") == label for e in self.excluded.get(pid, []))
+
+    def exclude(self, pid: str, stem: str, label: str) -> bool:
+        """Lidé → Nepoužívat: the print leaves recognition and does not come back when the meeting is saved again.
+        True if a print was removed."""
+        before = self.count(pid)
+        self.people[pid] = [p for p in self.people.get(pid, []) if not (p.get("stem") == stem and p.get("label") == label)]
+        if not self.people[pid]:
+            del self.people[pid]
+        if not self.is_excluded(pid, stem, label):
+            self.excluded.setdefault(pid, []).append(
+                {"stem": stem, "label": label, "at": datetime.now().replace(microsecond=0).isoformat()})
+        return self.count(pid) < before
+
+    def include(self, pid: str, stem: str, label: str) -> None:
+        """Undo exclude: the group may give a print again."""
+        rows = [e for e in self.excluded.get(pid, []) if not (e.get("stem") == stem and e.get("label") == label)]
+        if rows:
+            self.excluded[pid] = rows
+        else:
+            self.excluded.pop(pid, None)
 
     def forget_stem(self, stem: str) -> dict[str, int]:
         """Drop the prints taken from one recording, of every person (their other prints stay). {person: n}."""
         gone: dict[str, int] = {}
+        for pid in list(self.excluded):  # a new transcript: new groups, the old exclusions mean nothing
+            self.excluded[pid] = [e for e in self.excluded[pid] if e.get("stem") != stem]
+            if not self.excluded[pid]:
+                del self.excluded[pid]
         for pid in list(self.people):
             keep = [p for p in self.people[pid] if p.get("stem") != stem]
             if len(keep) != len(self.people[pid]):
@@ -129,6 +163,8 @@ class Voiceprints:
         if old in self.people:
             self.people.setdefault(new, []).extend(self.people.pop(old))
             prune(self.people[new], self.limit)
+        if old in self.excluded:
+            self.excluded.setdefault(new, []).extend(self.excluded.pop(old))
 
     def count(self, pid: str) -> int:
         return len(self.people.get(pid, []))

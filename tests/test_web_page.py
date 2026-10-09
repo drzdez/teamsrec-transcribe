@@ -112,8 +112,15 @@ def test_review_page(script, tmp_path, monkeypatch):
 
     def fake_run_cli(argv, on_proc, on_line):  # the jobs' child process, played by the fakes above
         args = argv[argv.index("run-job") + 1:]
-        rec = review.resolve_recording(args[1], tmp_path)
         cfg = review.Config(out_dir=tmp_path)
+        if args[0] == "replies":  # the replies' voices: a unit vector per reply instead of the GPU model
+            from teamsrec_transcribe import replies
+            for r in replies.recordings_of(cfg, args[1]):
+                vecs = {replies._key(seg["start"]): [1.0] + [0.0] * 255 for seg in replies.replies_of(r)}
+                replies.cache_path(r).write_text(json.dumps({"format": 1, "model": cfg.transcribe.diarize_model,
+                                                             "replies": vecs}), encoding="utf-8")
+            return
+        rec = review.resolve_recording(args[1], tmp_path)
         if args[0] == "process":
             review.do_process(cfg, rec, force="--force" in args)
         elif args[0] == "summary":

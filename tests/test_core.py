@@ -2391,3 +2391,42 @@ def test_guessed_names_wait_for_review_and_are_confirmed_or_rejected_one_by_one(
 
     confirm_candidate(cfg, rec.stem, "Jana Nováková", jana)
     assert rec.read_json(rec.speakers_path)["Jana Nováková"] == jana and jana not in voice_candidates(cfg)
+
+
+def test_assignments_compare_each_group_with_the_persons_other_prints(tmp_path):
+    """Lidé → osoba: every assigned group, confirmed or guessed, gets its similarity to the person's other prints
+    (its own left out); a group closer to somebody else is flagged; ✗ on a confirmed group removes its print."""
+    import math
+    from teamsrec_transcribe import assignments
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import reject_candidate
+    cfg = Config(out_dir=tmp_path, voiceprints=type(Config().voiceprints)(enabled=True))
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    petr, jana = ppl.ensure("Petr Svoboda").id, ppl.ensure("Jana Nováková").id
+    ppl.save()
+
+    def v(angle):  # unit vectors on a circle: the angle decides the similarity
+        return [math.cos(angle), math.sin(angle)]
+    vp = Voiceprints.load(tmp_path)
+    for i, a in enumerate((0.0, 0.1, 0.2)):
+        vp.enroll(petr, v(a), f"old{i}", "S", near_duplicate=2)
+    vp.enroll(jana, v(1.5), "oldj", "S")
+    vp.enroll(petr, v(0.05), rec.stem, "SPEAKER_00", near_duplicate=2)  # this recording's confirmed group
+    vp.save()
+    data = rec.read_json(rec.transcript_path)
+    data["speaker_embeddings"] = {"SPEAKER_00": v(0.05), "SPEAKER_01": v(1.45)}
+    data["voice_matches"] = {"SPEAKER_01": {"person": petr, "score": 0.6}}  # a guess that sounds like Jana
+    rec.write_json(rec.transcript_path, data)
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": petr, "SPEAKER_01": petr})
+
+    rows = {r.label: r for r in assignments.for_people(cfg)[petr] if r.stem == rec.stem}
+    ok, odd = rows["SPEAKER_00"], rows["SPEAKER_01"]
+    assert (ok.status, ok.has_print, ok.match["level"]) == ("confirmed", True, 0) and ok.match["own"] > 0.99
+    assert odd.status == "review" and odd.match["level"] == 3
+    assert odd.match["other"]["person"] == jana and "podobnější jiné osobě" in odd.match["why"]
+    assert assignments.summary(assignments.for_people(cfg)[petr])["attention"] == 1
+
+    assert reject_candidate(cfg, rec.stem, "SPEAKER_00", petr)["prints_removed"] == 1, "a confirmed group was wrong"
+    assert Voiceprints.load(tmp_path).count(petr) == 3 and "SPEAKER_00" not in rec.read_json(rec.speakers_path)

@@ -229,7 +229,20 @@
   .people-help { color: var(--muted); font-size: 13px; margin: 8px 0 14px; }
   .person-h { font-size: 20px; margin: 10px 0 4px; }
   .person-h3 { font-size: 16px; margin: 18px 0 4px; }
+  #backToPerson { position: fixed; left: 16px; bottom: 74px; z-index: 6; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+  .card.flash { outline: 2px solid var(--accent); outline-offset: 2px; transition: outline-color 2s; }
   .candAct { white-space: nowrap; } .candAct button { margin-right: 4px; } .candFix { font-size: 13px; }
+  .assignBar { display: flex; gap: 6px; flex-wrap: wrap; margin: 4px 0 8px; }
+  .assignBar .chip { cursor: pointer; border: 1px solid var(--line); }
+  .assignBar .chip.active { border-color: var(--accent); color: var(--fg); }
+  .matchChip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
+  .muted { color: var(--muted); }
+  .lvl0 { color: var(--ok); } .lvl1 { color: #b8a400; } .lvl2 { color: var(--warn); } .lvl3 { color: var(--err); }
+  .matchChip.lvl0 { background: color-mix(in srgb, var(--ok) 14%, transparent); }
+  .matchChip.lvl1 { background: color-mix(in srgb, #b8a400 16%, transparent); }
+  .matchChip.lvl2 { background: color-mix(in srgb, var(--warn) 18%, transparent); }
+  .matchChip.lvl3 { background: color-mix(in srgb, var(--err) 18%, transparent); }
+  table.assignments tr.attention td:first-child { box-shadow: inset 3px 0 0 var(--warn); }
   button.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
   button.link.danger { color: var(--err); margin-top: 12px; }
   button.link.small { font-size: 12px; margin-top: 4px; text-align: left; }
@@ -413,6 +426,7 @@
   </div>
   <main id="settingsMain"></main>
 </div>
+<button id="backToPerson" type="button" class="play" hidden></button>
 <div id="wizard" hidden>
   <div class="setBar">
     <strong>Průvodce nastavením</strong>
@@ -2041,7 +2055,10 @@ function personRow(p) {
   ok.title = "poznávat po hlase (ukládat hlasový otisk); zrušení smaže jeho otisky při Uložit lidi";
   voice.appendChild(ok);
   const count = document.createElement("span"); count.className = "prints";
-  count.textContent = p.id ? String(p.prints || 0) + (p.candidates ? ` · ${p.candidates} ke kontrole` : "") : "";
+  const sm = /** @type {any} */ (p).assigned;
+  count.textContent = p.id ? String(p.prints || 0) + (p.candidates ? ` · ${p.candidates} ke kontrole` : "")
+    + (sm && sm.attention ? ` · ⚠ ${sm.attention}` : "") : "";
+  if (sm && sm.attention) count.classList.add("lvl2");
   count.title = "potvrzené hlasové otisky (používají se k poznávání)" +
     (p.candidates ? `; ${p.candidates} skupin z nahrávek aplikace přiřadila sama – v detailu je poslechnete a potvrdíte` : "");
   voice.appendChild(count);
@@ -2100,7 +2117,7 @@ async function savePeople() {
 /**
  * @typedef {{stem:string,label:string,added:string,dims:number,title:string|null,start:string|null,seconds:number|null,samples:Sample[],has_mix:boolean}} PrintRow
  * @typedef {{stem:string,title:string,start:string|null,label:string,source:string,score:number|null,seconds:number,short:boolean,can_reject:boolean,samples:Sample[],has_mix:boolean}} CandidateRow
- * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],candidates?:CandidateRow[],recordings:string[]}} PersonDetail
+ * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],candidates?:CandidateRow[],assignments?:any[],summary?:any,recordings:string[]}} PersonDetail
  */
 async function openPerson(/** @type {string} */ id) {
   stopAudio(); setStatus("");
@@ -2118,43 +2135,11 @@ async function openPerson(/** @type {string} */ id) {
   const info = document.createElement("p"); info.className = "people-help";
   info.innerHTML = `id <code>${escapeHtml(d.id)}</code> · v zápisu: <b>${escapeHtml(d.shown)}</b>` +
     (d.nick ? ` · přezdívka ${escapeHtml(d.nick)}` : "") + (d.aliases.length ? ` · aliasy: ${escapeHtml(d.aliases.join(", "))}` : "") +
-    `<br>Potvrzené otisky: <b>${d.prints.length}</b>, ke kontrole: <b>${(d.candidates || []).length}</b>. Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš ${d.limit || 20} – nad limit odpadne nejslabší: smíchaný či vybočující hlas, krátká řeč, jinak ten, který se nejvíc podobá jinému; model ${escapeHtml(d.model || "?")}). ` +
-    `Přiřazen v nahrávkách: ${d.recordings.length ? d.recordings.map(s => `<code>${escapeHtml(s)}</code>`).join(", ") : "zatím žádné"}.`;
+    `<br>${summaryText(d.summary)}. Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš ${d.limit || 20} – nad limit odpadne nejslabší: smíchaný či vybočující hlas, krátká řeč, jinak ten, který se nejvíc podobá jinému; model ${escapeHtml(d.model || "?")}). ` +
+    "";
   peopleMain.appendChild(info);
-  if (!d.prints.length) {
-    peopleMain.appendChild(emptyBox("Žádný hlasový otisk. Vznikne, až tuto osobu pojmenujete u nahrávky, kde mluví aspoň 30 s."));
-  } else {
-    const t = document.createElement("table");
-    t.innerHTML = `<thead><tr><th>Nahrávka</th><th>Označení</th><th>Mluvil</th><th>Uloženo</th><th>Ukázky</th><th>Otisk</th><th></th></tr></thead>`;
-    const tb = document.createElement("tbody");
-    for (const pr of d.prints) {
-      const tr = document.createElement("tr");
-      const cells = [
-        `${fmtDate(pr.start || "")} ${escapeHtml(pr.title || pr.stem)}`, escapeHtml(pr.label),
-        pr.seconds != null ? fmtMin(pr.seconds) : "?", fmtDate(pr.added || ""),
-      ];
-      for (const c of cells) { const td = document.createElement("td"); td.innerHTML = c; tr.appendChild(td); }
-      const tdS = document.createElement("td"); tdS.className = "samples";
-      if (pr.samples.length && pr.has_mix) {
-        for (const s of pr.samples) {
-          const b = document.createElement("button"); b.type = "button"; b.className = "play";
-          b.textContent = `▶ ${s.at}`; b.title = s.text;
-          b.onclick = () => play(b, s, pr.stem);
-          tdS.appendChild(b);
-        }
-      } else tdS.textContent = "zvuk chybí";
-      tr.appendChild(tdS);
-      const tdV = document.createElement("td"); tdV.textContent = `${pr.dims} hodnot`; tr.appendChild(tdV);
-      const tdX = document.createElement("td"); tdX.className = "act";
-      const del = document.createElement("button"); del.type = "button"; del.textContent = "✕"; del.title = "smazat tento otisk (potvrdit druhým klikem)";
-      armedButton(del, "Potvrdit smazání otisku", async () => {
-        try { await api(`/api/people/${encodeURIComponent(d.id)}/voiceprints?stem=${encodeURIComponent(pr.stem)}&label=${encodeURIComponent(pr.label)}`, send("DELETE")); openPerson(d.id); }
-        catch (e) { setStatus(String(e), "err"); }
-      });
-      tdX.appendChild(del); tr.appendChild(tdX);
-      tb.appendChild(tr);
-    }
-    t.appendChild(tb); peopleMain.appendChild(t);
+  assignmentsTable(d);
+  if (d.prints.length) {
     const all = document.createElement("button"); all.type = "button"; all.className = "link danger"; all.textContent = "smazat všechny otisky této osoby";
     armedButton(all, "opravdu smazat všechny otisky? (klikněte znovu)", async () => {
       try { await api(`/api/people/${encodeURIComponent(d.id)}/voiceprints`, send("DELETE")); openPerson(d.id); }
@@ -2162,67 +2147,129 @@ async function openPerson(/** @type {string} */ id) {
     });
     peopleMain.appendChild(all);
   }
-  candidatesTable(d);
 }
 
-const SOURCE_NAME = /** @type {Record<string, string>} */ ({ hlas: "podle hlasu", video: "jmenovka z videa Teams",
-  mikrofon: "mikrofon (vy)", "přímý hovor": "přímý hovor" });
+const SOURCE_NAME = /** @type {Record<string, string>} */ ({ "ručně": "uloženo vámi", hlas: "podle hlasu",
+  video: "jmenovka z videa Teams", mikrofon: "mikrofon (vy)", "přímý hovor": "přímý hovor", otisk: "jen otisk" });
+const LEVEL_CLASS = ["lvl0", "lvl1", "lvl2", "lvl3"];
 
-/** Groups the application named after this person by itself (voice, video, microphone, direct call): listen,
- * then ✓ confirm (the name stays for good and the voice print is stored – only then it is used for recognition)
- * or ✗ reject (the name goes and is not guessed again for that group). */
-function candidatesTable(/** @type {any} */ d) {
-  /** @type {CandidateRow[]} */ const rows = d.candidates || [];
+/** "13 potvrzeno (10 s otiskem) · 9 ke kontrole · ⚠ 2 k pozornosti" */
+function summaryText(/** @type {any} */ sm) {
+  if (!sm) return "";
+  return `<b>${sm.confirmed}</b> potvrzeno (${sm.with_print} s otiskem) · <b>${sm.review}</b> ke kontrole` +
+    (sm.print_only ? ` · ${sm.print_only} otisk bez přiřazení` : "") +
+    (sm.attention ? ` · <b class="lvl2">⚠ ${sm.attention} k pozornosti</b>` : "");
+}
+
+/** Every group assigned to this person, confirmed or guessed, with how its voice compares with the person's other
+ * prints (Lidé → osoba): listen, ✓ confirm, ✗ "not them" (the name and its print go), or go to the meeting. */
+/** @type {Record<string, string>} */ const personView = {};  // person id -> "all" | "attention" | "review"
+/** @type {Record<string, boolean>} */ const personSort = {};  // person id -> sorted by similarity
+
+function assignmentsTable(/** @type {any} */ d) {
+  /** @type {any[]} */ const all = d.assignments || [];
+  const who = { id: d.id, name: `${d.first} ${d.last}`.trim() || d.nick };
   const h = document.createElement("h3"); h.className = "person-h3";
-  h.textContent = `Ke kontrole – přiřazeno aplikací, zatím nepotvrzeno (${rows.length})`;
+  h.textContent = `Přiřazení v nahrávkách (${all.length})`;
   peopleMain.appendChild(h);
-  if (!rows.length) {
-    peopleMain.appendChild(emptyBox("Nic ke kontrole: všechna přiřazení této osoby jsou potvrzená."));
-    return;
-  }
   const help = document.createElement("p"); help.className = "people-help";
-  help.textContent = "Poslechněte ukázky. ✓ Potvrdit = jméno platí natrvalo a uloží se hlasový otisk (od té chvíle "
-    + "pomáhá poznávat). ✗ Není to = jméno se z té skupiny odebere a stejný odhad se u ní už neobjeví.";
+  help.innerHTML = "Každá skupina replik, kterou má tato osoba přiřazenou. <b>Ke kontrole</b> = přiřadila ji aplikace sama "
+    + "(hlas, video, mikrofon) a otisk se neukládá. ✓ Potvrdit = jméno platí a uloží se hlasový otisk; ✗ Není to = jméno "
+    + "i otisk z té skupiny zmizí a stejný odhad se nevrátí. <b>Podobnost</b> porovnává hlas skupiny s ostatními otisky "
+    + "osoby (bez jejího vlastního): <span class='lvl0'>■ odpovídá</span> <span class='lvl1'>■ trochu jiný</span> "
+    + "<span class='lvl2'>■ jiný – poslechněte</span> <span class='lvl3'>■ velmi jiný / podobnější někomu jinému</span>.";
   peopleMain.appendChild(help);
-  const t = document.createElement("table"); t.className = "candidates";
-  t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Podle čeho</th><th>Mluvil</th><th>Ukázky</th><th></th></tr></thead>";
+  if (!all.length) { peopleMain.appendChild(emptyBox("Zatím nikde přiřazená.")); return; }
+
+  const view = personView[d.id] || "all";
+  const bar = document.createElement("div"); bar.className = "assignBar";
+  const counts = { all: all.length, attention: all.filter(r => r.match && r.match.level >= 2).length,
+                   review: all.filter(r => r.status === "review").length };
+  for (const [k, label] of [["all", "vše"], ["attention", "⚠ k pozornosti"], ["review", "ke kontrole"]]) {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip" + (view === k ? " active" : "");
+    b.textContent = `${label} (${counts[/** @type {"all"|"attention"|"review"} */ (k)]})`;
+    b.onclick = () => { personView[d.id] = k; openPerson(d.id); };
+    bar.appendChild(b);
+  }
+  const sortBtn = document.createElement("button"); sortBtn.type = "button"; sortBtn.className = "chip" + (personSort[d.id] ? " active" : "");
+  sortBtn.textContent = "seřadit od nejméně podobných";
+  sortBtn.onclick = () => { personSort[d.id] = !personSort[d.id]; openPerson(d.id); };
+  bar.appendChild(sortBtn);
+  peopleMain.appendChild(bar);
+
+  let rows = view === "attention" ? all.filter(r => r.match && r.match.level >= 2)
+    : view === "review" ? all.filter(r => r.status === "review") : all.slice();
+  if (personSort[d.id]) rows.sort((a, b) => (a.match && a.match.own != null ? a.match.own : 2) - (b.match && b.match.own != null ? b.match.own : 2));
+  const t = document.createElement("table"); t.className = "candidates assignments";
+  t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Stav</th><th>Mluvil</th><th>Podobnost</th><th>Ukázky</th><th></th></tr></thead>";
   const tb = document.createElement("tbody");
   for (const c of rows) {
     const tr = document.createElement("tr");
-    const open = `<a href="#${encodeURIComponent(c.stem)}" title="otevřít nahrávku">${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}</a>`;
-    const why = (SOURCE_NAME[c.source] || c.source) + (c.score != null ? ` (shoda ${c.score.toFixed(2)})` : "");
-    for (const html of [open, escapeHtml(c.label), escapeHtml(why), fmtMin(c.seconds) + (c.short ? " · krátké" : "")]) {
+    if (c.match && c.match.level >= 2) tr.className = "attention";
+    const open = c.status === "print_only" ? `${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}`
+      : `<a href="#" class="openRec" title="otevřít nahrávku u tohoto mluvčího">${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}</a>`;
+    const state = c.status === "confirmed" ? `<span class="ok">potvrzeno</span>`
+      : c.status === "review" ? "ke kontrole" : "otisk bez přiřazení";
+    const why = escapeHtml(SOURCE_NAME[c.source] || c.source) + (c.score != null ? ` ${c.score.toFixed(2)}` : "")
+      + (c.has_print ? " · otisk ✓" : "");
+    for (const html of [open, escapeHtml(c.label), `${state}<br><small>${why}</small>`,
+                        c.status === "print_only" ? "–" : fmtMin(c.seconds) + (c.short ? " · krátké" : ""), matchCell(c)]) {
       const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
     }
     const tdS = document.createElement("td"); tdS.className = "samples";
-    if (c.samples.length && c.has_mix) {
-      for (const s of c.samples) {
+    if (c.samples && c.samples.length && c.has_mix) {
+      for (const smp of c.samples) {
         const b = document.createElement("button"); b.type = "button"; b.className = "play";
-        b.textContent = `▶ ${s.at}`; b.title = s.text;
-        b.onclick = () => play(b, s, c.stem);
+        b.textContent = `▶ ${smp.at}`; b.title = smp.text;
+        b.onclick = () => play(b, smp, c.stem);
         tdS.appendChild(b);
       }
-    } else tdS.textContent = "zvuk chybí";
+    } else tdS.textContent = c.status === "print_only" ? "skupina už neexistuje" : "zvuk chybí";
     tr.appendChild(tdS);
     const tdA = document.createElement("td"); tdA.className = "act candAct";
-    const yes = document.createElement("button"); yes.type = "button"; yes.className = "play candYes"; yes.textContent = "✓ Potvrdit";
-    yes.title = c.short ? "jméno se potvrdí; otisk se neuloží – mluví méně než 30 s" : "jméno platí natrvalo a uloží se hlasový otisk";
-    yes.onclick = () => decideCandidate(d.id, c, true, yes);
-    tdA.appendChild(yes);
+    if (c.status === "review") {
+      const yes = document.createElement("button"); yes.type = "button"; yes.className = "play candYes"; yes.textContent = "✓ Potvrdit";
+      yes.title = c.short ? "jméno se potvrdí; otisk se neuloží – mluví méně než 30 s" : "jméno platí natrvalo a uloží se hlasový otisk";
+      yes.onclick = () => decideCandidate(d.id, c, true, yes);
+      tdA.appendChild(yes);
+    }
     if (c.can_reject) {
       const no = document.createElement("button"); no.type = "button"; no.className = "play candNo"; no.textContent = "✗ Není to";
-      no.title = "jméno se z této skupiny odebere a stejný odhad se u ní už neobjeví";
-      no.onclick = () => decideCandidate(d.id, c, false, no);
+      no.title = "jméno se z této skupiny odebere" + (c.has_print ? " a smaže se její hlasový otisk" : "") + "; stejný odhad se u ní už neobjeví";
+      if (c.status === "confirmed") armedButton(no, "Potvrdit: není to – odebrat jméno i otisk", () => decideCandidate(d.id, c, false, no));
+      else no.onclick = () => decideCandidate(d.id, c, false, no);
       tdA.appendChild(no);
-    } else {
-      const fix = document.createElement("a"); fix.href = `#${encodeURIComponent(c.stem)}`; fix.className = "candFix";
+    }
+    if (c.status === "print_only") {
+      const del = document.createElement("button"); del.type = "button"; del.className = "play candNo"; del.textContent = "✕ smazat otisk";
+      armedButton(del, "Potvrdit smazání otisku", async () => {
+        try { await api(`/api/people/${encodeURIComponent(d.id)}/voiceprints?stem=${encodeURIComponent(c.stem)}&label=${encodeURIComponent(c.label)}`, send("DELETE")); openPerson(d.id); }
+        catch (e) { setStatus(String(e), "err"); }
+      });
+      tdA.appendChild(del);
+    } else if (!c.can_reject) {
+      const fix = document.createElement("button"); fix.type = "button"; fix.className = "link candFix";
       fix.textContent = "opravit v nahrávce"; fix.title = "jmenovku z videa / mikrofon opravíte na kartě mluvčího";
+      fix.onclick = () => openRecordingAt(c.stem, c.label, who);
       tdA.appendChild(fix);
     }
     tr.appendChild(tdA);
+    const link = /** @type {HTMLElement|null} */ (tr.querySelector("a.openRec"));
+    if (link) link.onclick = e => { e.preventDefault(); openRecordingAt(c.stem, c.label, who); };
     tb.appendChild(tr);
   }
   t.appendChild(tb); peopleMain.appendChild(t);
+}
+
+/** the similarity of a group's voice to the person's other prints: a coloured number, the reason in the tooltip */
+function matchCell(/** @type {any} */ c) {
+  const m = c.match;
+  if (!m) return `<span class="muted" title="pro tuto skupinu není hlasový vzorek (jmenovka z videa bez diarizace, jiný model)">–</span>`;
+  if (m.own == null) return `<span class="muted" title="${escapeHtml(m.why)}">?</span>`;
+  const other = m.other ? `; nejbližší jiná osoba: ${m.other.name} ${m.other.score.toFixed(2)}` : "";
+  const tip = `${m.why}. Podobnost ${m.own.toFixed(2)} se ${m.n} otisky této osoby (průměr tří nejbližších)${other}.`;
+  return `<span class="matchChip ${LEVEL_CLASS[m.level] || ""}" title="${escapeHtml(tip)}">${m.own.toFixed(2)}${m.level >= 2 ? " ⚠" : ""}</span>`
+    + (m.level === 3 && m.other && m.other.score > m.own ? `<br><small class="lvl3">→ ${escapeHtml(m.other.name)}?</small>` : "");
 }
 
 async function decideCandidate(/** @type {string} */ pid, /** @type {CandidateRow} */ c, /** @type {boolean} */ confirm,
@@ -2231,7 +2278,7 @@ async function decideCandidate(/** @type {string} */ pid, /** @type {CandidateRo
   try {
     const r = await api(`/api/people/${encodeURIComponent(pid)}/candidates`, send("POST", { stem: c.stem, label: c.label, confirm }));
     await openPerson(pid);
-    setStatus(!confirm ? `${c.label} v ${c.title}: jméno odebráno`
+    setStatus(!confirm ? `${c.label} v ${c.title}: jméno odebráno${r.prints_removed ? " i s hlasovým otiskem" : ""}`
       : r.prints_added ? `${c.label} v ${c.title}: potvrzeno, hlasový otisk uložen`
       : `${c.label} v ${c.title}: potvrzeno; otisk se neuložil (krátká řeč, nebo skoro stejný jako už uložený)`, "ok");
   } catch (e) { setStatus(String(e), "err"); btn.disabled = false; }
@@ -2262,6 +2309,11 @@ function addPerson() {
 /** @type {"speakers"|"transcript"|"summary"} */ let subTab = "speakers";
 const docMain = $("docMain"), docPick = /** @type {HTMLSelectElement} */ ($("docPick"));
 
+/** the open meeting changed while Lidé was shown: reload it when the user switches back */
+let meetingStale = false;
+/** the person whose page sent the user to a meeting ("← zpět na …") */
+/** @type {{id:string,name:string}|null} */ let returnToPerson = null;
+
 function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   const sp = which === "speakers";
   peopleMain.hidden = sp; $("subtabs").hidden = !sp;
@@ -2273,8 +2325,39 @@ function showTab(/** @type {"speakers"|"people"} */ which, reload = true) {
   $("tabSpeakers").classList.toggle("active", sp); $("tabPeople").classList.toggle("active", !sp);
   setStatus("");
   if (sp) showSub(subTab, false); else { main.hidden = true; docMain.hidden = true; $("speakerButtons").hidden = true; $("tip").hidden = true; $("dirty").hidden = true; }
-  if (!reload) return;
-  if (sp) { if (review) loadRecording(review.stem); } else loadPeople().catch(e => setStatus(String(e), "err"));
+  if (!sp) $("backToPerson").hidden = true;
+  if (!reload && !(sp && meetingStale)) return;
+  meetingStale = false;
+  if (sp) { if (review) loadRecording(review.stem); }
+  else if (returnToPerson) { const id = returnToPerson.id; returnToPerson = null; openPerson(id); }
+  else loadPeople().catch(e => setStatus(String(e), "err"));
+}
+
+/** From a person's page to one of their meetings: the Schůzka tab, that recording, the speaker's card in view and
+ * a way back to the person. (A plain #stem link did nothing when that recording was already open.) */
+async function openRecordingAt(/** @type {string} */ stem, /** @type {string} */ label,
+                               /** @type {{id:string,name:string}} */ from) {
+  if (isDirty()) { setStatus("nejdřív uložte rozdělanou práci v otevřené nahrávce", "busy"); return; }
+  stopAudio();
+  await loadList();
+  if (![...pick.options].some(o => o.value === stem)) { setStatus(`nahrávka ${stem} v seznamu není (filtr?)`, "err"); return; }
+  meetingStale = false;
+  showTab("speakers", false);
+  pick.value = stem;
+  if (location.hash.slice(1) !== stem) history.replaceState(null, "", `#${stem}`);
+  showSub("speakers", false);
+  await loadRecording(stem);
+  returnToPerson = from;
+  const back = $("backToPerson");
+  back.textContent = `← zpět na ${from.name} (Lidé)`;
+  back.hidden = false;
+  const card = /** @type {HTMLElement|null} */ (main.querySelector(`.side[data-label="${CSS.escape(label)}"]`));
+  const section = card ? card.closest(".card") : null;
+  if (section) {
+    section.scrollIntoView?.({ block: "center" });
+    section.classList.add("flash");
+    setTimeout(() => section.classList.remove("flash"), 2500);
+  }
 }
 
 /** where each sub-tab was scrolled to, for the open recording */
@@ -2481,6 +2564,7 @@ docPick.onchange = () => renderDoc();
 
 $("tabSpeakers").onclick = () => showTab("speakers");
 $("tabPeople").onclick = () => showTab("people");
+$("backToPerson").onclick = () => showTab("people");  // back to the person whose page opened this meeting
 $("save").onclick = () => save(false);
 armedButton(/** @type {HTMLButtonElement} */ ($("saveSum")), "Potvrdit: uložit a přegenerovat zápis", () => save(true), () => {
   if (review && !review.transcribed) {  // nothing to regenerate yet: it starts the whole processing
@@ -2499,7 +2583,10 @@ $("quit").onclick = async () => {
   catch (e) { if (String(e).includes("generated")) { setStatus("zápis se generuje, počkejte na dokončení", "busy"); return; } }
   document.body.innerHTML = '<div class="empty">Hotovo, tuto záložku můžete zavřít.</div>';
 };
-pick.onchange = () => { showTab("speakers", false); loadRecording(pick.value); };
+pick.onchange = () => {
+  returnToPerson = null; $("backToPerson").hidden = true;  // another meeting picked by hand: no way back to offer
+  showTab("speakers", false); loadRecording(pick.value);
+};
 document.addEventListener("keydown", ev => { if (ev.key === "Escape") stopAudio(); });
 // heartbeat: the server stops itself ~90 s after the last one, i.e. when this tab is closed
 // typing a filter opens its first match (after a short pause, so not every keystroke loads a recording); with
@@ -3206,7 +3293,10 @@ async function pollStatus() {
   if (first) { renderEvents(); return; }  // the page just opened: keep the old lines, do not shout them
   if (!fresh.length && !finished) return;
   const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
-  if (mine && review && !isDirty() && !busy) {
+  // on Lidé the meeting is not shown: it is reloaded when the user switches back (showTab), never into this view
+  // (2026-10-09: "Potvrdit" on a person's page put the open meeting's cards under the Lidé tab)
+  if (mine && review && !isDirty() && !busy && !peopleMain.hidden) meetingStale = true;
+  else if (mine && review && !isDirty() && !busy) {
     const stem = review.stem;
     await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
   }
@@ -3255,7 +3345,10 @@ async function onEvents(/** @type {any[]} */ fresh, /** @type {boolean} */ busyN
   if (!replay) for (const e of fresh) if (e.job_end) noteFinish(e);
   if (replay || awaited) { renderEvents(); return; }
   const mine = finished || fresh.some(e => e.reload && (!e.stem || (review && e.stem === review.stem)));
-  if (mine && review && !isDirty() && !busy) {
+  // on Lidé the meeting is not shown: it is reloaded when the user switches back (showTab), never into this view
+  // (2026-10-09: "Potvrdit" on a person's page put the open meeting's cards under the Lidé tab)
+  if (mine && review && !isDirty() && !busy && !peopleMain.hidden) meetingStale = true;
+  else if (mine && review && !isDirty() && !busy) {
     const stem = review.stem;
     await loadList(); pick.value = stem; await loadRecording(stem);  // clears the status line, so write it after
   }

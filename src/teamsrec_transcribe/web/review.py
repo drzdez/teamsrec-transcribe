@@ -676,6 +676,22 @@ def person_detail(cfg: Config, pid: str) -> dict:
                 except Exception:
                     pass
         prints.append(row)
+    from .. import assignments
+    rows = assignments.for_people(cfg).get(pid, [])
+    assigned = [r.public() for r in rows]
+    for c in assigned:
+        rec = recs.get(c["stem"])
+        c["has_mix"] = bool(rec and rec.mix_path and rec.mix_path.exists())
+        c["samples"] = []
+        if rec is None or not rec.transcript_path.exists() or c["status"] == "print_only":
+            continue
+        try:
+            _, segs = load_segments(rec)
+            mine = [s for s in segs if s.speaker == c["label"]]
+            c["samples"] = [{"start": round(s.start, 2), "end": round(min(s.end, s.start + CLIP_MAX_S), 2),
+                             "at": _fmt_hms(s.start), "text": s.text[:140]} for s in pick_samples(mine)]
+        except Exception:
+            pass
     candidates = voice_candidates(cfg, people).get(pid, [])
     for c in candidates:
         rec = recs.get(c["stem"])
@@ -690,7 +706,7 @@ def person_detail(cfg: Config, pid: str) -> dict:
             pass
     d = {"id": p.id, "first": p.first, "last": p.last, "nick": p.nick, "display": p.display, "aliases": p.aliases,
          "shown": p.name(people.default_mode), "model": vp.model, "limit": vp.limit, "prints": prints,
-         "candidates": candidates,
+         "candidates": candidates, "assignments": assigned, "summary": assignments.summary(rows),
          "recordings": sorted({r.stem for r in recs.values() if r.speakers_path.exists()
                                and pid in r.read_json(r.speakers_path).values()}, reverse=True)}
     return d
@@ -763,8 +779,8 @@ def confirm_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
 
 
 def reject_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
-    """"Not them": the guessed name goes from this group (it is unnamed again) and the same guess is not made
-    for it again; nothing is stored."""
+    """"Not them": the name goes from this group (it is unnamed again), the same guess is not made for it again,
+    and a voice print the group gave this person is deleted (a confirmed group was wrong after all)."""
     rec = resolve_recording(stem, cfg.out_dir)
     manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     if manual.get(label) == pid:
@@ -779,7 +795,7 @@ def reject_candidate(cfg: Config, stem: str, label: str, pid: str) -> dict:
         rejected[label].append(pid)
     rec.write_json(rec.transcript_path, data)
     do_export(cfg, rec)
-    return {"ok": True}
+    return {"ok": True, "prints_removed": forget_print(cfg, pid, stem, label)}
 
 
 def forget_print(cfg: Config, pid: str, stem: str | None, label: str | None) -> int:
@@ -799,10 +815,13 @@ def people_rows(cfg: Config) -> dict:
     people = People.load(cfg.out_dir, cfg.people_display)
     vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
     rows = people.to_json()
-    candidates = voice_candidates(cfg, people)
+    from .. import assignments
+    assigned = assignments.for_people(cfg)
     for r in rows:
         r["prints"] = vp.count(r["id"])
-        r["candidates"] = len(candidates.get(r["id"], []))
+        sm = assignments.summary(assigned.get(r["id"], []))
+        r["candidates"] = sm["review"]
+        r["assigned"] = sm
     return {"people": rows, "display_default": people.default_mode, "modes": list(DISPLAY_MODES),
             "path": str(people.path)}
 

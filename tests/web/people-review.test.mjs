@@ -21,6 +21,14 @@ test("person page: to the meeting at the speaker's card and back; a confirmation
   await openJana(p);
   assert.match(p.doc.querySelector("#peopleMain").textContent, /· 2 ke kontrole/);
 
+  // the group's replies: the same "Projít repliky" as on the speaker card, with that meeting's speakers to move to
+  const walk = p.doc.querySelector("table.assignments details.walk");
+  assert.match(walk.querySelector("summary").textContent, /Projít repliky \(1\)/);
+  walk.open = true; walk.dispatchEvent(new p.window.Event("toggle"));
+  await waitFor(() => walk.querySelector(".reply select"), "the replies");
+  const options = [...walk.querySelector(".reply select").options].map(o => o.textContent);
+  assert.ok(options.includes("ponechat") && options.some(o => o.startsWith("→ SPEAKER_00")) && options.includes("→ nový mluvčí"));
+
   // the meeting that is already open: a plain #stem link did nothing here
   const row = [...p.doc.querySelectorAll("table.candidates tr")].find(tr => tr.textContent.includes("Týdenní"));
   row.querySelector("a.openRec").click();

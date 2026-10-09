@@ -62,13 +62,13 @@ def missing(rec: Recording, model: str) -> int:
 
 def compute(cfg: Config, recs: list[Recording], progress=lambda text: None) -> int:
     """Embed the replies of these recordings that have none yet (GPU). Returns how many were computed."""
-    import torch
-    import whisperx
-    from pyannote.audio import Pipeline
     model = cfg.transcribe.diarize_model
     todo = [r for r in recs if missing(r, model)]
     if not todo:
         return 0
+    import torch  # only now: nothing to compute needs no GPU libraries
+    import whisperx
+    from pyannote.audio import Pipeline
     device = torch.device(cfg.transcribe.device if cfg.transcribe.device == "cuda" and torch.cuda.is_available() else "cpu")
     pipe = Pipeline.from_pretrained(model).to(device)
     embed = pipe._embedding  # the model the diarization's (and so the prints') embeddings come from
@@ -173,3 +173,79 @@ def recordings_of(cfg: Config, pid: str) -> list[Recording]:
     from .assignments import collect
     stems = {r.stem for r in collect(cfg).get(pid, []) if r.status != "print_only"}
     return [r for r in iter_recordings(cfg.out_dir) if r.stem in stems]
+
+
+# ---------------------------------------------------------------- recalculating a print from its group's replies
+
+def group_vector(rec: Recording, label: str, model: str) -> tuple[list[float] | None, int]:
+    """The group's voice now: the mean of its replies' own voices, weighted by their length (unit length). After
+    replies were moved this is the group as it is, unlike the diarization's average from the transcription.
+    (None, 0) when no reply of the group has a computed voice."""
+    cache = load_cache(rec, model)
+    vecs, weights = [], []
+    for s in replies_of(rec):
+        if s["speaker"] != label:
+            continue
+        v = cache.get(_key(s["start"]))
+        if v is not None:
+            vecs.append(v)
+            weights.append(float(s["end"]) - float(s["start"]))
+    if not vecs:
+        return None, 0
+    m = np.average(np.asarray(vecs, dtype=np.float32), axis=0, weights=np.asarray(weights))
+    n = float(np.linalg.norm(m))
+    return ([round(float(x) / n, 6) for x in m] if n else None), len(vecs)
+
+
+def recompute_targets(cfg: Config, pid: str, only: tuple[str, str] | None = None) -> list[tuple[Recording, str]]:
+    """The person's prints to recalculate whose group still exists: one (only), else all of them."""
+    from .voiceprints import Voiceprints
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
+    out = []
+    for p in vp.people.get(pid, []):
+        key = (p.get("stem") or "", p.get("label") or "")
+        if only and key != only:
+            continue
+        try:
+            rec = resolve_recording(key[0], cfg.out_dir)
+        except Exception:
+            continue
+        if rec.transcript_path.exists() and any(s["speaker"] == key[1] for s in replies_of(rec)):
+            out.append((rec, key[1]))
+    return out
+
+
+def recompute_estimate(cfg: Config, pid: str, only: tuple[str, str] | None = None) -> dict:
+    """How much GPU work a recalculation needs (the replies without a computed voice)."""
+    model = cfg.transcribe.diarize_model
+    recs = {rec.stem: rec for rec, _ in recompute_targets(cfg, pid, only)}
+    todo = sum(missing(r, model) for r in recs.values())
+    return {"prints": len(recompute_targets(cfg, pid, only)), "missing_replies": todo,
+            "estimate_s": round(todo * SECONDS_PER_REPLY + (5 if todo else 0))}
+
+
+def recompute_prints(cfg: Config, pid: str, only: tuple[str, str] | None = None, progress=lambda text: None) -> dict:
+    """Recalculate the person's prints (one, or all) from their groups' current replies: the replies' voices that are
+    missing are computed first (GPU), then each print becomes its group's mean voice and loses the "stale" mark."""
+    from .voiceprints import Voiceprints
+    targets = recompute_targets(cfg, pid, only)
+    compute(cfg, list({rec.stem: rec for rec, _ in targets}.values()), progress)
+    model = cfg.transcribe.diarize_model
+    vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
+    done, skipped = 0, 0
+    for rec, label in targets:
+        vec, n = group_vector(rec, label, model)
+        if vec is None:
+            skipped += 1
+            continue
+        for p in vp.people.get(pid, []):
+            if p.get("stem") == rec.stem and p.get("label") == label:
+                p["v"] = vec
+                p.pop("stale", None)
+                p["recomputed"] = n
+                done += 1
+    if vp.model and vp.model != model:
+        log.warning("prints were made with %s, the replies with %s", vp.model, model)
+    vp.save()
+    progress(f"přepočítáno {done} vzorků" + (f", {skipped} bez replik" if skipped else ""))
+    return {"recomputed": done, "skipped": skipped}

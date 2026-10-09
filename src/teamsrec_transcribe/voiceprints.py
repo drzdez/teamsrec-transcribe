@@ -118,6 +118,17 @@ class Voiceprints:
         self.people.pop(pid, None)
         self.excluded.pop(pid, None)
 
+    def mark_stale(self, stem: str, labels: set[str]) -> list[str]:
+        """Replies moved out of or into these groups: their prints (the group's average voice when it was
+        transcribed) no longer match the group – "přepočítat" (replies.recompute_prints). Returns the people."""
+        hit = []
+        for pid, prints in self.people.items():
+            for p in prints:
+                if p.get("stem") == stem and p.get("label") in labels and not p.get("stale"):
+                    p["stale"] = True
+                    hit.append(pid)
+        return hit
+
     # ---- excluded from recognition (the group stays the person's, its voice is not a sample)
     def is_excluded(self, pid: str, stem: str, label: str) -> bool:
         return any(e.get("stem") == stem and e.get("label") == label for e in self.excluded.get(pid, []))

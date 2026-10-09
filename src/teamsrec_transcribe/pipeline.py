@@ -489,6 +489,11 @@ def assign_segments(cfg: Config, rec: Recording, moves: list[dict]) -> int:
         do_export(cfg, rec)
         log.info("%s: %d replies moved to another speaker", rec.stem, n)
         mark_edited(rec)
+        # the groups that lost or got replies: a print made from one of them no longer matches it
+        touched = {str(m.get("from")) for m in moves if m.get("from")} | {str(m.get("speaker")) for m in moves}
+        vp = Voiceprints.load(cfg.out_dir, cfg.voiceprints.max_prints)
+        if vp.mark_stale(rec.stem, touched | ({new_label} if new_label else set())):
+            vp.save()
     return n
 
 

@@ -31,6 +31,8 @@ REST API (described in web/openapi.py, served at /api/openapi.json)
   POST   /api/people/merge                             {"keep", "drop", "stem"?}
   GET    /api/people/{id}                              one person with their voice prints
   DELETE /api/people/{id}/voiceprints?stem=&label=     one print, or all of them
+  GET    /api/people/{id}/recompute?stem=&label=       how much GPU work recalculating the prints needs
+  POST   /api/people/{id}/recompute                    {"stem"?, "label"?} recalculate prints from the replies (a job)
   GET    /api/people/{id}/replies                      every reply of the person with its own voice compared
   POST   /api/people/{id}/replies                      compute the replies' voices (a GPU job the user confirmed)
   POST   /api/people/{id}/samples                      {"action": exclude|include|add, "stem", "label", "replace"?}
@@ -459,6 +461,24 @@ def _title_of(cfg: Config, stem: str) -> str:
         return resolve_recording(stem, cfg.out_dir).title or stem
     except Exception:
         return stem
+
+
+def recording_speakers(cfg: Config, rec: Recording) -> list[dict]:
+    """The recording's speakers with the names they show ({label, name}), for moving replies from outside the
+    meeting's page (Lidé → a sample → Projít repliky)."""
+    if not rec.transcript_path.exists():
+        return []
+    data = rec.read_json(rec.transcript_path)
+    manual = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
+    people = People.load(cfg.out_dir, cfg.people_display)
+    out = []
+    for label in data.get("speakers") or []:
+        if label == "UNKNOWN":
+            continue
+        value = manual.get(label, "" if is_label(label) else label)
+        person = people.get(value) or (people.find(value) if value else None)
+        out.append({"label": label, "name": person.full if person else (value or label)})
+    return out
 
 
 def has_minutes(rec: Recording) -> bool:
@@ -1377,6 +1397,14 @@ class ReviewState:
                             start=f"{rec.stem}: zápis se generuje"
                      + (f" (i srovnávací: {', '.join(self.cfg.summarize.compare)})" if self.cfg.summarize.compare else ""))
 
+    def run_reprint(self, pid: str, stem: str = "", label: str = "") -> tuple[int, int]:
+        """Recalculate the person's prints (one: stem + label) from the groups' current replies (GPU)."""
+        if not re.fullmatch(r"[a-z0-9-]{1,80}", pid):
+            raise ValueError(f"not a person id: {pid!r}")
+        argv = ["run-job", "reprint", pid] + (["--model", f"{stem}::{label}"] if stem and label else [])
+        return self.run_job("reprint", argv, f"vzorky přepočítány ({pid})", "",
+                            start=f"přepočítávají se vzorky ({pid})")
+
     def run_replies(self, pid: str) -> tuple[int, int]:
         """Every reply's own voice for the person's recordings (replies.py): GPU work the user asked for."""
         if not re.fullmatch(r"[a-z0-9-]{1,80}", pid):
@@ -1456,6 +1484,8 @@ ROUTES = [  # (method, path pattern, handler method) - keep web/openapi.py in st
     ("POST", r"/api/people/(?P<pid>[^/]+)/candidates", "candidate"),
     ("POST", r"/api/people/(?P<pid>[^/]+)/samples", "sample"),
     ("GET", r"/api/people/(?P<pid>[^/]+)/replies", "replies"),
+    ("GET", r"/api/people/(?P<pid>[^/]+)/recompute", "recompute_estimate"),
+    ("POST", r"/api/people/(?P<pid>[^/]+)/recompute", "recompute"),
     ("POST", r"/api/people/(?P<pid>[^/]+)/replies", "evaluate_replies"),
     ("GET", r"/api/setup", "setup"),
     ("POST", r"/api/setup/hf-check", "setup_hf_check"),
@@ -1622,8 +1652,10 @@ def _handler(state: ReviewState, server_ref: dict):
             self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_speaker_replies(self, q, body, stem, label):
-            self._json({"label": label, "replies": speaker_replies(self._recording(stem), unquote(label)),
-                        "new_speaker": NEW_SPEAKER})
+            rec = self._recording(stem)
+            self._json({"label": label, "replies": speaker_replies(rec, unquote(label)),
+                        "new_speaker": NEW_SPEAKER, "speakers": recording_speakers(state.cfg, rec),
+                        "has_mix": bool(rec.mix_path and rec.mix_path.exists())})
 
         def r_assign_segments(self, q, body, stem):
             rec = self._recording(stem)
@@ -1735,6 +1767,15 @@ def _handler(state: ReviewState, server_ref: dict):
                 res = reject_candidate(state.cfg, stem, label, pid)
                 state.event(f"{stem}: {label} – jméno odebráno (není to ta osoba)", "ok", stem, reload=True)
             self._json({"ok": True, **res})
+
+        def r_recompute_estimate(self, q, body, pid):
+            from .. import replies
+            stem, label = (q.get("stem") or [""])[0], (q.get("label") or [""])[0]
+            self._json(replies.recompute_estimate(state.cfg, pid, (stem, label) if stem and label else None))
+
+        def r_recompute(self, q, body, pid):
+            job, position = state.run_reprint(pid, str(body.get("stem") or ""), str(body.get("label") or ""))
+            self._json({"ok": True, "job": job, "position": position, "status": state.status()})
 
         def r_replies(self, q, body, pid):
             from .. import replies

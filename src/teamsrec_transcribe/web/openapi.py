@@ -99,6 +99,14 @@ def spec(version: str) -> dict:
                                                 "download the diarization model (licence accepted)",
                                                 tags=("settings",), body=_obj(token=s))},
             "/api/setup/done": {"post": _op("The wizard ran: it is not shown again", tags=("settings",))},
+            "/api/people/{id}/recompute": {
+                "get": _op("How much GPU work recalculating the person's prints needs (one: stem + label)",
+                           tags=("people",), params=[{"name": "id", "in": "path", "required": True, "schema": s},
+                                                     {"name": "stem", "in": "query", "schema": s},
+                                                     {"name": "label", "in": "query", "schema": s}]),
+                "post": _op("Recalculate the person's prints (one, or all) from their groups' current replies: a GPU job",
+                            tags=("people",), params=[{"name": "id", "in": "path", "required": True, "schema": s}],
+                            body=_obj(stem=s, label=s))},
             "/api/people/{id}/replies": {
                 "get": _op("Every reply of the person (its own voice embedding, when computed) compared with their voice "
                            "prints and the closest other person; which recordings are not evaluated yet and the estimate",

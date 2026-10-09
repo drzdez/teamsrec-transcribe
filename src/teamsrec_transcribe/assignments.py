@@ -50,6 +50,7 @@ class Row:
     seconds: float
     has_print: bool
     can_reject: bool
+    replies: int = 0  # how many replies the group has (Projít repliky)
     short: bool = False  # too little speech for a voice print
     vec: list[float] | None = None
     match: dict | None = None
@@ -80,6 +81,10 @@ def collect(cfg: Config, people: People | None = None, vp: Voiceprints | None = 
         rejected = data.get("voice_rejected") or {}
         emb = data.get("speaker_embeddings") or {}
         same_model = not vp.model or not data.get("diarize_model") or data.get("diarize_model") == vp.model
+        counts: dict[str, int] = {}
+        for seg in data.get("segments") or []:
+            if seg.get("speaker"):
+                counts[seg["speaker"]] = counts.get(seg["speaker"], 0) + 1
         for label, seconds in speech_seconds(data.get("segments") or []).items():
             if seconds <= 0 or label == "UNKNOWN":
                 continue
@@ -102,6 +107,7 @@ def collect(cfg: Config, people: People | None = None, vp: Voiceprints | None = 
             out.setdefault(pid, []).append(Row(
                 stem=rec.stem, title=rec.title, start=rec.sidecar.get("start"), label=label, status=status,
                 source=source, score=score, seconds=seconds, has_print=(pid, rec.stem, label) in prints,
+                replies=counts.get(label, 0),
                 can_reject=True, short=seconds < cfg.voiceprints.min_seconds,
                 vec=list(vec) if vec else None))
             seen.add((pid, rec.stem, label))
@@ -219,6 +225,9 @@ def sample_view(cfg: Config, pid: str, rows: list[Row], vp: Voiceprints) -> dict
             level, why = _level(own)
             match = {"own": round(own, 2), "n": len(P) - 1, "level": level, "why": why}
         used.append({"stem": p.get("stem"), "label": p.get("label"), "added": p.get("added"),
+                     "stale": bool(p.get("stale")), "recomputed": p.get("recomputed"),
+                     "has_print": True,
+                     "replies": r.replies if r else 0,
                      "title": r.title if r else p.get("stem"), "start": r.start if r else None,
                      "seconds": round(r.seconds, 1) if r else p.get("seconds"),
                      "status": r.status if r else "print_only", "match": match})
@@ -231,7 +240,7 @@ def sample_view(cfg: Config, pid: str, rows: list[Row], vp: Voiceprints) -> dict
             v = np.asarray(r.vec, dtype=np.float32)
             v /= np.linalg.norm(v) + 1e-9
             q = float(np.sort(P @ v)[::-1][:TOP_K].mean())
-        addable.append({"stem": r.stem, "label": r.label, "title": r.title, "start": r.start,
+        addable.append({"stem": r.stem, "label": r.label, "title": r.title, "start": r.start, "replies": r.replies,
                         "seconds": round(r.seconds, 1), "status": r.status, "source": r.source,
                         "short": r.seconds < cfg.voiceprints.min_seconds,
                         "match": ({"own": round(q, 2), "level": _level(q)[0], "why": _level(q)[1]}

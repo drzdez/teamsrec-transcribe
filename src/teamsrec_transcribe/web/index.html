@@ -239,6 +239,9 @@
                         background: var(--bg); color: var(--muted); cursor: pointer; font: inherit; }
   .personTabs .subtab.active { background: var(--card); color: var(--fg); font-weight: 600; }
   .excludedBox { margin: 10px 0; color: var(--muted); font-size: 14px; }
+  table.samplesUsed tr.stale td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
+  .staleChip { display: inline-block; margin-top: 2px; padding: 0 8px; border-radius: 10px; font-size: 12px; font-weight: 600;
+               color: #8b5cf6; background: color-mix(in srgb, #8b5cf6 15%, transparent); cursor: help; }
   .assignBar .chip { cursor: pointer; border: 1px solid var(--line); }
   .assignBar .chip.active { border-color: var(--accent); color: var(--fg); }
   .matchChip { display: inline-block; padding: 1px 8px; border-radius: 10px; font-variant-numeric: tabular-nums; font-weight: 600; cursor: help; }
@@ -1730,16 +1733,27 @@ function focusNext(/** @type {number} */ i) {
 /** "Projít repliky": every reply of this speaker with play and text, each can go to another speaker, a new one, or
  * back to unassigned – for a group that mixes two voices. Loaded when opened (a speaker can have hundreds). */
 function walkReplies(/** @type {Speaker} */ sp) {
+  return walkRepliesOf(review ? review.stem : "", sp.label, sp.count, async (res) => {
+    if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
+    setStatus(`přesunuto ${res.assigned} replik, přepis a titulky přegenerovány`, "ok");
+  });
+}
+
+/** "Projít repliky" of a speaker group in any recording: every reply to play, and where it belongs – another
+ * speaker of that meeting, a new one, or unassigned. The same view on the speaker card and in Lidé (a sample);
+ * saving moves the replies in the meeting (it is then "✎ upraveno" when it has minutes). */
+function walkRepliesOf(/** @type {string} */ stem, /** @type {string} */ label, /** @type {number} */ count,
+                       /** @type {(res: any) => void} */ onSaved) {
   const box = document.createElement("details"); box.className = "walk";
-  box.innerHTML = `<summary>Projít repliky (${sp.count}) – přesunout ty, které řekl někdo jiný</summary>`;
+  box.innerHTML = `<summary>Projít repliky (${count}) – přesunout ty, které řekl někdo jiný</summary>`;
   box.addEventListener("toggle", async () => {
-    if (!box.open || box.dataset.loaded || !review) return;
+    if (!box.open || box.dataset.loaded || !stem) return;
     box.dataset.loaded = "1";
-    const others = review.speakers.filter(o => o.label !== sp.label && !o.unassigned);
-    const who = (/** @type {Speaker} */ o) => (o.name && o.name !== o.label ? `${o.name} (${o.label})` : o.label);
     /** @type {any} */ let r;
-    try { r = await api(recUrl(review.stem, "speakers", sp.label, "replies")); }
+    try { r = await api(recUrl(stem, "speakers", label, "replies")); }
     catch (e) { box.append(emptyBox(String(e))); return; }
+    const others = (r.speakers || []).filter((/** @type {any} */ o) => o.label !== label);
+    const who = (/** @type {any} */ o) => (o.name && o.name !== o.label ? `${o.name} (${o.label})` : o.label);
     const options = `<option value="">ponechat</option>` +
       others.map(o => `<option value="${escapeHtml(o.label)}">→ ${escapeHtml(who(o))}</option>`).join("") +
       `<option value="${escapeHtml(r.new_speaker)}">→ nový mluvčí</option><option value="UNKNOWN">→ nepřiřazeno</option>`;
@@ -1747,7 +1761,7 @@ function walkReplies(/** @type {Speaker} */ sp) {
     for (const rep of r.replies) {
       const row = document.createElement("div"); row.className = "reply"; row.dataset.start = String(rep.start);
       const b = document.createElement("button"); b.type = "button"; b.className = "play"; b.textContent = `▶ ${rep.at}`;
-      b.disabled = !review.has_mix; b.onclick = () => play(b, rep);
+      b.disabled = !r.has_mix; b.onclick = () => play(b, rep, stem);
       const text = document.createElement("span"); text.className = "replyText"; text.textContent = rep.text;
       const sel = document.createElement("select"); sel.innerHTML = options;
       sel.onchange = () => row.classList.toggle("moved", !!sel.value);
@@ -1758,15 +1772,14 @@ function walkReplies(/** @type {Speaker} */ sp) {
     save.textContent = "Uložit přesuny";
     save.onclick = async () => {
       const moves = [...list.querySelectorAll(".reply")].map(row => ({
-        start: Number(/** @type {HTMLElement} */ (row).dataset.start), from: sp.label,
+        start: Number(/** @type {HTMLElement} */ (row).dataset.start), from: label,
         speaker: /** @type {HTMLSelectElement} */ (row.querySelector("select")).value,
       })).filter(m => m.speaker);
       if (!moves.length) { setStatus("u replik, které řekl někdo jiný, vyberte komu patří", "err"); return; }
       save.disabled = true;
       try {
-        const res = await api(recUrl(review ? review.stem : "", "segments", "assign"), send("POST", { segments: moves }));
-        if (review) { const stem = review.stem; await loadList(); pick.value = stem; await loadRecording(stem); }
-        setStatus(`přesunuto ${res.assigned} replik, přepis a titulky přegenerovány`, "ok");
+        const res = await api(recUrl(stem, "segments", "assign"), send("POST", { segments: moves }));
+        await onSaved(res);
       } catch (e) { setStatus(String(e), "err"); save.disabled = false; }
     };
     box.append(list, save);
@@ -2189,27 +2202,46 @@ async function openPerson(/** @type {string} */ id) {
 function samplesTable(/** @type {any} */ d, /** @type {any} */ sv) {
   const who = { id: d.id, name: `${d.first} ${d.last}`.trim() || d.nick };
   const help = document.createElement("p"); help.className = "people-help";
-  help.innerHTML = `Tyto vzorky (nejvýš ${sv.limit}) se používají k poznávání po hlase. <b>Podobnost</b> porovnává vzorek `
+  help.innerHTML = `Tyto vzorky (nejvýš ${sv.limit}) se používají k poznávání po hlase. <b>Jeden řádek = jeden vzorek</b>: `
+    + "průměrný hlas osoby v jedné schůzce, spočítaný ze všech jejích replik tam; v „Projít repliky“ si je poslechnete "
+    + "a ty, které řekl někdo jiný, přesunete (schůzka se tím upraví). <b>Podobnost</b> porovnává vzorek "
     + "s ostatními vzorky této osoby: <span class='lvl0'>■ odpovídá</span> <span class='lvl1'>■ trochu jiný</span> "
     + "<span class='lvl2'>■ jiný – poslechněte</span> <span class='lvl3'>■ velmi jiný</span>. <b>Nepoužívat</b> = vzorek "
     + "z poznávání vypadne (jméno ve schůzce zůstane); <b>→ jinému</b> = je to hlas někoho jiného (schůzka se upraví).";
   peopleMain.appendChild(help);
   if (!sv.used.length) peopleMain.appendChild(emptyBox("Zatím žádný vzorek – přidejte některý z jeho schůzek níže."));
   else {
+    const stale = sv.used.filter((/** @type {any} */ u) => u.stale).length;
+    const bar = document.createElement("div"); bar.className = "assignBar";
+    const all = document.createElement("button"); all.type = "button"; all.className = stale ? "primary-btn" : "play";
+    all.textContent = `↻ Přepočítat všechny vzorky (${sv.used.length})` + (stale ? ` – ${stale} to potřebuje` : "");
+    all.title = "každý vzorek se spočítá znovu jako průměr současných replik své skupiny";
+    all.onclick = () => recompute(d.id, all, null);
+    bar.appendChild(all);
+    peopleMain.appendChild(bar);
     const t = document.createElement("table"); t.className = "candidates samplesUsed";
-    t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Mluvil</th><th>Podobnost</th><th>Ukázky</th><th></th></tr></thead>";
+    t.innerHTML = "<thead><tr><th>Vzorek (= hlas osoby v jedné schůzce)</th><th>Označení</th><th>Mluvil</th><th>Podobnost</th><th>Repliky</th><th></th></tr></thead>";
     const tb = document.createElement("tbody");
     for (const c of sv.used) {
       const tr = document.createElement("tr");
       if (c.match && c.match.level >= 2) tr.className = "attention";
+      if (c.stale) tr.classList.add("stale");
       const gone = c.status === "print_only";
       const open = gone ? `${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)} <small class="muted">(skupina už neexistuje)</small>`
         : `<a href="#" class="openRec" title="otevřít nahrávku u tohoto mluvčího">${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}</a>`;
-      for (const html of [open, escapeHtml(c.label), c.seconds != null ? fmtMin(c.seconds) : "?", matchCell(c)]) {
+      const staleChip = c.stale ? `<br><span class="staleChip" title="v této skupině se přesouvaly repliky: vzorek je průměr hlasu z doby přepisu a skupině už neodpovídá – přepočítejte ho z jejích současných replik">↻ potřeba přepočítat</span>`
+        : c.recomputed ? `<br><small class="muted" title="vzorek je průměr ${c.recomputed} replik skupiny">přepočítáno z replik</small>` : "";
+      for (const html of [open + staleChip, escapeHtml(c.label), c.seconds != null ? fmtMin(c.seconds) : "?", matchCell(c)]) {
         const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
       }
-      tr.appendChild(samplesCell(c));
+      tr.appendChild(samplesCell(c, d.id));
       const tdA = document.createElement("td"); tdA.className = "act candAct";
+      if (c.stale) {
+        const re = document.createElement("button"); re.type = "button"; re.className = "play candYes"; re.textContent = "↻ Přepočítat";
+        re.title = "vzorek se spočítá znovu ze současných replik skupiny (co chybí, dopočítá grafická karta)";
+        re.onclick = () => recompute(d.id, re, c);
+        tdA.appendChild(re);
+      }
       const off = document.createElement("button"); off.type = "button"; off.className = "play candNo"; off.textContent = "Nepoužívat";
       off.title = "vzorek vypadne z poznávání a už se nevrátí; jméno ve schůzce zůstane";
       armedButton(off, "Potvrdit: nepoužívat pro rozpoznávání", () => sampleAction(d.id, "exclude", c));
@@ -2241,7 +2273,7 @@ function samplesTable(/** @type {any} */ d, /** @type {any} */ sv) {
   if (!sv.addable.length) peopleMain.appendChild(emptyBox("Další skupiny s hlasem této osoby nejsou."));
   else {
     const t = document.createElement("table"); t.className = "candidates samplesAdd";
-    t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Stav</th><th>Mluvil</th><th>Podobnost</th><th>Ukázky</th><th></th></tr></thead>";
+    t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Stav</th><th>Mluvil</th><th>Podobnost</th><th>Repliky</th><th></th></tr></thead>";
     const tb = document.createElement("tbody");
     for (const c of sv.addable) {
       const tr = document.createElement("tr");
@@ -2250,7 +2282,7 @@ function samplesTable(/** @type {any} */ d, /** @type {any} */ sv) {
                           state, fmtMin(c.seconds) + (c.short ? " · krátké" : ""), matchCell(c)]) {
         const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
       }
-      tr.appendChild(samplesCell(c));
+      tr.appendChild(samplesCell(c, d.id));
       const tdA = document.createElement("td"); tdA.className = "act candAct";
       const add = document.createElement("button"); add.type = "button"; add.className = "play candYes";
       add.textContent = full ? "＋ místo nejslabšího" : "＋ přidat";
@@ -2289,18 +2321,41 @@ function samplesTable(/** @type {any} */ d, /** @type {any} */ sv) {
   }
 }
 
-/** the ▶ buttons of a group's replies */
-function samplesCell(/** @type {any} */ c) {
+/** a group's replies to listen to and move: the same "Projít repliky" as on the speaker card */
+function samplesCell(/** @type {any} */ c, /** @type {string} */ pid) {
   const tdS = document.createElement("td"); tdS.className = "samples";
-  if (c.samples && c.samples.length && c.has_mix) {
-    for (const smp of c.samples) {
-      const b = document.createElement("button"); b.type = "button"; b.className = "play";
-      b.textContent = `▶ ${smp.at}`; b.title = smp.text;
-      b.onclick = () => play(b, smp, c.stem);
-      tdS.appendChild(b);
-    }
-  } else tdS.textContent = c.status === "print_only" ? "–" : "zvuk chybí";
+  if (c.status === "print_only") { tdS.textContent = "skupina už neexistuje"; return tdS; }
+  tdS.appendChild(walkRepliesOf(c.stem, c.label, c.replies || 0, async (/** @type {any} */ res) => {
+    await openPerson(pid);
+    setStatus(`${c.title}: přesunuto ${res.assigned} replik, schůzka je upravená (zápis přegenerujte)` +
+              (c.has_print ? "; vzorek z této skupiny je označený k přepočítání (↻)" : ""), "ok");
+  }));
   return tdS;
+}
+
+/** Recalculate one print (c) or all of the person's: first the GPU estimate and a confirmation, then a queued job. */
+async function recompute(/** @type {string} */ pid, /** @type {HTMLButtonElement} */ btn, /** @type {any} */ c) {
+  /** @type {any} */ let est;
+  const q = c ? `?stem=${encodeURIComponent(c.stem)}&label=${encodeURIComponent(c.label)}` : "";
+  try { est = await api(`/api/people/${encodeURIComponent(pid)}/recompute${q}`); } catch (e) { setStatus(String(e), "err"); return; }
+  const go = async () => {
+    btn.disabled = true;
+    /** @type {any} */ let j;
+    try { j = await api(`/api/people/${encodeURIComponent(pid)}/recompute`, send("POST", c ? { stem: c.stem, label: c.label } : {})); }
+    catch (e) { setStatus(String(e), "err"); btn.disabled = false; return; }
+    setStatus("vzorky se přepočítávají – průběh je dole u zpracování", "busy");
+    const error = await waitForJob(j.job).catch(e => String(e));
+    if (error) { setStatus(`přepočítání se nepodařilo: ${error}`, "err"); return; }
+    setStatus(c ? `${c.title}: vzorek přepočítán ze současných replik` : "vzorky přepočítány ze současných replik", "ok");
+    if (!peopleMain.hidden) openPerson(pid);
+  };
+  if (!est.missing_replies) { go(); return; }  // the replies' voices are there: no GPU work
+  const mins = Math.max(1, Math.round(est.estimate_s / 60));
+  btn.onclick = null;
+  btn.onclick = go;
+  confirmFirst(btn, `Potvrdit: vytížit grafickou kartu ~${mins} min`,
+               `nejdřív se dopočítají hlasy ${est.missing_replies} replik na grafické kartě (zhruba ${mins} min) – potvrďte druhým kliknutím, nebo Zrušit`);
+  btn.click();
 }
 
 async function sampleAction(/** @type {string} */ pid, /** @type {string} */ action, /** @type {any} */ c, /** @type {any} */ replace = null) {
@@ -2460,7 +2515,7 @@ function assignmentsTable(/** @type {any} */ d) {
     : view === "review" ? all.filter(r => r.status === "review") : all.slice();
   if (personSort[d.id]) rows.sort((a, b) => (a.match && a.match.own != null ? a.match.own : 2) - (b.match && b.match.own != null ? b.match.own : 2));
   const t = document.createElement("table"); t.className = "candidates assignments";
-  t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Stav</th><th>Mluvil</th><th>Podobnost</th><th>Ukázky</th><th></th></tr></thead>";
+  t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Stav</th><th>Mluvil</th><th>Podobnost</th><th>Repliky</th><th></th></tr></thead>";
   const tb = document.createElement("tbody");
   for (const c of rows) {
     const tr = document.createElement("tr");
@@ -2475,16 +2530,7 @@ function assignmentsTable(/** @type {any} */ d) {
                         c.status === "print_only" ? "–" : fmtMin(c.seconds) + (c.short ? " · krátké" : ""), matchCell(c)]) {
       const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
     }
-    const tdS = document.createElement("td"); tdS.className = "samples";
-    if (c.samples && c.samples.length && c.has_mix) {
-      for (const smp of c.samples) {
-        const b = document.createElement("button"); b.type = "button"; b.className = "play";
-        b.textContent = `▶ ${smp.at}`; b.title = smp.text;
-        b.onclick = () => play(b, smp, c.stem);
-        tdS.appendChild(b);
-      }
-    } else tdS.textContent = c.status === "print_only" ? "skupina už neexistuje" : "zvuk chybí";
-    tr.appendChild(tdS);
+    tr.appendChild(samplesCell(c, d.id));
     const tdA = document.createElement("td"); tdA.className = "act candAct";
     if (c.status === "review") {
       const yes = document.createElement("button"); yes.type = "button"; yes.className = "play candYes"; yes.textContent = "✓ Potvrdit";

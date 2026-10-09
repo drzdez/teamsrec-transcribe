@@ -2559,3 +2559,31 @@ def test_every_reply_is_compared_with_the_persons_prints_once_its_voice_is_compu
     assert e["todo"] == [] and set(got) == {0.0, 20.0}
     assert got[0.0]["level"] == 0 and got[0.0]["own"] > 0.99
     assert got[20.0]["level"] == 3 and got[20.0]["other"]["person"] == jana, "somebody else's voice in Petr's group"
+
+
+def test_moving_replies_marks_the_groups_print_and_recalculating_it_uses_the_current_replies(tmp_path):
+    """A reply moved out of a group a print came from: the print is "stale" (↻); recalculating makes it the
+    length-weighted mean of the group's current replies' voices and clears the mark."""
+    import json
+    from teamsrec_transcribe import pipeline as pl, replies
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    cfg = Config(out_dir=tmp_path, voiceprints=type(Config().voiceprints)(enabled=True))
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    petr = ppl.ensure("Petr Svoboda").id
+    ppl.save()
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll(petr, [0.6, 0.8], rec.stem, "SPEAKER_00")
+    vp.save()
+    pl.assign_segments(cfg, rec, [{"start": 20.0, "speaker": "SPEAKER_01", "from": "SPEAKER_00"}])
+    assert Voiceprints.load(tmp_path).people[petr][0]["stale"] is True
+
+    model = cfg.transcribe.diarize_model  # SPEAKER_00 keeps only its reply at 0 s
+    replies.cache_path(rec).write_text(json.dumps({"model": model, "replies": {
+        "0.00": [1.0, 0.0], "4.00": [0.0, 1.0], "5.00": [0.0, 1.0], "12.00": [0.0, 1.0], "20.00": [0.0, 1.0]}}),
+        encoding="utf-8")
+    assert replies.recompute_estimate(cfg, petr)["missing_replies"] == 0
+    assert replies.recompute_prints(cfg, petr) == {"recomputed": 1, "skipped": 0}
+    p = Voiceprints.load(tmp_path).people[petr][0]
+    assert p["v"] == [1.0, 0.0] and "stale" not in p and p["recomputed"] == 1

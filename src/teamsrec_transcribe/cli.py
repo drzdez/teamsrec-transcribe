@@ -428,7 +428,7 @@ def _require_ffmpeg() -> None:
 
 @app.command("run-job", hidden=True)
 @_errors
-def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices | pull | replies"),
+def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | summary | summarize-as | voices | pull | replies | reprint"),
             target: str = typer.Argument(...), force: bool = typer.Option(False),
             cloud: bool = typer.Option(False, help="emergency fast track: cloud services only (fasttrack.py)"),
             minutes_anyway: bool = typer.Option(True, "--minutes-anyway/--minutes-when-named",
@@ -441,6 +441,11 @@ def run_job(ctx: typer.Context, kind: str = typer.Argument(..., help="process | 
     cfg = _cfg(ctx)
     if kind == "pull":  # download the local minutes model into Ollama (no recording)
         _pull(cfg, target)
+        return
+    if kind == "reprint":  # recalculate a person's prints from their groups' current replies (Lidé; GPU)
+        from .replies import recompute_prints
+        only = tuple(model.split("::", 1)) if "::" in model else None  # --model "<stem>::<label>": one print
+        recompute_prints(cfg, target, only, progress=lambda text: print(f"PROGRESS {text}", flush=True))
         return
     if kind == "replies":  # every reply's own voice for a person's recordings (Lidé → Všechny repliky; GPU)
         from .replies import compute, recordings_of

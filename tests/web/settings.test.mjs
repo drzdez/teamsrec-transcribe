@@ -39,7 +39,9 @@ test("settings: sections, values from the file, only changes are saved, comments
   assert.equal(p.doc.querySelectorAll("#settingsMain .setRow.changed").length, 3);
 
   p.$("settingsSave").click();
-  await waitFor(() => /nastavení uloženo \(3\)/.test(p.$("status").textContent), "the save");
+  // the save answers with the whole settings again (models, devices): on GitHub's runner that took over 4 s
+  // three times (2026-10-06, -08, -09), so this one waits longer
+  await waitFor(() => /nastavení uloženo \(3\)/.test(p.$("status").textContent), "the save", 15000);
   assert.equal(p.doc.querySelectorAll("#settingsMain .setRow.changed").length, 0);
   const text = readFileSync(CONFIG, "utf8");
   assert.match(text, /glossary = \["WFMS", "NOTAM", "BPMN"\]/);

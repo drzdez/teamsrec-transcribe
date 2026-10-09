@@ -99,6 +99,12 @@ def spec(version: str) -> dict:
                                                 "download the diarization model (licence accepted)",
                                                 tags=("settings",), body=_obj(token=s))},
             "/api/setup/done": {"post": _op("The wizard ran: it is not shown again", tags=("settings",))},
+            "/api/people/{id}/candidates": {"post": _op(
+                "A speaker group the application named after this person without confirmation (voice, direct call, "
+                "video, microphone): confirm (the name stays for good, the voice print is stored) or reject (the "
+                "name goes and is not guessed again)", tags=("people",), params=[
+                    {"name": "id", "in": "path", "required": True, "schema": s}],
+                body=_obj(stem=s, label=s, confirm={"type": "boolean"}))},
             "/api/settings": {
                 "get": _op("Settings of both apps: sections with fields (type, choices, value, default), the state "
                            "of the API keys (env | vault | missing, never the value), the audio inputs of this PC",

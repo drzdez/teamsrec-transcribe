@@ -2346,3 +2346,48 @@ def test_processing_estimates_come_from_this_pcs_runs_when_there_are_enough(tmp_
     assert not setup.estimates({"name": "x", "vram_gb": 8}, tmp_path / "none")["minutes_local"], \
         "no measured local minutes model below 24 GB"
     assert "jako běžnou cestu ⚡ rychle přes cloud" in setup.estimates(None, tmp_path / "none")["advice"]
+
+
+def test_guessed_names_wait_for_review_and_are_confirmed_or_rejected_one_by_one(tmp_path):
+    """Lidé → ke kontrole: a voice match and a video name tag are guesses (no print yet); confirming one group
+    stores its print and leaves the rest of the recording as it was; rejecting removes the name and the same guess
+    does not come back."""
+    from teamsrec_transcribe import pipeline as pl
+    from teamsrec_transcribe.people import People
+    from teamsrec_transcribe.voiceprints import Voiceprints
+    from teamsrec_transcribe.web.review import (confirm_candidate, people_rows, reject_candidate, voice_candidates)
+    cfg = Config(out_dir=tmp_path, voiceprints=type(Config().voiceprints)(enabled=True))
+    rec = _make_transcribed(tmp_path)
+    ppl = People.load(tmp_path, "nick")
+    petr, jana = ppl.ensure("Petr Svoboda").id, ppl.ensure("Jana Nováková").id
+    ppl.save()
+    data = rec.read_json(rec.transcript_path)
+    data["segments"] += [{"start": 30 + i * 10, "end": 40 + i * 10, "text": "dlouhá řeč", "speaker": lab}
+                         for i, lab in enumerate(["SPEAKER_00"] * 3 + ["SPEAKER_01"] * 3 + ["Jana Nováková"] * 3)]
+    data["speaker_embeddings"] = {"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0], "Jana Nováková": [0.7, 0.7]}
+    data["voice_matches"] = {"SPEAKER_00": {"person": petr, "score": 0.9}, "SPEAKER_01": {"person": petr, "score": 0.7}}
+    rec.write_json(rec.transcript_path, data)
+    rec.write_json(rec.speakers_path, {"SPEAKER_00": petr, "SPEAKER_01": petr})
+
+    cands = voice_candidates(cfg)
+    assert sorted(c["label"] for c in cands[petr]) == ["SPEAKER_00", "SPEAKER_01"]
+    assert [(c["label"], c["source"], c["can_reject"]) for c in cands[jana]] == [("Jana Nováková", "video", False)]
+    rows = {r["id"]: r for r in people_rows(cfg)["people"]}
+    assert (rows[petr]["prints"], rows[petr]["candidates"]) == (0, 2)
+
+    assert confirm_candidate(cfg, rec.stem, "SPEAKER_00", petr)["prints_added"] == 1
+    assert Voiceprints.load(tmp_path).count(petr) == 1
+    data = rec.read_json(rec.transcript_path)
+    assert "SPEAKER_00" not in data["voice_matches"] and "SPEAKER_01" in data["voice_matches"], "only that group"
+    assert [c["label"] for c in voice_candidates(cfg)[petr]] == ["SPEAKER_01"]
+
+    reject_candidate(cfg, rec.stem, "SPEAKER_01", petr)
+    assert "SPEAKER_01" not in rec.read_json(rec.speakers_path)
+    assert petr not in voice_candidates(cfg) or not voice_candidates(cfg)[petr]
+    vp = Voiceprints.load(tmp_path)
+    vp.enroll(petr, [0.0, 1.0], "other", "S")  # a print that would match SPEAKER_01 again
+    vp.save()
+    assert "SPEAKER_01" not in pl.recognize_voices(cfg, rec), "a rejected guess does not come back"
+
+    confirm_candidate(cfg, rec.stem, "Jana Nováková", jana)
+    assert rec.read_json(rec.speakers_path)["Jana Nováková"] == jana and jana not in voice_candidates(cfg)

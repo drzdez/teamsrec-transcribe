@@ -672,11 +672,14 @@ def _voiceprints_step(cfg: Config, rec: Recording, embeddings: dict[str, list[fl
     names = rec.read_json(rec.speakers_path) if rec.speakers_path.exists() else {}
     matches: dict = {}
     unknown = {lab: v for lab, v in embeddings.items() if lab.startswith("SPEAKER_") and not names.get(lab)}
+    rejected = (rec.read_json(rec.transcript_path).get("voice_rejected") or {}) if rec.transcript_path.exists() else {}
     vs = cfg.voiceprints
     for label, (pid, score) in vp.recognize(unknown, vs.threshold, vs.margin, durations, vs.min_seconds,
                                             exclude_stem=rec.stem).items():
         person = people.get(pid)
         if person is None:  # print of a person that was deleted from the registry
+            continue
+        if pid in rejected.get(label, []):  # the user said "not them" for this group (Lidé → ke kontrole)
             continue
         names[label] = pid
         matches[label] = {"person": pid, "score": score}

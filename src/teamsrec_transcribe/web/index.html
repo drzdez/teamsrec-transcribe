@@ -228,6 +228,8 @@
   td.act button { border: 0; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
   .people-help { color: var(--muted); font-size: 13px; margin: 8px 0 14px; }
   .person-h { font-size: 20px; margin: 10px 0 4px; }
+  .person-h3 { font-size: 16px; margin: 18px 0 4px; }
+  .candAct { white-space: nowrap; } .candAct button { margin-right: 4px; } .candFix { font-size: 13px; }
   button.link { border: 0; background: transparent; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
   button.link.danger { color: var(--err); margin-top: 12px; }
   button.link.small { font-size: 12px; margin-top: 4px; text-align: left; }
@@ -2039,7 +2041,9 @@ function personRow(p) {
   ok.title = "poznávat po hlase (ukládat hlasový otisk); zrušení smaže jeho otisky při Uložit lidi";
   voice.appendChild(ok);
   const count = document.createElement("span"); count.className = "prints";
-  count.textContent = p.id ? String(p.prints || 0) : ""; count.title = "počet uložených hlasových otisků";
+  count.textContent = p.id ? String(p.prints || 0) + (p.candidates ? ` · ${p.candidates} ke kontrole` : "") : "";
+  count.title = "potvrzené hlasové otisky (používají se k poznávání)" +
+    (p.candidates ? `; ${p.candidates} skupin z nahrávek aplikace přiřadila sama – v detailu je poslechnete a potvrdíte` : "");
   voice.appendChild(count);
   if (p.id) {
     const b = document.createElement("button"); b.type = "button"; b.className = "link";
@@ -2095,7 +2099,8 @@ async function savePeople() {
 
 /**
  * @typedef {{stem:string,label:string,added:string,dims:number,title:string|null,start:string|null,seconds:number|null,samples:Sample[],has_mix:boolean}} PrintRow
- * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],recordings:string[]}} PersonDetail
+ * @typedef {{stem:string,title:string,start:string|null,label:string,source:string,score:number|null,seconds:number,short:boolean,can_reject:boolean,samples:Sample[],has_mix:boolean}} CandidateRow
+ * @typedef {{id:string,first:string,last:string,nick:string,display:string,aliases:string[],shown:string,model:string,limit?:number,prints:PrintRow[],candidates?:CandidateRow[],recordings:string[]}} PersonDetail
  */
 async function openPerson(/** @type {string} */ id) {
   stopAudio(); setStatus("");
@@ -2113,7 +2118,7 @@ async function openPerson(/** @type {string} */ id) {
   const info = document.createElement("p"); info.className = "people-help";
   info.innerHTML = `id <code>${escapeHtml(d.id)}</code> · v zápisu: <b>${escapeHtml(d.shown)}</b>` +
     (d.nick ? ` · přezdívka ${escapeHtml(d.nick)}` : "") + (d.aliases.length ? ` · aliasy: ${escapeHtml(d.aliases.join(", "))}` : "") +
-    `<br>Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš ${d.limit || 20} – nad limit odpadne nejslabší: smíchaný či vybočující hlas, krátká řeč, jinak ten, který se nejvíc podobá jinému; model ${escapeHtml(d.model || "?")}). ` +
+    `<br>Potvrzené otisky: <b>${d.prints.length}</b>, ke kontrole: <b>${(d.candidates || []).length}</b>. Otisky: ${d.prints.length} (jeden na nahrávku = průměr hlasu v ní, nejvýš ${d.limit || 20} – nad limit odpadne nejslabší: smíchaný či vybočující hlas, krátká řeč, jinak ten, který se nejvíc podobá jinému; model ${escapeHtml(d.model || "?")}). ` +
     `Přiřazen v nahrávkách: ${d.recordings.length ? d.recordings.map(s => `<code>${escapeHtml(s)}</code>`).join(", ") : "zatím žádné"}.`;
   peopleMain.appendChild(info);
   if (!d.prints.length) {
@@ -2157,6 +2162,79 @@ async function openPerson(/** @type {string} */ id) {
     });
     peopleMain.appendChild(all);
   }
+  candidatesTable(d);
+}
+
+const SOURCE_NAME = /** @type {Record<string, string>} */ ({ hlas: "podle hlasu", video: "jmenovka z videa Teams",
+  mikrofon: "mikrofon (vy)", "přímý hovor": "přímý hovor" });
+
+/** Groups the application named after this person by itself (voice, video, microphone, direct call): listen,
+ * then ✓ confirm (the name stays for good and the voice print is stored – only then it is used for recognition)
+ * or ✗ reject (the name goes and is not guessed again for that group). */
+function candidatesTable(/** @type {any} */ d) {
+  /** @type {CandidateRow[]} */ const rows = d.candidates || [];
+  const h = document.createElement("h3"); h.className = "person-h3";
+  h.textContent = `Ke kontrole – přiřazeno aplikací, zatím nepotvrzeno (${rows.length})`;
+  peopleMain.appendChild(h);
+  if (!rows.length) {
+    peopleMain.appendChild(emptyBox("Nic ke kontrole: všechna přiřazení této osoby jsou potvrzená."));
+    return;
+  }
+  const help = document.createElement("p"); help.className = "people-help";
+  help.textContent = "Poslechněte ukázky. ✓ Potvrdit = jméno platí natrvalo a uloží se hlasový otisk (od té chvíle "
+    + "pomáhá poznávat). ✗ Není to = jméno se z té skupiny odebere a stejný odhad se u ní už neobjeví.";
+  peopleMain.appendChild(help);
+  const t = document.createElement("table"); t.className = "candidates";
+  t.innerHTML = "<thead><tr><th>Nahrávka</th><th>Označení</th><th>Podle čeho</th><th>Mluvil</th><th>Ukázky</th><th></th></tr></thead>";
+  const tb = document.createElement("tbody");
+  for (const c of rows) {
+    const tr = document.createElement("tr");
+    const open = `<a href="#${encodeURIComponent(c.stem)}" title="otevřít nahrávku">${fmtDate(c.start || "")} ${escapeHtml(c.title || c.stem)}</a>`;
+    const why = (SOURCE_NAME[c.source] || c.source) + (c.score != null ? ` (shoda ${c.score.toFixed(2)})` : "");
+    for (const html of [open, escapeHtml(c.label), escapeHtml(why), fmtMin(c.seconds) + (c.short ? " · krátké" : "")]) {
+      const td = document.createElement("td"); td.innerHTML = html; tr.appendChild(td);
+    }
+    const tdS = document.createElement("td"); tdS.className = "samples";
+    if (c.samples.length && c.has_mix) {
+      for (const s of c.samples) {
+        const b = document.createElement("button"); b.type = "button"; b.className = "play";
+        b.textContent = `▶ ${s.at}`; b.title = s.text;
+        b.onclick = () => play(b, s, c.stem);
+        tdS.appendChild(b);
+      }
+    } else tdS.textContent = "zvuk chybí";
+    tr.appendChild(tdS);
+    const tdA = document.createElement("td"); tdA.className = "act candAct";
+    const yes = document.createElement("button"); yes.type = "button"; yes.className = "play candYes"; yes.textContent = "✓ Potvrdit";
+    yes.title = c.short ? "jméno se potvrdí; otisk se neuloží – mluví méně než 30 s" : "jméno platí natrvalo a uloží se hlasový otisk";
+    yes.onclick = () => decideCandidate(d.id, c, true, yes);
+    tdA.appendChild(yes);
+    if (c.can_reject) {
+      const no = document.createElement("button"); no.type = "button"; no.className = "play candNo"; no.textContent = "✗ Není to";
+      no.title = "jméno se z této skupiny odebere a stejný odhad se u ní už neobjeví";
+      no.onclick = () => decideCandidate(d.id, c, false, no);
+      tdA.appendChild(no);
+    } else {
+      const fix = document.createElement("a"); fix.href = `#${encodeURIComponent(c.stem)}`; fix.className = "candFix";
+      fix.textContent = "opravit v nahrávce"; fix.title = "jmenovku z videa / mikrofon opravíte na kartě mluvčího";
+      tdA.appendChild(fix);
+    }
+    tr.appendChild(tdA);
+    tb.appendChild(tr);
+  }
+  t.appendChild(tb); peopleMain.appendChild(t);
+}
+
+async function decideCandidate(/** @type {string} */ pid, /** @type {CandidateRow} */ c, /** @type {boolean} */ confirm,
+                               /** @type {HTMLButtonElement} */ btn) {
+  btn.disabled = true;
+  try {
+    const r = await api(`/api/people/${encodeURIComponent(pid)}/candidates`, send("POST", { stem: c.stem, label: c.label, confirm }));
+    await openPerson(pid);
+    setStatus(!confirm ? `${c.label} v ${c.title}: jméno odebráno`
+      : r.prints_added ? `${c.label} v ${c.title}: potvrzeno, hlasový otisk uložen`
+      : `${c.label} v ${c.title}: potvrzeno; otisk se neuložil (krátká řeč, nebo skoro stejný jako už uložený)`, "ok");
+  } catch (e) { setStatus(String(e), "err"); btn.disabled = false; }
 }
 
 async function mergePerson(/** @type {string} */ keep, /** @type {string} */ drop) {

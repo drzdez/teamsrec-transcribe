@@ -1,8 +1,9 @@
 """Meeting title and participants from the classic Outlook calendar on this machine (COM, local, no network).
 
 Used for imported recordings (Teams recordings, ad-hoc files) whose sidecar has no participants yet: the calendar
-item running at the recording's start time supplies the subject, organizer and attendee names. Live recordings get
-the same from teamsrec-capture at call start. Off unless `[calendar] outlook = true` (asked by `config --init`).
+item running at the recording's start time supplies the subject and attendee names (not the organizer, the body or
+any e-mail address: Outlook's object model guard would ask the user). Live recordings get the same from
+teamsrec-capture at call start. Off unless `[calendar] outlook = true` (asked by `config --init`).
 """
 
 from __future__ import annotations
@@ -96,12 +97,14 @@ def outlook_items(day: datetime) -> list[dict]:
                     if (subject, start, end) in seen:
                         continue
                     seen.add((subject, start, end))
-                    text = f"{it.Location or ''} {it.Body or ''}"
                     out.append({
                         "subject": subject, "start": start, "end": end,
-                        "organizer": (it.Organizer or "").strip(),
+                        # only fields Outlook's object model guard leaves alone (no body, organizer or
+                        # e-mail address): otherwise Outlook asks "a program is trying to access e-mail
+                        # address information" (2026-10-09); Teams is recognised by the location Outlook sets
+                        "organizer": "",
                         "attendees": [r.Name for r in it.Recipients if r.Name],
-                        "teams": "teams.microsoft.com" in text.lower(),
+                        "teams": "teams" in (it.Location or "").lower(),
                     })
                 except Exception:
                     continue
@@ -148,6 +151,6 @@ def calendar_fields(m: dict, status: str = "auto") -> dict:
     start = m["start"] if isinstance(m["start"], str) else m["start"].isoformat(timespec="minutes")
     end = m["end"] if isinstance(m["end"], str) else m["end"].isoformat(timespec="minutes")
     return {"participants": [{"name": n, "source": "calendar"} for n in m.get("attendees", [])],
-            "calendar": {"source": "outlook", "subject": m.get("subject"), "organizer": m.get("organizer"),
+            "calendar": {"source": "outlook", "subject": m.get("subject"), "organizer": m.get("organizer") or None,
                          "start": start, "end": end, "match": m.get("match", "manual"), "status": status,
                          "candidates": m.get("candidates", [])}}
